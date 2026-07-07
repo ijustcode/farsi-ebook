@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "farsi2epub"
+version = "0.1.0"
+description = "Convert Farsi PDF books to EPUB via a vision-LLM pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf",
+    "anthropic",
+    "ebooklib",
+    "jinja2",
+    "click",
+    "pyyaml",
+]
+
+[project.scripts]
+farsi2epub = "farsi2epub.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["farsi2epub*"]

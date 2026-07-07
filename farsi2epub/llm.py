@@ -1,0 +1,185 @@
+"""Claude vision calls: page transcription and book-metadata proposal."""
+
+from __future__ import annotations
+
+import base64
+import os
+from pathlib import Path
+from typing import Optional
+
+import anthropic
+from pydantic import BaseModel, Field
+
+from .config import PRICES
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+MAX_OUTPUT_TOKENS = 8000
+
+
+class PageTranscription(BaseModel):
+    is_blank: bool = Field(description="True if the page has no body text (blank, or pure image/decoration).")
+    text_md: str = Field(description="The transcribed body text as Markdown. Empty string when is_blank.")
+    headings: list[str] = Field(description="Verbatim headings emitted on this page, in order.")
+    flags: list[str] = Field(
+        description='Zero or more of: "image", "table", "illegible", "two_column", "marginalia", "non_persian", "decorative_only".'
+    )
+    starts_mid_paragraph: bool = Field(
+        description="True if the first body line continues a paragraph cut off on the previous page."
+    )
+    continues_next: bool = Field(
+        description="True if the last paragraph is cut off mid-sentence at the bottom of the page."
+    )
+    confidence: float = Field(
+        description="Honest 0.0-1.0 estimate that the transcription is character-accurate. Below 0.8 means parts were hard to read."
+    )
+
+
+class BookMetadata(BaseModel):
+    title_fa: Optional[str] = Field(description="Book title in Persian, exactly as printed on the title page.")
+    author_fa: Optional[str] = Field(description="Author name in Persian, or null if not visible.")
+    title_en: str = Field(
+        description="Short Latin transliteration or translation of the title, lowercase, words separated by hyphens, usable as a filename slug."
+    )
+    publisher_fa: Optional[str] = Field(description="Publisher in Persian, or null.")
+
+
+TRANSCRIBE_SYSTEM = """You are an expert transcriber of Persian (Farsi) books. You receive one page of a book as an image and transcribe its body text into clean Markdown for conversion into an ebook. Accuracy is paramount: the reader will see your output instead of the printed page.
+
+TRANSCRIPTION RULES
+- Transcribe the Persian text exactly as printed: same words, same orthography, same punctuation («», ،, ؛, ؟). Preserve diacritics (تشدید، حرکات) only where clearly printed; never add your own.
+- Use standard Persian codepoints: always ی (U+06CC) and ک (U+06A9), never Arabic ي or ك.
+- Use zero-width non-joiner (U+200C) for detached affixes as Persian orthography requires: می‌رود، کتاب‌ها، بزرگ‌تر، فعّالیت‌های.
+- Keep Persian digits (۰۱۲۳۴۵۶۷۸۹) as printed.
+- Remove kashida/tatweel stretching: write بهتر even if printed بـــهـــتر.
+- Do not modernize spelling, correct perceived typos, translate, or summarize. Transcribe.
+
+IGNORE COMPLETELY (never transcribe):
+- Running headers and footers: the book or chapter title repeated at the top of pages, and page numbers wherever they appear.
+- Decoration: floral ornaments, frames, rules, corner flourishes, background images or watermarks behind the text.
+- Photographs and illustrations: do not describe them; just add the flag "image".
+
+MARKDOWN STRUCTURE
+- Chapter or lesson titles (large, boxed, or ornamented — e.g. a framed درس سیزدهم header): emit as `# ...` on one line, combining label and title like `# درس سیزدهم: یادحسین (ع)`.
+- Section headings within a chapter: `## ...`.
+- Body paragraphs separated by one blank line. Never hard-wrap: each paragraph is a single line of output, no matter how long.
+- Poetry/verse: emit a fenced block with language tag `verse`; one verse line (بیت) per output line, the two hemistichs (مصراع) separated by ` --- `:
+  ```verse
+  مصراع اول --- مصراع دوم
+  ```
+  A line with a single centered hemistich has no separator.
+- Free verse / modern poetry (شعر نو — short lines, centered or staggered, no hemistich pairs): also a ```verse block, one printed line per output line, no ` --- ` separators. Never flatten poem lines into a prose paragraph.
+- Footnotes: mark references in the text as [^1] and put definitions at the very end of the page as `[^1]: متن پانوشت`.
+- Lists as Markdown lists. Simple tables as Markdown tables (also add flag "table").
+- Quranic verses, prayers, or Arabic passages: transcribe as printed (Arabic orthography allowed there); if visually set off from the body, use a `>` blockquote.
+
+PAGE-BOUNDARY JUDGMENT
+- starts_mid_paragraph: true when the first body line visibly continues a sentence from the previous page (no paragraph indentation, begins mid-sentence).
+- continues_next: true when the page's last paragraph is cut off mid-sentence at the bottom.
+
+FIELDS
+- headings: the exact heading strings you emitted (without the # marks), in order; empty list if none.
+- is_blank: true for pages with no body text at all; then text_md must be "".
+- flags: subset of "image", "table", "illegible", "two_column", "marginalia", "non_persian", "decorative_only".
+- confidence: honest 0.0-1.0 character-accuracy estimate. Use values below 0.8 whenever print quality, scan blur, or unusual typography made you unsure of any words."""
+
+METADATA_SYSTEM = """You are looking at the opening page(s) of a Persian (Farsi) PDF. Determine whether they form a cover or title page (صفحهٔ عنوان) and, only if so, extract the book's bibliographic metadata exactly as printed.
+
+Critical: many PDFs are excerpts that begin mid-book. If these pages are body pages — a lesson or chapter opening, running prose, a table of contents — they are NOT a title page: return null for title_fa, author_fa, and publisher_fa. Never report a chapter or lesson heading (e.g. درس سیزدهم) as the book title, and never guess an author that is not explicitly printed as the author.
+
+title_en: a short lowercase Latin transliteration of the title with hyphens between words (a filename slug), e.g. jame-shenasi-khodemani; if title_fa is null, derive it from whatever the pages suggest the work is, or use "unknown"."""
+
+
+def load_env() -> None:
+    """Load ANTHROPIC_API_KEY from a project-root .env file if not already set."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return
+    env_file = PROJECT_ROOT / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+
+
+def get_client() -> anthropic.Anthropic:
+    load_env()
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "No Anthropic API key found. Set ANTHROPIC_API_KEY in your environment "
+            "or put ANTHROPIC_API_KEY=sk-ant-... in a .env file at the project root."
+        )
+    return anthropic.Anthropic()
+
+
+def cost_of(usage, model: str) -> float:
+    prices = PRICES.get(model)
+    if prices is None:
+        return 0.0
+    return (usage.input_tokens / 1_000_000) * prices["in"] + (usage.output_tokens / 1_000_000) * prices["out"]
+
+
+def _image_block(png_bytes: bytes) -> dict:
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.standard_b64encode(png_bytes).decode("ascii"),
+        },
+    }
+
+
+def transcribe_page(
+    client: anthropic.Anthropic,
+    png_bytes: bytes,
+    model: str,
+    page_no: int,
+    page_count: int,
+    title_hint: Optional[str] = None,
+) -> tuple[PageTranscription, dict, float]:
+    """Transcribe one page image. Returns (result, usage_dict, cost_usd)."""
+    hint = f"کتاب: {title_hint}" if title_hint else "عنوان کتاب نامشخص است."
+    user_text = (
+        f"صفحهٔ {page_no} از {page_count}. {hint}\n"
+        "Transcribe this page following the system instructions."
+    )
+    kwargs: dict = {}
+    if model.startswith("claude-sonnet-5"):
+        # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
+        kwargs["thinking"] = {"type": "disabled"}
+
+    response = client.messages.parse(
+        model=model,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        system=TRANSCRIBE_SYSTEM,
+        messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
+        output_format=PageTranscription,
+        **kwargs,
+    )
+    result = response.parsed_output
+    if result is None:
+        raise RuntimeError(f"Model {model} returned unparseable output for page {page_no}")
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return result, usage, cost_of(response.usage, model)
+
+
+def propose_metadata(
+    client: anthropic.Anthropic, png_pages: list[bytes], model: str
+) -> tuple[Optional[BookMetadata], float]:
+    """Propose book metadata from the first page image(s)."""
+    content: list[dict] = [_image_block(b) for b in png_pages]
+    content.append({"type": "text", "text": "Extract the book metadata from these opening pages."})
+    response = client.messages.parse(
+        model=model,
+        max_tokens=1000,
+        system=METADATA_SYSTEM,
+        messages=[{"role": "user", "content": content}],
+        output_format=BookMetadata,
+    )
+    return response.parsed_output, cost_of(response.usage, model)

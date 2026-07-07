@@ -1,0 +1,25 @@
+# Secrets and environment variables
+.env
+.env.*
+
+# Python virtual environment and build artifacts
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# User content and book files
+# Ignore all PDFs in project root (personal book files)
+/*.pdf
+# Ignore book working directories but keep the .gitkeep placeholder
+books/*
+!books/.gitkeep
+
+# OS and editor artifacts
+.DS_Store
+.idea/
+.vscode/
+.python-version
