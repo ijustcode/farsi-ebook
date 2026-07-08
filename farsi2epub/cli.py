@@ -10,8 +10,8 @@ from pathlib import Path
 
 import click
 
-from . import epub, review, transcribe
-from .config import LONG_EDGE_STD, MODEL_FAST, estimate_cost
+from . import epub, qc, review, transcribe
+from .config import LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_STRONG, RES_HI, RES_STD, estimate_cost
 from .render import classify_pdf, render_page_to
 from .workspace import Workspace, parse_pages_spec
 
@@ -78,7 +78,8 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
         est_pages = len(parse_pages_spec(page_range, page_count))
     else:
         est_pages = page_count
-    cost = estimate_cost(est_pages)
+    cost_hi = estimate_cost(est_pages, resolution=RES_HI)
+    cost_std = estimate_cost(est_pages, resolution=RES_STD)
 
     click.echo("")
     click.echo(f"Workspace created: {ws.root}")
@@ -86,7 +87,8 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
     click.echo(f"Page count:        {page_count}")
     if page_range:
         click.echo(f"Page range:        {page_range} ({est_pages} pages)")
-    click.echo(f"Estimated cost:    ${cost:.2f}")
+    click.echo(f"Estimated cost:    ${cost_hi:.2f} (default: {MODEL_STRONG} + hi-res input)")
+    click.echo(f"Economy estimate:  ${cost_std:.2f} (transcribe --res std; failing pages escalate to hi-res)")
     click.echo("")
     click.echo(f"Next: farsi2epub transcribe {slug}")
 
@@ -97,8 +99,10 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--force", is_flag=True, help="Re-transcribe pages that already have output.")
 @click.option("--max-cost", "max_cost", type=float, default=None, help="Abort if the estimated cost exceeds this many dollars.")
 @click.option("--concurrency", type=int, default=4, help="Number of pages to transcribe concurrently.")
-@click.option("--model", "model", default=None, help="Model to use for transcription (default: Sonnet; escalation ladder applies only when starting on Haiku).")
-def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str):
+@click.option("--model", "model", default=None, help="Model to use for transcription (default: Sonnet; failing pages escalate to Sonnet + hi-res).")
+@click.option("--res", "resolution", type=click.Choice([RES_HI, RES_STD]), default=RES_HI, help="Page-image resolution: hi (2576px, default — best character accuracy) or std (1568px, ~30% cheaper; use for crisp large-print sources or very long books; failing pages escalate to hi-res).")
+@click.option("--qc", "qc_mode", type=click.Choice(["auto", "manual", "skip", "ask"]), default="ask", help="Run a QC pass after transcription: auto (automated), manual (review UI), skip (none), or ask (prompt if TTY).")
+def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
     ws = Workspace.load(slug)
     meta = ws.meta
@@ -120,23 +124,64 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
     click.echo(f"Resolved {len(pages)} page(s) to transcribe: {pages[0]}-{pages[-1]}" if len(pages) > 1 else f"Resolved 1 page to transcribe: {pages[0]}")
 
-    # Ensure page images exist, rendering any that are missing.
+    # Ensure page images exist at the chosen resolution, rendering any missing.
     for n in pages:
-        img_path = ws.page_image_path(n)
+        img_path = ws.page_hires_path(n) if resolution == RES_HI else ws.page_image_path(n)
         if not img_path.is_file():
-            click.echo(f"Rendering page {n} ...")
-            render_page_to(ws.pdf_path, n, img_path, long_edge=LONG_EDGE_STD)
+            click.echo(f"Rendering page {n} ({resolution}-res) ...")
+            render_page_to(ws.pdf_path, n, img_path, long_edge=LONG_EDGE_BY_RES[resolution])
 
     try:
-        transcribe.transcribe_pages(ws, pages, model=model, max_cost=max_cost, concurrency=concurrency)
+        transcribe.transcribe_pages(
+            ws, pages, model=model, max_cost=max_cost, concurrency=concurrency, resolution=resolution
+        )
     except NotImplementedError:
         click.echo("")
         click.echo("Transcription module not yet implemented (coming in a later task).")
         return
 
+    # Handle post-transcription QC logic
+    resolved_qc_mode = qc_mode
+    if qc_mode == "ask":
+        if sys.stdin.isatty():
+            resolved_qc_mode = click.prompt(
+                "Run QC now?",
+                type=click.Choice(["a", "m", "s"]),
+                default="a",
+                show_choices=True
+            )
+            # Map single-letter choice to full mode name
+            mode_map = {"a": "auto", "m": "manual", "s": "skip"}
+            resolved_qc_mode = mode_map[resolved_qc_mode]
+        else:
+            resolved_qc_mode = "skip"
+
+    if resolved_qc_mode in ("auto", "manual"):
+        try:
+            qc.run_qc(ws, resolved_qc_mode)
+        except NotImplementedError:
+            click.echo("QC module not yet implemented (coming in a later task).")
+
 
 # `transcribe` is a reserved-looking name; expose it as the `transcribe` command.
 main.add_command(transcribe_cmd, name="transcribe")
+
+
+@main.command()
+@click.argument("slug")
+@click.option("--mode", "qc_mode", type=click.Choice(["auto", "manual"]), default="auto", help="QC mode: auto (automated verification) or manual (review UI).")
+@click.option("--all", "all_pages", is_flag=True, help="Verify/review every transcribed page instead of risk-selected ones.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip cost confirmation and proceed with QC.")
+def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool):
+    """Run quality control checks for workspace SLUG."""
+    ws = Workspace.load(slug)
+    try:
+        qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes)
+    except NotImplementedError:
+        click.echo("QC module not yet implemented (coming in a later task).")
+
+
+main.add_command(qc_cmd, name="qc")
 
 
 @main.command()

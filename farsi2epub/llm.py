@@ -55,13 +55,16 @@ TRANSCRIPTION RULES
 - Do not modernize spelling, correct perceived typos, translate, or summarize. Transcribe.
 
 IGNORE COMPLETELY (never transcribe):
-- Running headers and footers: the book or chapter title repeated at the top of pages, and page numbers wherever they appear.
-- Decoration: floral ornaments, frames, rules, corner flourishes, background images or watermarks behind the text.
+- Running headers and footers: a running header is a short line at the extreme top or bottom margin repeating the book or chapter title on page after page, plus page numbers wherever they appear. A title in the middle of the page, or sitting directly above new content, is NOT a running header — it is a real heading and must be transcribed.
+- Decoration: floral ornaments, frames, rules, corner flourishes, background images or watermarks behind the text. But text INSIDE a decorative box, banner, or ornamented strip is a heading, not decoration: transcribe the text, drop the ornament.
 - Photographs and illustrations: do not describe them; just add the flag "image".
 
 MARKDOWN STRUCTURE
-- Chapter or lesson titles (large, boxed, or ornamented — e.g. a framed درس سیزدهم header): emit as `# ...` on one line, combining label and title like `# درس سیزدهم: یادحسین (ع)`.
-- Section headings within a chapter: `## ...`.
+- Headings use exactly three levels:
+  - `# ...` — chapter or page-level titles: framed/ornamented chapter openers (combine label and title on one line, e.g. `# درس سیزدهم: یادحسین (ع)`) and standalone titles naming the whole page (e.g. فهرست مطالب on a table-of-contents page).
+  - `## ...` — section titles within a chapter, including boxed or banner-style strips (e.g. اطلاعات تکمیلی inside a decorated frame).
+  - `### ...` — minor standalone labels heading a short list or exercise block (e.g. تمرین دوم).
+- CRITICAL heading invariant: every string you list in the `headings` field MUST also appear in text_md as a `#`, `##`, or `###` line, and every heading line in text_md must be listed in `headings`. The field mirrors the markdown; it is never a substitute for emitting the heading. Never emit a heading as a plain or **bold** paragraph.
 - Body paragraphs separated by one blank line. Never hard-wrap: each paragraph is a single line of output, no matter how long.
 - Poetry/verse: emit a fenced block with language tag `verse`; one verse line (بیت) per output line, the two hemistichs (مصراع) separated by ` --- `:
   ```verse
@@ -78,7 +81,7 @@ PAGE-BOUNDARY JUDGMENT
 - continues_next: true when the page's last paragraph is cut off mid-sentence at the bottom.
 
 FIELDS
-- headings: the exact heading strings you emitted (without the # marks), in order; empty list if none.
+- headings: the exact heading strings you emitted as `#`/`##`/`###` lines in text_md (without the # marks), in order; empty list if none. This list and the heading lines in text_md must match one-to-one.
 - is_blank: true for pages with no body text at all; then text_md must be "".
 - flags: subset of "image", "table", "illegible", "two_column", "marginalia", "non_persian", "decorative_only".
 - confidence: honest 0.0-1.0 character-accuracy estimate. Use values below 0.8 whenever print quality, scan blur, or unusual typography made you unsure of any words."""
@@ -142,13 +145,20 @@ def transcribe_page(
     page_no: int,
     page_count: int,
     title_hint: Optional[str] = None,
+    extra_hint: Optional[str] = None,
 ) -> tuple[PageTranscription, dict, float]:
-    """Transcribe one page image. Returns (result, usage_dict, cost_usd)."""
+    """Transcribe one page image. Returns (result, usage_dict, cost_usd).
+
+    `extra_hint` is appended to the user message; used for corrective retries
+    (e.g. listing headings a previous attempt omitted from text_md).
+    """
     hint = f"کتاب: {title_hint}" if title_hint else "عنوان کتاب نامشخص است."
     user_text = (
         f"صفحهٔ {page_no} از {page_count}. {hint}\n"
         "Transcribe this page following the system instructions."
     )
+    if extra_hint:
+        user_text += f"\n{extra_hint}"
     kwargs: dict = {}
     if model.startswith("claude-sonnet-5"):
         # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
@@ -167,6 +177,71 @@ def transcribe_page(
         raise RuntimeError(f"Model {model} returned unparseable output for page {page_no}")
     usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
     return result, usage, cost_of(response.usage, model)
+
+
+class QCIssue(BaseModel):
+    type: str = Field(
+        description='One of: "missing_heading", "wrong_heading_level", "wrong_word", "zwnj_error", '
+        '"heh_boundary", "footnote_marker", "digit_error", "punctuation", "missing_text", '
+        '"extra_text", "verse_structure", "table_structure", "other".'
+    )
+    description: str = Field(description="Short explanation of the problem, in English.")
+    snippet: str = Field(description="The affected text as it currently appears in the transcription (verbatim excerpt).")
+
+
+class QCReport(BaseModel):
+    verdict: str = Field(description='"pass" if the transcription is faithful, "fail" if it has any real issues.')
+    issues: list[QCIssue] = Field(description="All real issues found; empty when verdict is pass.")
+    suggested_text_md: Optional[str] = Field(
+        description="When verdict is fail: the complete corrected page Markdown, preserving everything "
+        "that was already right. null when verdict is pass."
+    )
+
+
+QC_SYSTEM = """You are a meticulous quality-control verifier for Persian (Farsi) book transcriptions. You receive one page of a book as an image, followed by the current Markdown transcription of that page. Compare them character by character and report real discrepancies.
+
+VERIFY IN PARTICULAR
+- Headings: every chapter/page title, boxed or banner section title (even inside decorative frames), and bold standalone label on the page must appear as a `#` / `##` / `###` line. Report missing or wrongly-leveled headings. Running headers at the extreme top/bottom margin and page numbers are correctly omitted — do not report those.
+- Words containing ه at a joining boundary (e.g. علاقه‌مند، خانه‌ها): verify the exact letters and the zero-width non-joiner (U+200C) usage against the image.
+- Footnotes: every superscript marker printed in the body must appear as [^n] in the text, with a matching [^n]: definition at the end of the page.
+- Persian codepoints (ی/ک never ي/ك), digits as printed, punctuation («», ،, ؛, ؟), diacritics only where printed.
+- Poetry must be in ```verse blocks (one بیت per line, hemistichs separated by ` --- `); tables as Markdown tables; body paragraphs never hard-wrapped.
+
+RULES
+- Only report actual discrepancies against the image; do not restyle, modernize, or "improve" faithful text.
+- Minor stylistic judgment calls are not issues. Uncertainty about a blurry word is an issue only if the transcription is likely wrong.
+- verdict "pass" requires zero real issues; otherwise "fail" with every issue listed.
+- suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical."""
+
+
+def qc_verify_page(
+    client: anthropic.Anthropic,
+    png_bytes: bytes,
+    text_md: str,
+    model: str,
+    page_no: int,
+) -> tuple[QCReport, dict, float]:
+    """Verify one page's transcription against its image. Returns (report, usage_dict, cost_usd)."""
+    user_text = (
+        f"صفحهٔ {page_no}. Current transcription of this page:\n\n{text_md}\n\n"
+        "Verify this transcription against the page image per the system instructions."
+    )
+    kwargs: dict = {}
+    if model.startswith("claude-sonnet-5"):
+        kwargs["thinking"] = {"type": "disabled"}
+    response = client.messages.parse(
+        model=model,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        system=QC_SYSTEM,
+        messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
+        output_format=QCReport,
+        **kwargs,
+    )
+    report = response.parsed_output
+    if report is None:
+        raise RuntimeError(f"QC model {model} returned unparseable output for page {page_no}")
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return report, usage, cost_of(response.usage, model)
 
 
 def propose_metadata(

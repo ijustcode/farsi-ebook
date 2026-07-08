@@ -11,6 +11,9 @@ decisions combine it with checks the model can't game:
   self 1.0, adjacent page 0.23, half-corrupted 0.27).
 - Script sanity (all pages): Arabic-only codepoints that should be Persian,
   unexpected Latin ratio, degenerate repetition.
+- Heading cross-check: the model's own `headings` field, and (digital PDFs)
+  bold/oversized lines from the text layer, must each have a matching `#`
+  line in text_md (word-bag compared, so broken ligatures don't false-flag).
 """
 
 from __future__ import annotations
@@ -43,6 +46,9 @@ _PUNCT_DIGITS = re.compile(r"[\d۰-۹.,:;!?()\[\]{}«»،؛؟\-—_*#>`^\"'|/\\]
 _LATIN = re.compile(r"[A-Za-z]")
 _PERSIAN_ARABIC = re.compile(r"[؀-ۿ]")
 
+HEADING_BAG_SIM = 0.85  # word-bag cosine above this counts as "the same heading"
+_HEADING_LINE = re.compile(r"^#{1,3} (.+)$", re.MULTILINE)
+
 
 def _normalize(text: str) -> str:
     text = _JOINERS.sub(" ", text)
@@ -71,7 +77,47 @@ def bag_cosine(a: Counter, b: Counter) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
-def evaluate(text_md: str, confidence: float, flags: list[str], embedded_text: Optional[str]) -> dict:
+def heading_lines(text_md: str) -> list[str]:
+    """The text of every `#`/`##`/`###` line in text_md, marks stripped."""
+    return [m.strip() for m in _HEADING_LINE.findall(text_md)]
+
+
+def missing_headings(headings: list[str], text_md: str) -> list[str]:
+    """Declared `headings` with no matching heading line in text_md.
+
+    A heading counts as matched when its word bag is >= HEADING_BAG_SIM
+    cosine-similar to some heading line's word bag (ligature/ZWNJ immune).
+    """
+    line_bags = [word_bag(h) for h in heading_lines(text_md)]
+    return [
+        h for h in headings
+        if not any(bag_cosine(word_bag(h), lb) >= HEADING_BAG_SIM for lb in line_bags)
+    ]
+
+
+def missing_embedded_headings(candidates: list[str], text_md: str) -> list[str]:
+    """PDF-text-layer `candidates` (see render.extract_heading_candidates) with
+    no matching heading line in text_md. Candidates with an empty word bag are
+    skipped (nothing to compare)."""
+    line_bags = [word_bag(h) for h in heading_lines(text_md)]
+    missing = []
+    for c in candidates:
+        cb = word_bag(c)
+        if not cb:
+            continue
+        if not any(bag_cosine(cb, lb) >= HEADING_BAG_SIM for lb in line_bags):
+            missing.append(c)
+    return missing
+
+
+def evaluate(
+    text_md: str,
+    confidence: float,
+    flags: list[str],
+    embedded_text: Optional[str],
+    headings: Optional[list[str]] = None,
+    heading_candidates: Optional[list[str]] = None,
+) -> dict:
     """Score one page transcription. Returns a validators dict for the sidecar."""
     issues: list[str] = []
     total_chars = len(text_md)
@@ -113,6 +159,12 @@ def evaluate(text_md: str, confidence: float, flags: list[str], embedded_text: O
             if length_ratio is not None and not (LEN_RATIO_BOUNDS[0] <= length_ratio <= LEN_RATIO_BOUNDS[1]):
                 issues.append("length_anomaly")
 
+    # Heading cross-checks -------------------------------------------------
+    if headings and missing_headings(headings, text_md):
+        issues.append("missing_heading")
+    if heading_candidates and missing_embedded_headings(heading_candidates, text_md):
+        issues.append("embedded_heading_missing")
+
     # Composite quality score --------------------------------------------
     score = confidence
     if embedded_similarity is not None:
@@ -152,6 +204,7 @@ def needs_review(confidence: float, flags: list[str], validators: dict, is_blank
     sim = validators.get("embedded_similarity")
     if sim is not None and sim < EMBED_SIM_REVIEW:
         return True
-    if "repetition" in validators["issues"] or "arabic_codepoints" in validators["issues"]:
+    review_issues = {"repetition", "arabic_codepoints", "missing_heading", "embedded_heading_missing"}
+    if review_issues & set(validators["issues"]):
         return True
     return False

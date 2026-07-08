@@ -11,6 +11,9 @@ __pycache__/
 build/
 dist/
 
+# QC learning history (user data, accumulates across runs)
+qc_history.json
+
 # User content and book files
 # Ignore all PDFs in project root (personal book files)
 /*.pdf

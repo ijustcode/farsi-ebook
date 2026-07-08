@@ -106,6 +106,11 @@ def _parse_page_markdown(page_n: int, text: str) -> tuple[list[dict], dict[str, 
             blocks.append({"type": "verse", "page": page_n, "lines": verse_lines})
             continue
 
+        if stripped.startswith("### "):
+            blocks.append({"type": "h3", "page": page_n, "text": stripped[4:].strip()})
+            i += 1
+            continue
+
         if stripped.startswith("## "):
             blocks.append({"type": "h2", "page": page_n, "text": stripped[3:].strip()})
             i += 1
@@ -325,6 +330,8 @@ class _ChapterRenderer:
                 parts.append(f"<h1>{self._text(b['page'], b['text'])}</h1>")
             elif t == "h2":
                 parts.append(f"<h2>{self._text(b['page'], b['text'])}</h2>")
+            elif t == "h3":
+                parts.append(f"<h3>{self._text(b['page'], b['text'])}</h3>")
             elif t == "p":
                 frag_html = [self._text(pg, txt) for pg, txt in b["frags"]]
                 parts.append(f"<p>{' '.join(frag_html)}</p>")
@@ -411,13 +418,14 @@ body {
   text-align: justify;
   line-height: 1.9;
 }
-h1, h2 {
+h1, h2, h3 {
   font-family: "Vazirmatn", serif;
   font-weight: bold;
   text-align: center;
 }
 h1 { font-size: 1.6em; margin: 1.5em 0 1em; }
 h2 { font-size: 1.25em; margin: 1.3em 0 0.8em; }
+h3 { font-size: 1.1em; margin: 1.1em 0 0.6em; }
 p { margin: 0 0 1em; }
 .verse { text-align: center; margin: 1.5em 0; }
 .verse .v { display: flex; justify-content: space-between; gap: 2em; margin: 0.3em 0; text-align: right; }
