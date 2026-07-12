@@ -427,6 +427,51 @@ def _link_issues_to_hunks(issues: list[dict], hunks: list[dict]) -> None:
         h["issue_idx"] = best_idx if best_score >= 0.4 else None
 
 
+# QC issues carry a flagged snippet but no fix (verdict-pass issues, an
+# "identical" or absent suggestion). We synthesize edit-only hunks for them so
+# a reviewer can still correct the phrase in place. Ids sit far above real hunk
+# ids (0..N) so the two id spaces never collide; the offset is reproduced
+# server-side in _decide_accept_outcome so client/server hunk ids agree.
+_FINDING_ID_BASE = 100000
+
+
+def _derive_finding_hunks(
+    text: str, issues: list[dict], real_hunks: list[dict]
+) -> list[dict]:
+    """Edit-only hunk objects for QC issues that have a snippet but no linked
+    fix hunk. Shaped like a real hunk (so the whole hunk edit/apply/accept path
+    works unchanged) with old == new == snippet, empty context, and
+    edit_only=True. A snippet that isn't an exact substring is still emitted;
+    the client's replaceHunk then reports "apply manually".
+    """
+    linked = {h["issue_idx"] for h in real_hunks if h.get("issue_idx") is not None}
+    out: list[dict] = []
+    for i, iss in enumerate(issues):
+        if i in linked:
+            continue
+        snip = (iss.get("snippet") or "").strip()
+        if not snip:
+            continue
+        positions = _find_all(text, snip)
+        out.append(
+            {
+                "id": _FINDING_ID_BASE + i,
+                "old": snip,
+                "new": snip,
+                "ctx_before": "",
+                "ctx_after": "",
+                "unique": len(positions) == 1,
+                "occurrence": 1,
+                "ws_only": False,
+                "issue_idx": i,
+                "show_before": "",
+                "show_after": "",
+                "edit_only": True,
+            }
+        )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # accept outcome (pure, unit-tested)
 # ---------------------------------------------------------------------------
@@ -437,6 +482,37 @@ class _AcceptOutcome:
     reviewed: str                       # "edited" | "accepted"
     suggestion_status: Optional[str]    # new qc.suggestion_status or None = leave as-is
     events: list[tuple[str, str, str, str]]  # (detected_by, issue_type, old_frag, new_frag)
+
+
+def _finding_edit_events(
+    finding_hunks: list[dict],
+    hunk_decisions: Optional[list[dict]],
+    issues: list[dict],
+    default_issue_type: str,
+) -> tuple[list[tuple[str, str, str, str]], int]:
+    """Human-edit history events for edit-only finding hunks the reviewer
+    changed. Returns (events, n_edited). Ids are matched against the same
+    _derive_finding_hunks output produced client-side, so decisions line up.
+    """
+    by_id: dict[int, dict] = {}
+    for d in hunk_decisions or []:
+        try:
+            by_id[int(d.get("id"))] = d
+        except (TypeError, ValueError):
+            continue
+    events: list[tuple[str, str, str, str]] = []
+    n_edited = 0
+    for h in finding_hunks:
+        d = by_id.get(h["id"]) or {}
+        if d.get("decision") != "edited":
+            continue
+        if h["issue_idx"] is not None and h["issue_idx"] < len(issues):
+            issue_type = issues[h["issue_idx"]].get("type") or default_issue_type
+        else:
+            issue_type = default_issue_type
+        events.append(("human_edit", issue_type, h["old"], d.get("text", h["old"])))
+        n_edited += 1
+    return events, n_edited
 
 
 def _decide_accept_outcome(
@@ -460,11 +536,22 @@ def _decide_accept_outcome(
             qc_data.get("suggestion_status") == "pending"
             and qc_data.get("suggested_text_md") is None
         )
-        suggestion_status = "rejected" if dangling else None
-        events: list[tuple[str, str, str, str]] = []
-        if text_changed:
+        if not dangling:
+            events: list[tuple[str, str, str, str]] = []
+            if text_changed:
+                events.append(("human_edit", default_issue_type, on_disk_text, new_text))
+            return _AcceptOutcome(reviewed, None, events)
+        # Verdict-fail page with flagged phrases but no suggestion: each flagged
+        # phrase is an edit-only finding hunk. Record per-finding human edits.
+        issues = qc_data.get("issues") or []
+        finding_hunks = _derive_finding_hunks(on_disk_text, issues, [])
+        events, n_finding_edited = _finding_edit_events(
+            finding_hunks, hunk_decisions, issues, default_issue_type
+        )
+        if text_changed and n_finding_edited == 0:
             events.append(("human_edit", default_issue_type, on_disk_text, new_text))
-        return _AcceptOutcome(reviewed, suggestion_status, events)
+        status = "edited" if (n_finding_edited or text_changed) else "rejected"
+        return _AcceptOutcome(reviewed, status, events)
 
     suggested = pending.get("suggested_text_md") or ""
     issues = pending.get("issues") or []
@@ -481,6 +568,7 @@ def _decide_accept_outcome(
         # client-sent hunk text except the explicit "edited" replacement.
         hunks = _derive_hunks(on_disk_text, suggested)
         _link_issues_to_hunks(issues, hunks)
+        finding_hunks = _derive_finding_hunks(on_disk_text, issues, hunks)
         by_id: dict[int, dict] = {}
         for d in hunk_decisions:
             try:
@@ -506,9 +594,14 @@ def _decide_accept_outcome(
             else:  # rejected or pending -> the original text stayed
                 detected_by, decided = "suggestion_rejected", h["old"]
             events.append((detected_by, issue_type, h["old"], decided))
-        if hunks and n_approved == len(hunks):
+        # Flagged phrases with no suggestion (unlinked issues) ride alongside.
+        finding_events, n_finding_edited = _finding_edit_events(
+            finding_hunks, hunk_decisions, issues, default_issue_type
+        )
+        events.extend(finding_events)
+        if hunks and n_approved == len(hunks) and n_finding_edited == 0:
             status = "accepted"
-        elif n_approved == 0 and n_edited == 0:
+        elif n_approved == 0 and n_edited == 0 and n_finding_edited == 0:
             status = "rejected"
         else:
             status = "edited"
@@ -805,6 +898,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 }
 .hunk-diff del { background: #4a1f22; color: #f5b5b8; text-decoration: line-through; }
 .hunk-diff ins { background: #1f3a24; color: #b6e6bf; text-decoration: none; }
+.hunk-diff.hunk-noswitch { color: #9a9ba3; font-style: italic; font-size: 0.85rem; }
 .hunk-ctx { color: #83848c; font-size: 0.85em; }
 .hunk-actions { direction: ltr; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 .hunk-actions button { font-size: 0.8rem; padding: 0.3rem 0.7rem; }
@@ -895,7 +989,6 @@ button:disabled { opacity: 0.5; cursor: default; }
       {% if p.qc_panel %}
       <div class="qc-panel" id="qc-panel-{{ p.page }}">
         <div class="qc-panel-title">QC findings</div>
-        {% if p.qc_panel.kind == 'hunks' %}
         {% for g in p.qc_panel.groups %}
         <div class="qc-group">
           <ul class="qc-issue-list">
@@ -913,21 +1006,23 @@ button:disabled { opacity: 0.5; cursor: default; }
           {% if g.hunks %}
           <ul class="hunk-list">
             {% for h in g.hunks %}
-            <li class="hunk-item" id="hunk-{{ p.page }}-{{ h.id }}" data-page="{{ p.page }}" data-hunk="{{ h.id }}">
-              {% if h.ws_only %}
+            <li class="hunk-item{% if h.edit_only %} edit-only{% endif %}" id="hunk-{{ p.page }}-{{ h.id }}" data-page="{{ p.page }}" data-hunk="{{ h.id }}">
+              {% if h.edit_only %}
+              <div class="hunk-diff hunk-noswitch" dir="rtl">no suggested fix &mdash; edit the flagged text</div>
+              {% elif h.ws_only %}
               <div class="hunk-diff">&para; line/paragraph-break change</div>
               {% else %}
               <div class="hunk-diff" dir="rtl"><span class="hunk-ctx">{{ h.show_before }}</span>{% if h.old %}<del><bdi>{{ h.old }}</bdi></del>{% endif %} {% if h.new %}<ins><bdi>{{ h.new }}</bdi></ins>{% endif %}<span class="hunk-ctx">{{ h.show_after }}</span></div>
               {% endif %}
               <div class="hunk-actions">
-                <button onclick="approveHunk({{ p.page }}, {{ h.id }})">Approve</button>
+                <button onclick="approveHunk({{ p.page }}, {{ h.id }})"{% if h.edit_only %} disabled title="no suggested fix to approve"{% endif %}>Approve</button>
                 <button onclick="toggleEditHunk({{ p.page }}, {{ h.id }})">Edit</button>
-                <button onclick="rejectHunk({{ p.page }}, {{ h.id }})">Reject</button>
+                <button onclick="rejectHunk({{ p.page }}, {{ h.id }})"{% if h.edit_only %} disabled title="no suggested fix to reject"{% endif %}>Reject</button>
                 <button id="undo-{{ p.page }}-{{ h.id }}" style="display:none" onclick="undoHunk({{ p.page }}, {{ h.id }})">Undo</button>
                 <span class="status-note" id="hunk-status-{{ p.page }}-{{ h.id }}"></span>
               </div>
               <div class="hunk-edit" id="hunk-edit-{{ p.page }}-{{ h.id }}" style="display:none">
-                <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{{ h.new }}</textarea>
+                <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{% if h.edit_only %}{{ h.old }}{% else %}{{ h.new }}{% endif %}</textarea>
                 <button onclick="applyEditedHunk({{ p.page }}, {{ h.id }})">Apply my text</button>
               </div>
             </li>
@@ -936,22 +1031,10 @@ button:disabled { opacity: 0.5; cursor: default; }
           {% endif %}
         </div>
         {% endfor %}
-        {% else %}
-        <ul class="qc-issue-list">
-          {% for issue in p.qc_panel.issues %}
-          <li>
-            <div class="qc-issue-head qc-issue" data-page="{{ p.page }}" data-issue="{{ loop.index0 }}">{{ issue.type }} &mdash; {{ issue.description }}</div>
-            {% if issue.snippet %}
-            <div class="qc-snippet" dir="rtl">{{ issue.snippet }}</div>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
         {% if p.qc_panel.kind == 'identical' %}
-        <div class="qc-note">QC reported issues but its suggested text is identical to the current text &mdash; nothing to apply.</div>
+        <div class="qc-note">QC flagged these but its suggested text matches the current text &mdash; edit any inline if a fix is needed.</div>
         {% elif p.qc_panel.kind == 'no_suggestion' %}
-        <div class="qc-note">QC reported issues but produced no suggested correction &mdash; fix manually if needed.</div>
-        {% endif %}
+        <div class="qc-note">QC flagged these but produced no suggested correction &mdash; edit any inline if a fix is needed.</div>
         {% endif %}
         {% if p.boxes %}
         <div class="qc-legend">
@@ -1164,7 +1247,7 @@ async function acceptPage(page) {
   }
   var body = {page: page, text: ta.value};
   var pendingCount = 0;
-  if (p.has_suggestion && p.hunks && p.hunks.length) {
+  if (p.hunks && p.hunks.length) {
     var hunks = [];
     for (var i = 0; i < p.hunks.length; i++) {
       var h = p.hunks[i];
@@ -1406,11 +1489,16 @@ def _page_view(ws: Workspace, n: int) -> dict:
             hunks = _derive_hunks(text, suggested)
             _link_issues_to_hunks(issues, hunks)
 
+        # Every flagged phrase without a linked fix hunk (all issues on a
+        # no_suggestion/identical page, or unlinked issues on a hunks page)
+        # gets an edit-only hunk so it can still be corrected in place.
+        hunks += _derive_finding_hunks(text, issues, hunks)
+
     # Overlay boxes: sets "box" on each hunk / unlinked issue, returns the
     # template list (percent geometry). Must run before view_hunks copies.
     boxes = _build_boxes(ws, n, issues, hunks, text)
 
-    if panel_kind == "hunks":
+    if panel_kind is not None:
         view_hunks = []
         for h in hunks:
             label = None
@@ -1423,7 +1511,7 @@ def _page_view(ws: Workspace, n: int) -> dict:
         # the template can render each finding immediately followed by its
         # own fix box(es). Hunks with no linked issue land in a trailing
         # "Other correction" group; issues with no linked hunk still render
-        # (description-only, no hunk-list under them).
+        # (their edit-only finding hunk lands under them via issue_idx).
         issue_to_hunks: dict[int, list[dict]] = {}
         other_hunks: list[dict] = []
         for h in view_hunks:
@@ -1441,9 +1529,7 @@ def _page_view(ws: Workspace, n: int) -> dict:
                 {"idx": None, "issue": None, "other_label": "Other correction", "hunks": other_hunks}
             )
 
-        qc_panel = {"kind": "hunks", "issues": issues, "hunks": view_hunks, "groups": groups}
-    elif panel_kind is not None:
-        qc_panel = {"kind": panel_kind, "issues": issues, "hunks": [], "groups": []}
+        qc_panel = {"kind": panel_kind, "issues": issues, "hunks": view_hunks, "groups": groups}
 
     payload = {
         "page": n,
