@@ -50,7 +50,19 @@ This creates the workspace at `books/my-book/`, classifies the PDF (digital, sca
 farsi2epub transcribe my-book
 ```
 
-Each page is rendered to an image and transcribed by Claude, several pages at a time. Pages that already have output are skipped, so re-running the command resumes an interrupted job — use `--force` to redo pages. When it finishes (in a terminal) it offers to run QC right away.
+Each page is rendered to an image and transcribed by Claude, several pages at a time. Pages that already have output are skipped, so re-running the command resumes an interrupted job — use `--force` to redo pages.
+
+When the run finishes in a terminal, it offers to start quality control right away:
+
+```
+Run QC now? (auto, manual, skip) [auto]:
+```
+
+- `auto` — an LLM verifier checks the pages most likely to have problems and attaches suggested corrections (nothing is overwritten; you accept or reject suggestions later in `review`)
+- `manual` — opens the review web UI immediately so you can correct flagged pages yourself
+- `skip` — does nothing now; you can always run `farsi2epub qc` later
+
+Pressing Enter picks `auto`. To decide up front and skip the prompt, pass `--qc auto`, `--qc manual`, or `--qc skip` to `transcribe`. Outside a terminal (e.g. in a script), the prompt is skipped automatically.
 
 Useful options:
 
@@ -68,7 +80,15 @@ farsi2epub qc my-book            # auto: LLM verifier pass over risky pages
 farsi2epub review my-book        # local web UI for human correction
 ```
 
-Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown, with the QC suggestion as a diff you can apply, edit, or reject. Only the worst flagged pages are surfaced by default, so review stays quick.
+Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown, with the QC suggestion as a diff you can apply, edit, or reject.
+
+The review UI surfaces pages flagged by *either* check: pages the deterministic validators flagged during transcription (with their issues shown, e.g. `embedded_mismatch`) and pages the LLM QC pass failed. To keep review quick, only the worst fifth of flagged pages are surfaced by default — pass `--all` to see every flagged page:
+
+```bash
+farsi2epub review my-book --all
+```
+
+When you press **Save** on a page, your edited text replaces that page's transcription on disk (`books/<slug>/text/NNNN.md`) — the build step reads exactly these files, so corrections always end up in the EPUB. **Accept** keeps the text as-is and clears the flag.
 
 Both steps are optional — you can go straight to `build` — but they catch the errors that matter most.
 
