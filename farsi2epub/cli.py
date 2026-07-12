@@ -144,15 +144,17 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
     resolved_qc_mode = qc_mode
     if qc_mode == "ask":
         if sys.stdin.isatty():
+            click.echo("")
+            click.echo("QC options:")
+            click.echo("  auto   - LLM verifier checks risky pages and attaches suggested corrections")
+            click.echo("  manual - open the review web UI to correct flagged pages yourself")
+            click.echo("  skip   - do nothing now (you can run `farsi2epub qc` later)")
             resolved_qc_mode = click.prompt(
                 "Run QC now?",
-                type=click.Choice(["a", "m", "s"]),
-                default="a",
-                show_choices=True
+                type=click.Choice(["auto", "manual", "skip"]),
+                default="auto",
+                show_choices=True,
             )
-            # Map single-letter choice to full mode name
-            mode_map = {"a": "auto", "m": "manual", "s": "skip"}
-            resolved_qc_mode = mode_map[resolved_qc_mode]
         else:
             resolved_qc_mode = "skip"
 
@@ -186,11 +188,12 @@ main.add_command(qc_cmd, name="qc")
 
 @main.command()
 @click.argument("slug")
-def review_cmd(slug: str):
+@click.option("--all", "all_pages", is_flag=True, help="Surface every flagged page, ignoring the review budget.")
+def review_cmd(slug: str, all_pages: bool):
     """Launch the review workflow for workspace SLUG."""
     ws = Workspace.load(slug)
     try:
-        review.run_review(ws)
+        review.run_review(ws, budget_all=all_pages)
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")
 
