@@ -152,6 +152,18 @@ def _nth_index(hay: str, needle: str, nth: int) -> int:
     return idx
 
 
+def _cap_words(s: str, n: int = 5) -> str:
+    """Prefix of `s` covering at most `n` whitespace-delimited words, preserving
+    the original characters (so char offsets/ZWNJ still line up with the source).
+    A long flagged phrase would otherwise locate to a whole PDF line, which the
+    click-to-zoom cannot zoom into.
+    """
+    matches = list(re.finditer(r"\S+", s))
+    if len(matches) <= n:
+        return s
+    return s[: matches[n - 1].end()]
+
+
 def _bbox_to_box(bbox) -> Optional[dict]:
     """Convert a sidecar model bbox ([x0,y0,x1,y1] in 0-1000 ints) to a
     0-1-fraction box dict with source "model"; None when absent/invalid.
@@ -208,11 +220,18 @@ def _build_boxes(
         fallback = None
         if h["issue_idx"] is not None and h["issue_idx"] < len(issues):
             fallback = issues[h["issue_idx"]].get("bbox")
-        specs.append((f"h{h['id']}", Query(qtext, span), fallback, h, None))
+        # Cap the locating query to a few words so the box is a zoomable
+        # fraction of the line (not the whole line). The hunk's full old/new
+        # text is untouched — only where we draw/zoom the box changes.
+        qtext_c = _cap_words(qtext)
+        span_c = (span[0], span[0] + len(qtext_c)) if span is not None else None
+        specs.append((f"h{h['id']}", Query(qtext_c, span_c), fallback, h, None))
     for i, iss in enumerate(issues):
         if i in linked:
             continue
-        specs.append((f"i{i}", Query(iss.get("snippet") or "", None), iss.get("bbox"), None, iss))
+        specs.append(
+            (f"i{i}", Query(_cap_words(iss.get("snippet") or ""), None), iss.get("bbox"), None, iss)
+        )
 
     located: tuple = _locate_queries_cached(
         str(ws.pdf_path), n, text, tuple(s[1] for s in specs)
@@ -797,6 +816,10 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
   100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
 }
 .hunk-item.hot { border-color: #3a9ff0; }
+.hunk-item.active {
+  box-shadow: inset 0 0 0 2px #f0c24a, 0 0 8px rgba(240,194,74,.45);
+  background: #2a2b31;
+}
 .qc-issue { cursor: zoom-in; }
 .qc-legend {
   font-size: 0.8rem;
@@ -1324,12 +1347,32 @@ function clearGlow(page) {
   for (var i = 0; i < els.length; i++) els[i].classList.remove('zoom-target');
 }
 
+// Mark the correction box tied to the zoomed finding as active (one per page).
+function setActiveHunk(page, boxId) {
+  var block = document.getElementById('block-' + page);
+  if (!block) return;
+  var items = block.querySelectorAll('.hunk-item.active');
+  for (var i = 0; i < items.length; i++) items[i].classList.remove('active');
+  var m = boxId.match(/^box-(\\d+)-h(\\d+)$/);
+  if (!m) return;
+  var hunkEl = document.getElementById('hunk-' + m[1] + '-' + m[2]);
+  if (hunkEl) hunkEl.classList.add('active');
+}
+
+function clearActiveHunk(page) {
+  var block = document.getElementById('block-' + page);
+  if (!block) return;
+  var items = block.querySelectorAll('.hunk-item.active');
+  for (var i = 0; i < items.length; i++) items[i].classList.remove('active');
+}
+
 function zoomOut(page) {
   var wrap = document.getElementById('imgwrap-' + page);
   if (!wrap) return;
   wrap.style.transform = '';
   zoomState[page] = null;
   clearGlow(page);
+  clearActiveHunk(page);
 }
 
 function zoomTo(page, boxId) {
@@ -1367,6 +1410,7 @@ function zoomTo(page, boxId) {
 
   wrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
   zoomState[page] = boxId;
+  setActiveHunk(page, boxId);
   // Pulse the target box once the glide has landed.
   setTimeout(function () {
     if (zoomState[page] !== boxId) return;

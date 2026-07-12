@@ -33,11 +33,6 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
-# Toggle for the optional single-line x-extent refinement (Tier B). Disabled:
-# harness inspection showed within-line x offsets sit below the char-fraction
-# method's noise floor (correct line, skewed segment), and a tight box in the
-# wrong spot misleads where a full-line box is honestly right.
-_X_REFINE = False
 
 # Tier A acceptance / tuning constants (measured; see plan).
 _MATCH_ACCEPT = 0.72
@@ -47,9 +42,6 @@ _DRIFT_PENALTY = 0.02
 # Tier B page gate: PDF/MD countable-char ratio must stay in this band.
 _LAYOUT_RATIO_LO = 0.5
 _LAYOUT_RATIO_HI = 2.0
-# Neighbor line inclusion: span boundary within this fraction of a hit line's
-# own width of the shared edge pulls in the adjacent line.
-_NEIGHBOR_FRAC = 0.10
 
 # Tier A page gate: at least this fraction of normalized page words must carry
 # an Arabic-block character.
@@ -241,24 +233,45 @@ def _pdf_lines(page: fitz.Page) -> list[tuple[fitz.Rect, int]]:
     return lines
 
 
-def _refine_x(rect: fitz.Rect, local_start: float, local_end: float) -> Optional[fitz.Rect]:
-    """Refine a single hit line's x-extent to the span's within-line fractions,
-    measured RTL from the right edge. Returns None (keep the full line) when the
-    refined width would be < 15% of the line width.
+def _line_word_extent(
+    pwords: list[tuple[fitz.Rect, str]],
+    line_rect: fitz.Rect,
+    u0: float,
+    u1: float,
+) -> Optional[fitz.Rect]:
+    """Narrow a single hit line to the word sub-run covering within-line char
+    fractions [u0, u1] (RTL: fraction 0 = right edge = reading start), using the
+    line's real word rectangles so the extent tracks actual glyph positions
+    rather than a linear char-width guess. Returns None (keep the full line) when
+    no words sit on the line.
     """
-    w = rect.width
-    if w <= 0:
+    yc = (line_rect.y0 + line_rect.y1) / 2
+    # per-word char counts, in RTL reading order (rightmost word first)
+    line_words = [
+        (r, len(t.strip()))
+        for r, t in pwords
+        if r.y0 - 1.0 <= yc <= r.y1 + 1.0
+    ]
+    line_words.sort(key=lambda t: -t[0].x1)
+    total = sum(c for _r, c in line_words)
+    if not line_words or total == 0:
         return None
-    ls = max(0.0, min(1.0, local_start))
-    le = max(0.0, min(1.0, local_end))
-    if le <= ls:
-        return None
-    # RTL: fraction 0 is at the right edge (x1), growing leftward.
-    x_right = rect.x1 - ls * w
-    x_left = rect.x1 - le * w
-    if (x_right - x_left) < 0.15 * w:
-        return None
-    return fitz.Rect(x_left, rect.y0, x_right, rect.y1)
+    lo = max(0.0, min(1.0, u0))
+    hi = max(0.0, min(1.0, u1))
+    if hi <= lo:
+        hi = min(1.0, lo + 1e-6)
+    selected: list[fitz.Rect] = []
+    cum = 0
+    for r, c in line_words:
+        w0 = cum / total
+        w1 = (cum + c) / total
+        if w1 > lo and w0 < hi:
+            selected.append(r)
+        cum += c
+    if not selected:
+        idx = min(int(lo * len(line_words)), len(line_words) - 1)
+        selected = [line_words[idx][0]]
+    return _union_rects(selected)
 
 
 def _locate_layout(
@@ -266,6 +279,7 @@ def _locate_layout(
     md: str,
     span: tuple[int, int],
     lines: list[tuple[fitz.Rect, int]],
+    pwords: list[tuple[fitz.Rect, str]],
 ) -> Optional[dict]:
     """Map the markdown char span onto PDF line geometry. See module docstring."""
     if not lines:
@@ -307,28 +321,20 @@ def _locate_layout(
                 )
             ]
 
-    # Neighbor rule: pull in an adjacent line only when a span boundary lands
-    # within _NEIGHBOR_FRAC of the outermost hit line's width of the shared edge.
-    first, last = hit_idx[0], hit_idx[-1]
-    _r, lsf, lef = line_fracs[first]
-    if first > 0 and (fa - lsf) <= _NEIGHBOR_FRAC * (lef - lsf):
-        hit_idx.insert(0, first - 1)
-    _r, lsl, lel = line_fracs[last]
-    if last < len(line_fracs) - 1 and (lel - fb) <= _NEIGHBOR_FRAC * (lel - lsl):
-        hit_idx.append(last + 1)
-
-    rects = [line_fracs[i][0] for i in hit_idx]
-
-    # Optional x-refinement for a single-line hit.
-    if _X_REFINE and len(rects) == 1:
-        rect, ls, le = line_fracs[hit_idx[0]]
+    # Narrow each hit line to the word sub-run the span actually overlaps on
+    # that line, then union — so the box is a zoomable fraction of the line(s)
+    # rather than the full line width. (No adjacent-line padding: the word
+    # extent already tracks where the span lands.)
+    rects: list[fitz.Rect] = []
+    for i in hit_idx:
+        rect, ls, le = line_fracs[i]
         width_f = le - ls
+        refined = None
         if width_f > 0:
-            local_start = (fa - ls) / width_f
-            local_end = (fb - ls) / width_f
-            refined = _refine_x(rect, local_start, local_end)
-            if refined is not None:
-                rects = [refined]
+            u0 = (max(fa, ls) - ls) / width_f
+            u1 = (min(fb, le) - ls) / width_f
+            refined = _line_word_extent(pwords, rect, u0, u1)
+        rects.append(refined if refined is not None else rect)
 
     box = _rect_to_fracs(_union_rects(rects), page.rect)
     box["source"] = "layout"
@@ -459,7 +465,7 @@ def locate_queries(
         results: list[Optional[dict]] = []
         for q in queries:
             span = _resolve_span(page_md, q)
-            b_box = _locate_layout(page, page_md, span, lines) if span else None
+            b_box = _locate_layout(page, page_md, span, lines, pwords) if span else None
             expected_y = ((b_box["y0"] + b_box["y1"]) / 2) if b_box else None
 
             box: Optional[dict] = None
