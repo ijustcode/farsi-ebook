@@ -168,12 +168,15 @@ def _select_pages_for_review(ws: Workspace, budget_all: bool = False) -> tuple[l
     """Return (surfaced, skipped) page numbers.
 
     `surfaced` are the pages to actually show in the review UI: those with
-    needs_review == true in their sidecar, capped at
-    ceil(total_transcribed_pages / 5), keeping the lowest quality_score first.
-    `skipped` are needs_review pages that were cut off by the budget; their
+    needs_review == true in their sidecar, plus pages whose deterministic
+    validators recorded issues and that no human has reviewed yet (so
+    validator findings surface even when they stayed below the needs_review
+    threshold). The list is capped at ceil(total_transcribed_pages / 5),
+    keeping the lowest quality_score first.
+    `skipped` are flagged pages that were cut off by the budget; their
     sidecar gets a "review_skipped": true note but needs_review stays true.
 
-    When `budget_all` is True the cap is disabled: every needs_review page is
+    When `budget_all` is True the cap is disabled: every flagged page is
     surfaced and none are skipped.
     """
     done = ws.pages_done()
@@ -185,7 +188,8 @@ def _select_pages_for_review(ws: Workspace, budget_all: bool = False) -> tuple[l
     flagged: list[tuple[float, int]] = []
     for n in done:
         sidecar = _read_sidecar(ws, n)
-        if sidecar.get("needs_review"):
+        issues = (sidecar.get("validators") or {}).get("issues") or []
+        if sidecar.get("needs_review") or (issues and not sidecar.get("reviewed")):
             flagged.append((sidecar.get("quality_score", 0.0), n))
 
     # Lowest quality_score first.
@@ -523,7 +527,7 @@ def _render_index(ws: Workspace, surfaced: list[int], skipped: list[int]) -> str
         md_path = ws.page_md_path(n)
         text = md_path.read_text(encoding="utf-8") if md_path.is_file() else ""
         img_path = _image_path_for(ws, n)
-        reviewed = not sidecar.get("needs_review", True)
+        reviewed = bool(sidecar.get("reviewed")) and not sidecar.get("needs_review")
         if reviewed:
             reviewed_count += 1
 
