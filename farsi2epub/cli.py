@@ -102,7 +102,8 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--model", "model", default=None, help="Model to use for transcription (default: Sonnet; failing pages escalate to Sonnet + hi-res).")
 @click.option("--res", "resolution", type=click.Choice([RES_HI, RES_STD]), default=RES_HI, help="Page-image resolution: hi (2576px, default — best character accuracy) or std (1568px, ~30% cheaper; use for crisp large-print sources or very long books; failing pages escalate to hi-res).")
 @click.option("--qc", "qc_mode", type=click.Choice(["auto", "manual", "skip", "ask"]), default="ask", help="Run a QC pass after transcription: auto (automated), manual (review UI), skip (none), or ask (prompt if TTY).")
-def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str):
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the auto-QC cost confirmation prompt.")
+def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str, assume_yes: bool):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
     ws = Workspace.load(slug)
     meta = ws.meta
@@ -160,7 +161,7 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
     if resolved_qc_mode in ("auto", "manual"):
         try:
-            qc.run_qc(ws, resolved_qc_mode)
+            qc.run_qc(ws, resolved_qc_mode, assume_yes=assume_yes)
         except NotImplementedError:
             click.echo("QC module not yet implemented (coming in a later task).")
 

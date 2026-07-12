@@ -804,6 +804,9 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
   transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
+.img-wrap.panning { transition: none; }
+.img-viewport.zoomed { cursor: grab; }
+.img-viewport.panning { cursor: grabbing; }
 .qc-box { position: absolute; border-radius: 2px; }
 .qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
 .qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
@@ -1270,6 +1273,9 @@ async function acceptPage(page) {
   }
   var body = {page: page, text: ta.value};
   var pendingCount = 0;
+  var approvedCount = 0;
+  var editedCount = 0;
+  var rejectedCount = 0;
   if (p.hunks && p.hunks.length) {
     var hunks = [];
     for (var i = 0; i < p.hunks.length; i++) {
@@ -1278,6 +1284,9 @@ async function acceptPage(page) {
       var item = {id: h.id, decision: st.decision};
       if (st.decision === 'edited') item.text = st.applied;
       if (st.decision === 'pending') pendingCount++;
+      else if (st.decision === 'approved') approvedCount++;
+      else if (st.decision === 'edited') editedCount++;
+      else if (st.decision === 'rejected') rejectedCount++;
       hunks.push(item);
     }
     body.hunks = hunks;
@@ -1291,9 +1300,12 @@ async function acceptPage(page) {
     });
     var data = await resp.json();
     if (data.ok) {
-      var msg = data.reviewed === 'edited' ? 'saved (edited)' : 'accepted';
-      if (pendingCount > 0) {
-        msg = pendingCount + ' correction(s) undecided (kept original) \\u2014 ' + msg;
+      var baseMsg = data.reviewed === 'edited' ? 'saved (edited)' : 'accepted';
+      var msg = baseMsg;
+      if (p.hunks && p.hunks.length) {
+        msg = approvedCount + ' approved, ' + editedCount + ' edited, ' +
+              rejectedCount + ' rejected, ' + pendingCount +
+              ' undecided (kept original) \\u2014 ' + baseMsg;
       }
       showStatus(page, msg, false);
       markDone(page);
@@ -1337,6 +1349,10 @@ document.addEventListener('mouseout', function (ev) { handleBoxHover(ev, false);
 // -- click-to-zoom on the page image --------------------------------------
 // Per-page current zoom target (box id, or null when zoomed out).
 var zoomState = {};
+// Per-page live transform (s/tx/ty) so pan can adjust it while zoomed.
+var zoomXf = {};
+var pan = null;
+var suppressClick = false;
 
 function clampNum(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
@@ -1371,6 +1387,9 @@ function zoomOut(page) {
   if (!wrap) return;
   wrap.style.transform = '';
   zoomState[page] = null;
+  delete zoomXf[page];
+  var vp = document.getElementById('viewport-' + page);
+  if (vp) vp.classList.remove('zoomed');
   clearGlow(page);
   clearActiveHunk(page);
 }
@@ -1410,6 +1429,8 @@ function zoomTo(page, boxId) {
 
   wrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
   zoomState[page] = boxId;
+  zoomXf[page] = {s: s, tx: tx, ty: ty};
+  document.getElementById('viewport-' + page).classList.add('zoomed');
   setActiveHunk(page, boxId);
   // Pulse the target box once the glide has landed.
   setTimeout(function () {
@@ -1421,6 +1442,7 @@ function zoomTo(page, boxId) {
 // Delegated click. Never preventDefault, so the hunk buttons' onclick handlers
 // (Approve/Edit/Reject/Undo) keep firing normally.
 document.addEventListener('click', function (ev) {
+  if (suppressClick) { suppressClick = false; return; }
   var t = ev.target;
   if (!t || !t.closest) return;
   var onControl = !!t.closest('button, textarea, input, a');
@@ -1460,6 +1482,49 @@ document.addEventListener('click', function (ev) {
   }
   var vp = t.closest('.img-viewport');
   if (vp) { zoomOut(vp.getAttribute('data-page')); return; }
+});
+
+// -- click-drag to pan while zoomed ---------------------------------------
+document.addEventListener('mousedown', function (ev) {
+  var vp = ev.target.closest && ev.target.closest('.img-viewport');
+  if (!vp) return;
+  var page = vp.getAttribute('data-page');
+  if (!zoomState[page] || !zoomXf[page]) return;
+  pan = {page: page, startX: ev.clientX, startY: ev.clientY,
+         baseTx: zoomXf[page].tx, baseTy: zoomXf[page].ty, moved: false};
+  var wrap = document.getElementById('imgwrap-' + page);
+  if (wrap) wrap.classList.add('panning');
+  vp.classList.add('panning');
+  ev.preventDefault();
+});
+
+document.addEventListener('mousemove', function (ev) {
+  if (!pan) return;
+  var page = pan.page;
+  var dx = ev.clientX - pan.startX;
+  var dy = ev.clientY - pan.startY;
+  if (Math.abs(dx) + Math.abs(dy) > 4) pan.moved = true;
+  var wrap = document.getElementById('imgwrap-' + page);
+  var vp = document.getElementById('viewport-' + page);
+  if (!wrap || !vp || !zoomXf[page]) return;
+  var s = zoomXf[page].s;
+  var iw = wrap.offsetWidth, ih = wrap.offsetHeight;
+  var vw = vp.clientWidth, vh = vp.clientHeight;
+  var newTx = clampNum(pan.baseTx + dx, Math.min(0, vw - s * iw), Math.max(0, vw - s * iw));
+  var newTy = clampNum(pan.baseTy + dy, Math.min(0, vh - s * ih), Math.max(0, vh - s * ih));
+  wrap.style.transform = 'translate(' + newTx + 'px,' + newTy + 'px) scale(' + s + ')';
+  zoomXf[page].tx = newTx;
+  zoomXf[page].ty = newTy;
+});
+
+document.addEventListener('mouseup', function (ev) {
+  if (!pan) return;
+  var wrap = document.getElementById('imgwrap-' + pan.page);
+  if (wrap) wrap.classList.remove('panning');
+  var vp = document.getElementById('viewport-' + pan.page);
+  if (vp) vp.classList.remove('panning');
+  if (pan.moved) suppressClick = true;
+  pan = null;
 });
 
 document.addEventListener('keydown', function (ev) {
