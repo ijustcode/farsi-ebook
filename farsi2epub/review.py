@@ -27,7 +27,8 @@ from urllib.parse import urlparse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import qc, render
+from . import qc
+from .locate import Query, locate_queries
 from .workspace import PROJECT_ROOT, Workspace
 
 DEFAULT_PORT = 8765
@@ -121,19 +122,34 @@ def _json_for_script(obj) -> Markup:
 
 
 # ---------------------------------------------------------------------------
-# QC box overlays (PDF text-layer location + model bbox fallback)
+# QC box overlays (tiered locate.py match/layout + model bbox fallback)
 # ---------------------------------------------------------------------------
 
 
 @functools.lru_cache(maxsize=512)
-def _locate_snippets_cached(pdf_path: str, page_no: int, queries: tuple[str, ...]) -> tuple:
-    """Memoized render.locate_snippets so browser refreshes don't rescan the
-    PDF. Keyed on (pdf path, page, queries); any failure degrades to no boxes.
+def _locate_queries_cached(
+    pdf_path: str, page_no: int, page_md: str, queries: tuple[Query, ...]
+) -> tuple:
+    """Memoized locate.locate_queries so browser refreshes don't rescan the
+    PDF. Keyed on (pdf path, page, page markdown, queries) — page_md in the key
+    means an Accept that rewrites the page re-derives fresh boxes on the next
+    GET. Any failure degrades to no boxes.
     """
     try:
-        return tuple(render.locate_snippets(pdf_path, page_no, list(queries)))
+        return tuple(locate_queries(pdf_path, page_no, page_md, list(queries)))
     except Exception:
         return (None,) * len(queries)
+
+
+def _nth_index(hay: str, needle: str, nth: int) -> int:
+    """0-based start of the `nth` (1-based) occurrence of `needle`, or -1.
+    Mirrors the JS nthIndexOf used by the hunk-apply logic."""
+    idx = -1
+    for _ in range(nth):
+        idx = hay.find(needle, idx + 1)
+        if idx == -1:
+            return -1
+    return idx
 
 
 def _bbox_to_box(bbox) -> Optional[dict]:
@@ -156,15 +172,17 @@ def _build_boxes(
     n: int,
     issues: list[dict],
     hunks: list[dict],
-    pdf_boxes_enabled: bool,
+    text: str,
 ) -> list[dict]:
     """Attach a "box" (0-1 fractions + source, or None) to every hunk and
     every issue, and return the template-facing box list (percent values).
 
-    Per hunk the query is its old text (context-prefixed for whitespace-only
-    hunks); issues not linked to any hunk are queried by their snippet.
-    A confident PDF text-layer hit wins; otherwise the (linked) issue's
-    model-estimated sidecar bbox; otherwise no box.
+    Per hunk the query is its old text at its exact markdown span (computed via
+    nth-occurrence of ctx_before+old+ctx_after, mirroring the JS apply logic);
+    whitespace-only hunks query the whole context window (old alone may be pure
+    whitespace). Issues not linked to any hunk are queried by their snippet.
+    A tiered locate.py hit ("match"/"layout") wins; otherwise the (linked)
+    issue's model-estimated sidecar bbox ("model"); otherwise no box.
     """
     for iss in issues:
         iss.setdefault("box", None)
@@ -172,28 +190,38 @@ def _build_boxes(
         return []
 
     linked = {h["issue_idx"] for h in hunks if h["issue_idx"] is not None}
-    specs: list[tuple[str, str, Optional[list], Optional[dict], Optional[dict]]] = []
+    specs: list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]] = []
     for h in hunks:
-        query = (h["ctx_before"] + h["old"]) if h["ws_only"] else h["old"]
+        needle = h["ctx_before"] + h["old"] + h["ctx_after"]
+        occurrence = 1 if h["unique"] else h["occurrence"]
+        pos = _nth_index(text, needle, occurrence)
+        if h["ws_only"]:
+            qtext = needle
+            span = (pos, pos + len(needle)) if pos != -1 else None
+        else:
+            qtext = h["old"]
+            if pos != -1:
+                start = pos + len(h["ctx_before"])
+                span = (start, start + len(h["old"]))
+            else:
+                span = None
         fallback = None
         if h["issue_idx"] is not None and h["issue_idx"] < len(issues):
             fallback = issues[h["issue_idx"]].get("bbox")
-        specs.append((f"h{h['id']}", query, fallback, h, None))
+        specs.append((f"h{h['id']}", Query(qtext, span), fallback, h, None))
     for i, iss in enumerate(issues):
         if i in linked:
             continue
-        specs.append((f"i{i}", iss.get("snippet") or "", iss.get("bbox"), None, iss))
+        specs.append((f"i{i}", Query(iss.get("snippet") or "", None), iss.get("bbox"), None, iss))
 
-    pdf_results: tuple = (None,) * len(specs)
-    if pdf_boxes_enabled and specs:
-        pdf_results = _locate_snippets_cached(
-            str(ws.pdf_path), n, tuple(s[1] for s in specs)
-        )
+    located: tuple = _locate_queries_cached(
+        str(ws.pdf_path), n, text, tuple(s[1] for s in specs)
+    )
 
     boxes: list[dict] = []
-    for (key, _query, fallback, hunk, issue), pdf_box in zip(specs, pdf_results):
-        if pdf_box:
-            box = {**pdf_box, "source": "pdf"}
+    for (key, _query, fallback, hunk, issue), loc in zip(specs, located):
+        if loc:
+            box = loc
         else:
             box = _bbox_to_box(fallback)
         if hunk is not None:
@@ -649,12 +677,34 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .page-block.done { opacity: 0.55; }
 .page-block .col-img { flex: 0 0 48%; max-width: 48%; }
 .page-block .col-img img { max-width: 100%; border-radius: 6px; border: 1px solid #3a3b42; display: block; }
-.img-wrap { position: relative; display: inline-block; max-width: 100%; }
+.img-viewport {
+  position: sticky;
+  top: 4.5rem;
+  overflow: hidden;
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+.img-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  transform-origin: 0 0;
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
 .qc-box { position: absolute; border-radius: 2px; }
-.qc-box-pdf { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
+.qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
+.qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
 .qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .qc-box.hot { outline: 2px solid #ffffff; }
+.qc-box.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
+@keyframes qc-glow {
+  0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+  50%  { box-shadow: 0 0 0 5px rgba(255,255,255,.85); }
+  100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+}
 .hunk-item.hot { border-color: #3a9ff0; }
+.qc-issue { cursor: zoom-in; }
 .qc-legend {
   font-size: 0.8rem;
   color: #b7b9c2;
@@ -672,7 +722,8 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
   margin-inline-end: 0.35rem;
   vertical-align: middle;
 }
-.legend-swatch.legend-pdf { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
+.legend-swatch.legend-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
+.legend-swatch.legend-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
 .legend-swatch.legend-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .page-block .col-text { flex: 0 0 48%; max-width: 48%; display: flex; flex-direction: column; }
 .meta-row {
@@ -813,11 +864,13 @@ button:disabled { opacity: 0.5; cursor: default; }
   <div class="page-block{% if p.reviewed %} done{% endif %}" id="block-{{ p.page }}" data-page="{{ p.page }}">
     <div class="col-img">
       {% if p.image_url %}
-      <div class="img-wrap">
-        <img src="{{ p.image_url }}" alt="page {{ p.page }}">
-        {% for b in p.boxes %}
-        <div class="qc-box qc-box-{{ b.source }}" id="box-{{ p.page }}-{{ b.key }}" style="left:{{ '%.2f'|format(b.x0) }}%;top:{{ '%.2f'|format(b.y0) }}%;width:{{ '%.2f'|format(b.w) }}%;height:{{ '%.2f'|format(b.h) }}%"></div>
-        {% endfor %}
+      <div class="img-viewport" id="viewport-{{ p.page }}" data-page="{{ p.page }}">
+        <div class="img-wrap" id="imgwrap-{{ p.page }}">
+          <img src="{{ p.image_url }}" alt="page {{ p.page }}">
+          {% for b in p.boxes %}
+          <div class="qc-box qc-box-{{ b.source }}" id="box-{{ p.page }}-{{ b.key }}" style="left:{{ '%.2f'|format(b.x0) }}%;top:{{ '%.2f'|format(b.y0) }}%;width:{{ '%.2f'|format(b.w) }}%;height:{{ '%.2f'|format(b.h) }}%"></div>
+          {% endfor %}
+        </div>
       </div>
       {% else %}
       <div>(no image available for page {{ p.page }})</div>
@@ -848,7 +901,7 @@ button:disabled { opacity: 0.5; cursor: default; }
           <ul class="qc-issue-list">
             <li>
               {% if g.issue %}
-              <div class="qc-issue-head">{{ g.issue.type }} &mdash; {{ g.issue.description }}</div>
+              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}>{{ g.issue.type }} &mdash; {{ g.issue.description }}</div>
               {% if g.issue.snippet %}
               <div class="qc-snippet" dir="rtl">{{ g.issue.snippet }}</div>
               {% endif %}
@@ -887,7 +940,7 @@ button:disabled { opacity: 0.5; cursor: default; }
         <ul class="qc-issue-list">
           {% for issue in p.qc_panel.issues %}
           <li>
-            <div class="qc-issue-head">{{ issue.type }} &mdash; {{ issue.description }}</div>
+            <div class="qc-issue-head qc-issue" data-page="{{ p.page }}" data-issue="{{ loop.index0 }}">{{ issue.type }} &mdash; {{ issue.description }}</div>
             {% if issue.snippet %}
             <div class="qc-snippet" dir="rtl">{{ issue.snippet }}</div>
             {% endif %}
@@ -902,7 +955,8 @@ button:disabled { opacity: 0.5; cursor: default; }
         {% endif %}
         {% if p.boxes %}
         <div class="qc-legend">
-          <span><span class="legend-swatch legend-pdf"></span>located in PDF text</span>
+          <span><span class="legend-swatch legend-match"></span>located (word match)</span>
+          <span><span class="legend-swatch legend-layout"></span>located (layout)</span>
           <span><span class="legend-swatch legend-model"></span>model estimate</span>
         </div>
         {% endif %}
@@ -1174,6 +1228,119 @@ function handleBoxHover(ev, on) {
 document.addEventListener('mouseover', function (ev) { handleBoxHover(ev, true); });
 document.addEventListener('mouseout', function (ev) { handleBoxHover(ev, false); });
 
+// -- click-to-zoom on the page image --------------------------------------
+// Per-page current zoom target (box id, or null when zoomed out).
+var zoomState = {};
+
+function clampNum(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function clearGlow(page) {
+  var vp = document.getElementById('viewport-' + page);
+  if (!vp) return;
+  var els = vp.querySelectorAll('.zoom-target');
+  for (var i = 0; i < els.length; i++) els[i].classList.remove('zoom-target');
+}
+
+function zoomOut(page) {
+  var wrap = document.getElementById('imgwrap-' + page);
+  if (!wrap) return;
+  wrap.style.transform = '';
+  zoomState[page] = null;
+  clearGlow(page);
+}
+
+function zoomTo(page, boxId) {
+  var box = document.getElementById(boxId);
+  var wrap = document.getElementById('imgwrap-' + page);
+  var vp = document.getElementById('viewport-' + page);
+  if (!box || !wrap || !vp) return;
+  // Re-click the current target zooms back out.
+  if (zoomState[page] === boxId) { zoomOut(page); return; }
+  clearGlow(page);
+
+  // Box geometry from its CSS left/top/width/height percents (RTL-safe: these
+  // are always measured from the left edge, unlike offsetLeft/scrollLeft).
+  var fx = parseFloat(box.style.left) / 100;
+  var fy = parseFloat(box.style.top) / 100;
+  var fw = parseFloat(box.style.width) / 100;
+  var fh = parseFloat(box.style.height) / 100;
+  if (!(fw > 0) || !(fh > 0)) return;
+
+  var vw = vp.clientWidth, vh = vp.clientHeight;
+  var iw = wrap.offsetWidth, ih = wrap.offsetHeight;
+  if (!iw || !ih) return;
+
+  var sW = 0.5 * vw / (fw * iw);
+  var sH = 0.8 * vh / (fh * ih);
+  var s = clampNum(Math.min(sW, sH), 1, 4);
+
+  var cx = (fx + fw / 2) * iw;
+  var cy = (fy + fh / 2) * ih;
+  var tx = vw / 2 - s * cx;
+  var ty = vh / 2 - s * cy;
+  // Keep the scaled image covering the viewport (no empty gaps at the edges).
+  tx = clampNum(tx, Math.min(0, vw - s * iw), Math.max(0, vw - s * iw));
+  ty = clampNum(ty, Math.min(0, vh - s * ih), Math.max(0, vh - s * ih));
+
+  wrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+  zoomState[page] = boxId;
+  // Pulse the target box once the glide has landed.
+  setTimeout(function () {
+    if (zoomState[page] !== boxId) return;
+    box.classList.add('zoom-target');
+  }, 580);
+}
+
+// Delegated click. Never preventDefault, so the hunk buttons' onclick handlers
+// (Approve/Edit/Reject/Undo) keep firing normally.
+document.addEventListener('click', function (ev) {
+  var t = ev.target;
+  if (!t || !t.closest) return;
+  var onControl = !!t.closest('button, textarea, input, a');
+  var item = t.closest('.hunk-item');
+  // Inside a hunk item, its action buttons also drive the zoom (in/retarget
+  // only — never toggle out mid-decision). Controls elsewhere (Accept, edit
+  // textareas, links) are left alone.
+  if (onControl && !(item && t.closest('button'))) return;
+
+  if (item) {
+    var hpage = item.getAttribute('data-page');
+    var hid = item.getAttribute('data-hunk');
+    var hboxId = 'box-' + hpage + '-h' + hid;
+    if (onControl && zoomState[hpage] === hboxId) return;
+    zoomTo(hpage, hboxId);
+    return;
+  }
+  var box = t.closest('.qc-box');
+  if (box) {
+    var mb = box.id.match(/^box-(\\d+)-/);
+    if (mb) zoomTo(mb[1], box.id);
+    return;
+  }
+  var issueHead = t.closest('.qc-issue');
+  if (issueHead) {
+    var ipage = issueHead.getAttribute('data-page');
+    var idx = issueHead.getAttribute('data-issue');
+    var boxId = 'box-' + ipage + '-i' + idx;
+    if (!document.getElementById(boxId)) {
+      // Linked issue has no i-box of its own; use its group's first hunk box.
+      var grp = issueHead.closest('.qc-group');
+      var hi = grp ? grp.querySelector('.hunk-item') : null;
+      if (hi) boxId = 'box-' + ipage + '-h' + hi.getAttribute('data-hunk');
+    }
+    zoomTo(ipage, boxId);
+    return;
+  }
+  var vp = t.closest('.img-viewport');
+  if (vp) { zoomOut(vp.getAttribute('data-page')); return; }
+});
+
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape') {
+    for (var page in zoomState) { if (zoomState[page]) zoomOut(page); }
+  }
+});
+
 document.getElementById('done-link').addEventListener('click', async function (ev) {
   ev.preventDefault();
   await fetch('/quit', {method: 'POST'});
@@ -1193,7 +1360,7 @@ def _relpath_for_image(ws: Workspace, path: Path) -> str:
     return "/media/" + str(rel).replace("\\", "/")
 
 
-def _page_view(ws: Workspace, n: int, pdf_boxes_enabled: bool = False) -> dict:
+def _page_view(ws: Workspace, n: int) -> dict:
     """Build the template + payload model for one surfaced page."""
     sidecar = _read_sidecar(ws, n)
     md_path = ws.page_md_path(n)
@@ -1241,7 +1408,7 @@ def _page_view(ws: Workspace, n: int, pdf_boxes_enabled: bool = False) -> dict:
 
     # Overlay boxes: sets "box" on each hunk / unlinked issue, returns the
     # template list (percent geometry). Must run before view_hunks copies.
-    boxes = _build_boxes(ws, n, issues, hunks, pdf_boxes_enabled)
+    boxes = _build_boxes(ws, n, issues, hunks, text)
 
     if panel_kind == "hunks":
         view_hunks = []
@@ -1266,11 +1433,13 @@ def _page_view(ws: Workspace, n: int, pdf_boxes_enabled: bool = False) -> dict:
             else:
                 other_hunks.append(h)
         groups = [
-            {"issue": issue, "other_label": None, "hunks": issue_to_hunks.get(i, [])}
+            {"idx": i, "issue": issue, "other_label": None, "hunks": issue_to_hunks.get(i, [])}
             for i, issue in enumerate(issues)
         ]
         if other_hunks:
-            groups.append({"issue": None, "other_label": "Other correction", "hunks": other_hunks})
+            groups.append(
+                {"idx": None, "issue": None, "other_label": "Other correction", "hunks": other_hunks}
+            )
 
         qc_panel = {"kind": "hunks", "issues": issues, "hunks": view_hunks, "groups": groups}
     elif panel_kind is not None:
@@ -1305,9 +1474,8 @@ def _render_index(
     ws: Workspace,
     surfaced: list[int],
     skipped: list[int],
-    pdf_boxes_enabled: bool = False,
 ) -> str:
-    pages = [_page_view(ws, n, pdf_boxes_enabled=pdf_boxes_enabled) for n in surfaced]
+    pages = [_page_view(ws, n) for n in surfaced]
     reviewed_count = sum(1 for p in pages if p["reviewed"])
     return _TEMPLATE.render(
         slug=ws.slug,
@@ -1329,12 +1497,10 @@ class _ReviewState:
         ws: Workspace,
         surfaced: list[int],
         skipped: list[int],
-        pdf_boxes_enabled: bool = False,
     ):
         self.ws = ws
         self.surfaced = surfaced
         self.skipped = skipped
-        self.pdf_boxes_enabled = pdf_boxes_enabled
         self.lock = threading.Lock()
         self.edited: set[int] = set()
         self.accepted: set[int] = set()
@@ -1382,12 +1548,7 @@ def _make_handler(state: _ReviewState):
             path = parsed.path
 
             if path == "/":
-                index_html = _render_index(
-                    ws,
-                    state.surfaced,
-                    state.skipped,
-                    pdf_boxes_enabled=state.pdf_boxes_enabled,
-                )
+                index_html = _render_index(ws, state.surfaced, state.skipped)
                 self._send_bytes(index_html.encode("utf-8"), "text/html; charset=utf-8")
                 return
 
@@ -1551,14 +1712,7 @@ def run_review(
             f"despite flags (not shown): {skipped}"
         )
 
-    # One-time gate: draw PDF-located boxes only when the embedded text layer
-    # is real Unicode text (glyph-soup/scanned books get model boxes only).
-    try:
-        pdf_boxes_enabled = render.text_layer_usable(ws.pdf_path)
-    except Exception:
-        pdf_boxes_enabled = False
-
-    state = _ReviewState(ws, surfaced, skipped, pdf_boxes_enabled=pdf_boxes_enabled)
+    state = _ReviewState(ws, surfaced, skipped)
     handler_cls = _make_handler(state)
 
     free_port = _find_free_port(port)
