@@ -252,6 +252,7 @@ def _derive_hunks(
     new_text: str,
     ctx_tokens: int = 3,
     max_ctx_tokens: int = 12,
+    display_ctx_tokens: int = 15,
 ) -> list[dict]:
     """Token-level change hunks between `old_text` and `new_text`.
 
@@ -263,6 +264,13 @@ def _derive_hunks(
     order. `old`/`new`/`ctx_*` are exact substrings, so splicing `new` in
     place of `old` between the contexts reproduces `new_text` once every
     hunk is applied. Returns [] when the texts are equal.
+
+    Each hunk also carries `show_before`/`show_after`: a wider (~15 token),
+    display-only readability window, independently clamped to the same
+    neighboring-hunk boundaries as the anchor context so it never overlaps
+    another hunk's changed region. These are presentation-only — never used
+    for locating/anchoring — and get an "… " / " …" marker when the
+    surrounding page text extends further than what's shown.
     """
     if old_text == new_text:
         return []
@@ -298,12 +306,15 @@ def _derive_hunks(
 
         # Per-side context caps: never reach into a neighboring hunk's
         # changed tokens (that would break order-independent application).
-        before_cap = max_ctx_tokens
-        after_cap = max_ctx_tokens
-        if idx > 0:
-            before_cap = min(before_cap, o1 - groups[idx - 1][1])
-        if idx + 1 < len(groups):
-            after_cap = min(after_cap, groups[idx + 1][0] - o2)
+        def _side_caps(cap: int) -> tuple[int, int]:
+            b, a = cap, cap
+            if idx > 0:
+                b = min(b, o1 - groups[idx - 1][1])
+            if idx + 1 < len(groups):
+                a = min(a, groups[idx + 1][0] - o2)
+            return b, a
+
+        before_cap, after_cap = _side_caps(max_ctx_tokens)
 
         def _ctx(k: int) -> tuple[str, str]:
             kb = min(k, before_cap)
@@ -330,6 +341,21 @@ def _derive_hunks(
             own_start = o_start - len(ctx_before)
             occurrence = positions.index(own_start) + 1 if own_start in positions else 1
 
+        # Display-only readability context: wider than the anchor context,
+        # still clamped to the neighboring hunks' boundaries. Never used for
+        # locating — only for showing the reviewer more of the sentence.
+        disp_before_cap, disp_after_cap = _side_caps(display_ctx_tokens)
+        db_idx = max(0, o1 - disp_before_cap)
+        show_cb_start = old_spans[db_idx][0] if db_idx < len(old_spans) and o1 > 0 else o_start
+        da_idx = min(len(old_spans), o2 + disp_after_cap)
+        show_ca_end = old_spans[da_idx - 1][1] if da_idx > o2 else o_end
+        show_before = old_text[show_cb_start:o_start]
+        show_after = old_text[o_end:show_ca_end]
+        if db_idx > 0:
+            show_before = "… " + show_before
+        if da_idx < len(old_spans):
+            show_after = show_after + " …"
+
         hunks.append(
             {
                 "id": idx,
@@ -341,6 +367,8 @@ def _derive_hunks(
                 "occurrence": occurrence,
                 "ws_only": old_frag.split() == new_frag.split(),
                 "issue_idx": None,
+                "show_before": show_before,
+                "show_after": show_after,
             }
         )
     return hunks
@@ -674,7 +702,9 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
   margin-bottom: 0.8rem;
 }
 .qc-panel-title { font-weight: 600; margin-bottom: 0.5rem; color: #e2a8ea; }
-.qc-issue-list { margin: 0 0 0.7rem; padding-inline-start: 1.2rem; }
+.qc-group { margin-bottom: 0.9rem; }
+.qc-group:last-child { margin-bottom: 0; }
+.qc-issue-list { margin: 0 0 0.5rem; padding-inline-start: 1.2rem; }
 .qc-issue-list li { margin-bottom: 0.5rem; }
 .qc-issue-head { font-size: 0.9rem; }
 .qc-snippet {
@@ -724,6 +754,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 }
 .hunk-diff del { background: #4a1f22; color: #f5b5b8; text-decoration: line-through; }
 .hunk-diff ins { background: #1f3a24; color: #b6e6bf; text-decoration: none; }
+.hunk-ctx { color: #83848c; font-size: 0.85em; }
 .hunk-actions { direction: ltr; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 .hunk-actions button { font-size: 0.8rem; padding: 0.3rem 0.7rem; }
 .hunk-edit { margin-top: 0.5rem; }
@@ -811,6 +842,48 @@ button:disabled { opacity: 0.5; cursor: default; }
       {% if p.qc_panel %}
       <div class="qc-panel" id="qc-panel-{{ p.page }}">
         <div class="qc-panel-title">QC findings</div>
+        {% if p.qc_panel.kind == 'hunks' %}
+        {% for g in p.qc_panel.groups %}
+        <div class="qc-group">
+          <ul class="qc-issue-list">
+            <li>
+              {% if g.issue %}
+              <div class="qc-issue-head">{{ g.issue.type }} &mdash; {{ g.issue.description }}</div>
+              {% if g.issue.snippet %}
+              <div class="qc-snippet" dir="rtl">{{ g.issue.snippet }}</div>
+              {% endif %}
+              {% else %}
+              <div class="qc-issue-head">{{ g.other_label }}</div>
+              {% endif %}
+            </li>
+          </ul>
+          {% if g.hunks %}
+          <ul class="hunk-list">
+            {% for h in g.hunks %}
+            <li class="hunk-item" id="hunk-{{ p.page }}-{{ h.id }}" data-page="{{ p.page }}" data-hunk="{{ h.id }}">
+              {% if h.ws_only %}
+              <div class="hunk-diff">&para; line/paragraph-break change</div>
+              {% else %}
+              <div class="hunk-diff" dir="rtl"><span class="hunk-ctx">{{ h.show_before }}</span>{% if h.old %}<del><bdi>{{ h.old }}</bdi></del>{% endif %} {% if h.new %}<ins><bdi>{{ h.new }}</bdi></ins>{% endif %}<span class="hunk-ctx">{{ h.show_after }}</span></div>
+              {% endif %}
+              <div class="hunk-actions">
+                <button onclick="approveHunk({{ p.page }}, {{ h.id }})">Approve</button>
+                <button onclick="toggleEditHunk({{ p.page }}, {{ h.id }})">Edit</button>
+                <button onclick="rejectHunk({{ p.page }}, {{ h.id }})">Reject</button>
+                <button id="undo-{{ p.page }}-{{ h.id }}" style="display:none" onclick="undoHunk({{ p.page }}, {{ h.id }})">Undo</button>
+                <span class="status-note" id="hunk-status-{{ p.page }}-{{ h.id }}"></span>
+              </div>
+              <div class="hunk-edit" id="hunk-edit-{{ p.page }}-{{ h.id }}" style="display:none">
+                <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{{ h.new }}</textarea>
+                <button onclick="applyEditedHunk({{ p.page }}, {{ h.id }})">Apply my text</button>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
         <ul class="qc-issue-list">
           {% for issue in p.qc_panel.issues %}
           <li>
@@ -825,32 +898,7 @@ button:disabled { opacity: 0.5; cursor: default; }
         <div class="qc-note">QC reported issues but its suggested text is identical to the current text &mdash; nothing to apply.</div>
         {% elif p.qc_panel.kind == 'no_suggestion' %}
         <div class="qc-note">QC reported issues but produced no suggested correction &mdash; fix manually if needed.</div>
-        {% else %}
-        <ul class="hunk-list">
-          {% for h in p.qc_panel.hunks %}
-          <li class="hunk-item" id="hunk-{{ p.page }}-{{ h.id }}" data-page="{{ p.page }}" data-hunk="{{ h.id }}">
-            {% if h.issue_label %}
-            <div class="hunk-issue">{{ h.issue_label }}</div>
-            {% endif %}
-            {% if h.ws_only %}
-            <div class="hunk-diff">&para; line/paragraph-break change</div>
-            {% else %}
-            <div class="hunk-diff" dir="rtl">{% if h.old %}<del><bdi>{{ h.old }}</bdi></del>{% endif %} {% if h.new %}<ins><bdi>{{ h.new }}</bdi></ins>{% endif %}</div>
-            {% endif %}
-            <div class="hunk-actions">
-              <button onclick="approveHunk({{ p.page }}, {{ h.id }})">Approve</button>
-              <button onclick="toggleEditHunk({{ p.page }}, {{ h.id }})">Edit</button>
-              <button onclick="rejectHunk({{ p.page }}, {{ h.id }})">Reject</button>
-              <button id="undo-{{ p.page }}-{{ h.id }}" style="display:none" onclick="undoHunk({{ p.page }}, {{ h.id }})">Undo</button>
-              <span class="status-note" id="hunk-status-{{ p.page }}-{{ h.id }}"></span>
-            </div>
-            <div class="hunk-edit" id="hunk-edit-{{ p.page }}-{{ h.id }}" style="display:none">
-              <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{{ h.new }}</textarea>
-              <button onclick="applyEditedHunk({{ p.page }}, {{ h.id }})">Apply my text</button>
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
+        {% endif %}
         {% endif %}
         {% if p.boxes %}
         <div class="qc-legend">
@@ -997,7 +1045,7 @@ function toggleEditHunk(page, id) {
   if (box.style.display === 'none') {
     var h = getHunk(page, id);
     var st = hunkStateFor(page, id);
-    ta.value = st.decision === 'pending' ? (h ? h.new : '') : st.applied;
+    ta.value = st.decision === 'edited' ? st.applied : (h ? h.old : '');
     box.style.display = '';
     showHunkStatus(page, id, 'editing \\u2014 change the text, then Apply my text', false);
   } else {
@@ -1203,9 +1251,30 @@ def _page_view(ws: Workspace, n: int, pdf_boxes_enabled: bool = False) -> dict:
                 iss = issues[h["issue_idx"]]
                 label = f"{iss.get('type')} — {iss.get('description')}"
             view_hunks.append({**h, "issue_label": label})
-        qc_panel = {"kind": "hunks", "issues": issues, "hunks": view_hunks}
+
+        # Group hunks under the issue they were linked to (via issue_idx) so
+        # the template can render each finding immediately followed by its
+        # own fix box(es). Hunks with no linked issue land in a trailing
+        # "Other correction" group; issues with no linked hunk still render
+        # (description-only, no hunk-list under them).
+        issue_to_hunks: dict[int, list[dict]] = {}
+        other_hunks: list[dict] = []
+        for h in view_hunks:
+            idx = h["issue_idx"]
+            if idx is not None and idx < len(issues):
+                issue_to_hunks.setdefault(idx, []).append(h)
+            else:
+                other_hunks.append(h)
+        groups = [
+            {"issue": issue, "other_label": None, "hunks": issue_to_hunks.get(i, [])}
+            for i, issue in enumerate(issues)
+        ]
+        if other_hunks:
+            groups.append({"issue": None, "other_label": "Other correction", "hunks": other_hunks})
+
+        qc_panel = {"kind": "hunks", "issues": issues, "hunks": view_hunks, "groups": groups}
     elif panel_kind is not None:
-        qc_panel = {"kind": panel_kind, "issues": issues, "hunks": []}
+        qc_panel = {"kind": panel_kind, "issues": issues, "hunks": [], "groups": []}
 
     payload = {
         "page": n,

@@ -216,6 +216,7 @@ VERIFY IN PARTICULAR
 RULES
 - Only report actual discrepancies against the image; do not restyle, modernize, or "improve" faithful text.
 - Minor stylistic judgment calls are not issues. Uncertainty about a blurry word is an issue only if the transcription is likely wrong.
+- Quotation marks: Persian guillemets «…» are the standard Persian quotation marks; differences or conversions between «…», "…", '…' or other quote styles are NEVER an issue — do not report them and do not change quote characters in suggested corrections.
 - verdict "pass" requires zero real issues; otherwise "fail" with every issue listed.
 - suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical.
 - bbox: for every issue, estimate its bounding box on the page image — the box containing the affected text, as [x0, y0, x1, y1] scaled 0-1000 (origin top-left, x rightward, y downward). A loose box covering the right line(s) is fine. Use null only when the issue has no specific location on the page (e.g. missing_text at an unknown spot)."""
