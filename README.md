@@ -62,7 +62,7 @@ Run QC now? (auto, manual, skip) [auto]:
 - `manual` — opens the review web UI immediately so you can correct flagged pages yourself
 - `skip` — does nothing now; you can always run `farsi2epub qc` later
 
-Pressing Enter picks `auto`. To decide up front and skip the prompt, pass `--qc auto`, `--qc manual`, or `--qc skip` to `transcribe`. Outside a terminal (e.g. in a script), the prompt is skipped automatically.
+Pressing Enter picks `auto`. To decide up front and skip the prompt, pass `--qc auto`, `--qc manual`, or `--qc skip` to `transcribe`. Auto QC then shows a one-time cost estimate and asks to proceed; add `--yes` to skip that confirmation too, so `transcribe --qc auto --yes` runs fully non-interactively (as does `farsi2epub qc <slug> --mode auto --yes`). Outside a terminal (e.g. in a script), the QC-mode prompt is skipped automatically.
 
 Useful options:
 
@@ -70,6 +70,7 @@ Useful options:
 - `--pages 10-50` — transcribe only these pages
 - `--concurrency 4` — pages transcribed in parallel (default 4)
 - `--res std` — the economy path: ~30% cheaper per page; pages that fail validation are automatically retried at hi-res, so quality degrades safely
+- `--yes` — skip the auto-QC cost confirmation (for non-interactive/scripted runs)
 
 After this step, `books/my-book/text/` holds one Markdown file per page plus a JSON sidecar with quality scores and flags.
 
@@ -80,7 +81,9 @@ farsi2epub qc my-book            # auto: LLM verifier pass over risky pages
 farsi2epub review my-book        # local web UI for human correction
 ```
 
-Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown. Each QC-suggested correction appears as its own item with an **Approve / Edit / Reject** choice: approve applies that one correction to the text, reject keeps the original, and edit lets you type your own replacement for that spot. Where a correction can be located on the page, a box is drawn on the page image (solid blue = found in the PDF's text layer, dashed orange = the verifier's estimate), and hovering a correction highlights its box and vice versa.
+Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown. Each QC-suggested correction appears as its own item with an **Approve / Edit / Reject** choice: approve applies that one correction to the text, reject keeps the original, and edit lets you type your own replacement for that spot. When the verifier flags a phrase but doesn't propose a fix, you still get an **Edit-only** item — Approve/Reject are greyed out and the edit box is prefilled with the flagged text so you can correct it in place.
+
+Where a correction can be located on the page, a box is drawn on the page image, colored by how it was found: **blue** = matched word-for-word in the PDF's text layer, **teal** = located from the page layout (works even when the text layer is unusable — scanned-style or garbled encodings), **dashed orange** = the verifier's own estimate. Hovering a correction highlights its box and vice versa. Clicking a correction (or its box) smoothly **zooms** the page image into that spot and marks the correction active; while zoomed you can **drag to pan**, and a plain click, `Escape`, or clicking the background zooms back out.
 
 The review UI surfaces pages flagged by *either* check: pages the deterministic validators flagged during transcription (with their issues shown, e.g. `embedded_mismatch`) and pages the LLM QC pass failed. To keep review quick, only the worst fifth of flagged pages are surfaced by default — pass `--all` to see every flagged page:
 
@@ -88,7 +91,7 @@ The review UI surfaces pages flagged by *either* check: pages the deterministic 
 farsi2epub review my-book --all
 ```
 
-When you're happy with a page, press **Accept**: it saves whatever is in the text box to that page's transcription on disk (`books/<slug>/text/NNNN.md`) — the build step reads exactly these files, so corrections always end up in the EPUB. The first time an Accept changes a page's text, the pre-edit version is backed up to `text/NNNN.orig.md`.
+When you're happy with a page, press **Accept**: it saves whatever is in the text box to that page's transcription on disk (`books/<slug>/text/NNNN.md`) — the build step reads exactly these files, so corrections always end up in the EPUB. Accept also reports the tally for that page (how many corrections you approved, edited, rejected, and left undecided). The first time an Accept changes a page's text, the pre-edit version is backed up to `text/NNNN.orig.md`.
 
 Two more options worth knowing:
 
