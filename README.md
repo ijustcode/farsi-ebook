@@ -80,7 +80,7 @@ farsi2epub qc my-book            # auto: LLM verifier pass over risky pages
 farsi2epub review my-book        # local web UI for human correction
 ```
 
-Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown, with the QC suggestion as a diff you can apply, edit, or reject.
+Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown. Each QC-suggested correction appears as its own item with an **Approve / Edit / Reject** choice: approve applies that one correction to the text, reject keeps the original, and edit lets you type your own replacement for that spot. Where a correction can be located on the page, a box is drawn on the page image (solid blue = found in the PDF's text layer, dashed orange = the verifier's estimate), and hovering a correction highlights its box and vice versa.
 
 The review UI surfaces pages flagged by *either* check: pages the deterministic validators flagged during transcription (with their issues shown, e.g. `embedded_mismatch`) and pages the LLM QC pass failed. To keep review quick, only the worst fifth of flagged pages are surfaced by default — pass `--all` to see every flagged page:
 
@@ -88,7 +88,12 @@ The review UI surfaces pages flagged by *either* check: pages the deterministic 
 farsi2epub review my-book --all
 ```
 
-When you press **Save** on a page, your edited text replaces that page's transcription on disk (`books/<slug>/text/NNNN.md`) — the build step reads exactly these files, so corrections always end up in the EPUB. **Accept** keeps the text as-is and clears the flag.
+When you're happy with a page, press **Accept**: it saves whatever is in the text box to that page's transcription on disk (`books/<slug>/text/NNNN.md`) — the build step reads exactly these files, so corrections always end up in the EPUB. The first time an Accept changes a page's text, the pre-edit version is backed up to `text/NNNN.orig.md`.
+
+Two more options worth knowing:
+
+- `farsi2epub qc <slug> --force` re-verifies pages whose previous suggestion is still pending (replacing it) — useful after model or prompt improvements.
+- `farsi2epub review <slug> --reset` undoes all your review decisions for a book (re-flags the pages, returns suggestions to pending) while keeping any text edits, so you can redo the review from scratch.
 
 Both steps are optional — you can go straight to `build` — but they catch the errors that matter most.
 

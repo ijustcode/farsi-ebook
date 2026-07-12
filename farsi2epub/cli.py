@@ -174,11 +174,12 @@ main.add_command(transcribe_cmd, name="transcribe")
 @click.option("--mode", "qc_mode", type=click.Choice(["auto", "manual"]), default="auto", help="QC mode: auto (automated verification) or manual (review UI).")
 @click.option("--all", "all_pages", is_flag=True, help="Verify/review every transcribed page instead of risk-selected ones.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip cost confirmation and proceed with QC.")
-def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool):
+@click.option("--force", is_flag=True, help="Also re-verify pages whose previous QC suggestion is still pending (replaces the old suggestion).")
+def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool, force: bool):
     """Run quality control checks for workspace SLUG."""
     ws = Workspace.load(slug)
     try:
-        qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes)
+        qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes, force=force)
     except NotImplementedError:
         click.echo("QC module not yet implemented (coming in a later task).")
 
@@ -189,9 +190,19 @@ main.add_command(qc_cmd, name="qc")
 @main.command()
 @click.argument("slug")
 @click.option("--all", "all_pages", is_flag=True, help="Surface every flagged page, ignoring the review budget.")
-def review_cmd(slug: str, all_pages: bool):
+@click.option("--reset", "reset", is_flag=True, help="Undo all human review decisions (keeps text edits and .orig.md backups) and exit.")
+def review_cmd(slug: str, all_pages: bool, reset: bool):
     """Launch the review workflow for workspace SLUG."""
     ws = Workspace.load(slug)
+    if reset:
+        if all_pages:
+            click.echo("Note: --all is ignored with --reset.")
+        stats = review.reset_reviews(ws)
+        click.echo(
+            f"Reset {stats['pages_reset']} page(s), removed {stats['events_removed']} "
+            f"review event(s). Run: farsi2epub review {slug}"
+        )
+        return
     try:
         review.run_review(ws, budget_all=all_pages)
     except NotImplementedError:

@@ -115,12 +115,18 @@ class Workspace:
     def page_meta_path(self, n: int) -> Path:
         return self.text_dir / f"{self._pad(n)}.json"
 
+    def page_orig_path(self, n: int) -> Path:
+        """Backup of the pre-review transcription (written on first human edit)."""
+        return self.text_dir / f"{self._pad(n)}.orig.md"
+
     def pages_done(self) -> list[int]:
         """Page numbers that have both a transcribed .md and a .json sidecar."""
         done = []
         if not self.text_dir.is_dir():
             return done
         for md_file in self.text_dir.glob("*.md"):
+            if not md_file.stem.isdigit():
+                continue  # e.g. NNNN.orig.md review backups (stem "NNNN.orig")
             n = int(md_file.stem)
             if self.page_meta_path(n).is_file():
                 done.append(n)

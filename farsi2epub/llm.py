@@ -187,6 +187,12 @@ class QCIssue(BaseModel):
     )
     description: str = Field(description="Short explanation of the problem, in English.")
     snippet: str = Field(description="The affected text as it currently appears in the transcription (verbatim excerpt).")
+    bbox: Optional[list[int]] = Field(
+        default=None,
+        description="Approximate bounding box [x0, y0, x1, y1] of the affected region on the page image, "
+        "in 0-1000 normalized coordinates (origin top-left, x rightward, y downward). "
+        "null if the issue cannot be localized.",
+    )
 
 
 class QCReport(BaseModel):
@@ -211,7 +217,8 @@ RULES
 - Only report actual discrepancies against the image; do not restyle, modernize, or "improve" faithful text.
 - Minor stylistic judgment calls are not issues. Uncertainty about a blurry word is an issue only if the transcription is likely wrong.
 - verdict "pass" requires zero real issues; otherwise "fail" with every issue listed.
-- suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical."""
+- suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical.
+- bbox: for every issue, estimate its bounding box on the page image — the box containing the affected text, as [x0, y0, x1, y1] scaled 0-1000 (origin top-left, x rightward, y downward). A loose box covering the right line(s) is fine. Use null only when the issue has no specific location on the page (e.g. missing_text at an unknown spot)."""
 
 
 def qc_verify_page(

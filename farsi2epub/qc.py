@@ -101,6 +101,31 @@ def load_events() -> list[dict]:
     return _load_history().get("events", [])
 
 
+# detected_by values recorded by the human review UI (vs "auto_qc" etc.).
+HUMAN_DETECTED_BY = {"human_edit", "suggestion_accepted", "suggestion_edited", "suggestion_rejected"}
+
+
+def remove_human_events(book: str) -> int:
+    """Drop every human-review event for `book` from the history store.
+
+    Used by `review --reset` so re-reviewing a book does not double-count
+    outcomes. Returns the number of events removed.
+    """
+    with _HISTORY_LOCK:
+        data = _load_history()
+        events = data.get("events", [])
+        kept = [
+            e
+            for e in events
+            if not (e.get("book") == book and e.get("detected_by") in HUMAN_DETECTED_BY)
+        ]
+        removed = len(events) - len(kept)
+        if removed:
+            data["events"] = kept
+            _save_history(data)
+        return removed
+
+
 def record_event(
     book: str,
     page: int,
@@ -345,8 +370,31 @@ def _qc_per_page_cost() -> float:
     return (QC_TOKENS_IN / 1_000_000) * prices["in"] + (QC_TOKENS_OUT / 1_000_000) * prices["out"]
 
 
-def _select_pages(ws: Workspace, all_pages: bool) -> tuple[list[int], list[int]]:
-    """Choose pages to verify. Returns (selected, skipped_pending)."""
+def _clean_bbox(b) -> Optional[list[int]]:
+    """Sanitize a model-reported bbox: must be a 4-item list/tuple of numbers.
+    Values are rounded to ints and clamped to [0, 1000]; the box must still
+    have positive width and height afterwards. Anything else returns None.
+    """
+    if not isinstance(b, (list, tuple)) or len(b) != 4:
+        return None
+    vals: list[int] = []
+    for v in b:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        vals.append(max(0, min(1000, int(round(v)))))
+    x0, y0, x1, y1 = vals
+    if x0 >= x1 or y0 >= y1:
+        return None
+    return vals
+
+
+def _select_pages(ws: Workspace, all_pages: bool, force: bool = False) -> tuple[list[int], list[int]]:
+    """Choose pages to verify. Returns (selected, skipped_pending).
+
+    Pages whose previous QC suggestion is still pending are normally diverted
+    to `skipped_pending`; with `force` they go through normal selection (and
+    a re-verification will replace their old suggestion).
+    """
     weights = compute_feature_weights(load_events())
     source_type = ws.meta.get("source_type", "")
 
@@ -363,7 +411,7 @@ def _select_pages(ws: Workspace, all_pages: bool) -> tuple[list[int], list[int]]
         if sc.get("is_blank"):
             continue
         qc = sc.get("qc")
-        if qc and qc.get("suggestion_status") == "pending":
+        if not force and qc and qc.get("suggestion_status") == "pending":
             skipped_pending.append(n)
             continue
         if all_pages:
@@ -402,7 +450,15 @@ def _verify_one(ws: Workspace, client, n: int, source_type: str, state: _QCState
         "date": datetime.now().strftime("%Y-%m-%d"),
         "verifier_model": config.MODEL_STRONG,
         "verdict": report.verdict,
-        "issues": [{"type": i.type, "description": i.description, "snippet": i.snippet} for i in report.issues],
+        "issues": [
+            {
+                "type": i.type,
+                "description": i.description,
+                "snippet": i.snippet,
+                "bbox": _clean_bbox(i.bbox),
+            }
+            for i in report.issues
+        ],
         "suggested_text_md": report.suggested_text_md if is_fail else None,
         "suggestion_status": "pending" if is_fail else None,
         "cost_usd": round(cost, 6),
@@ -443,12 +499,26 @@ def _verify_one(ws: Workspace, client, n: int, source_type: str, state: _QCState
     return f"page {n:>4}  {tag}  {n_issues} issue(s)  ${cost:.4f}"
 
 
-def _run_auto(ws: Workspace, all_pages: bool, assume_yes: bool) -> None:
+def _run_auto(ws: Workspace, all_pages: bool, assume_yes: bool, force: bool = False) -> None:
     source_type = ws.meta.get("source_type", "")
 
-    selected, skipped_pending = _select_pages(ws, all_pages)
+    selected, skipped_pending = _select_pages(ws, all_pages, force=force)
     if skipped_pending:
         click.echo(f"Skipping {len(skipped_pending)} page(s) with a pending qc suggestion: {skipped_pending}")
+    if force:
+        repending = []
+        for n in selected:
+            try:
+                sc = _read_sidecar(ws, n)
+            except Exception:
+                continue
+            if (sc.get("qc") or {}).get("suggestion_status") == "pending":
+                repending.append(n)
+        if repending:
+            click.echo(
+                f"--force: re-verifying {len(repending)} page(s) with pending suggestions "
+                "(their old suggestions will be replaced)"
+            )
     if not selected:
         click.echo("No pages to verify.")
         return
@@ -486,12 +556,19 @@ def _run_auto(ws: Workspace, all_pages: bool, assume_yes: bool) -> None:
         review.run_review(ws, budget_all=True)
 
 
-def run_qc(ws: Workspace, mode: str, all_pages: bool = False, assume_yes: bool = False) -> None:
+def run_qc(
+    ws: Workspace,
+    mode: str,
+    all_pages: bool = False,
+    assume_yes: bool = False,
+    force: bool = False,
+) -> None:
     """Run quality control over a book workspace.
 
     mode "auto": risk-select pages (or all), confirm cost, verify each with
     ``llm.qc_verify_page``, write the sidecar ``qc`` key + history events, then
-    open the review UI on any flagged pages.
+    open the review UI on any flagged pages. `force` also re-verifies pages
+    whose previous suggestion is still pending (replacing it).
     mode "manual": launch the review UI directly.
     """
     if mode == "manual":
@@ -499,6 +576,6 @@ def run_qc(ws: Workspace, mode: str, all_pages: bool = False, assume_yes: bool =
 
         review.run_review(ws, budget_all=all_pages)
     elif mode == "auto":
-        _run_auto(ws, all_pages, assume_yes)
+        _run_auto(ws, all_pages, assume_yes, force=force)
     else:
         raise ValueError(f"unknown qc mode: {mode!r} (expected 'auto' or 'manual')")
