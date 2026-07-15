@@ -185,7 +185,9 @@ class QCIssue(BaseModel):
         '"heh_boundary", "footnote_marker", "digit_error", "punctuation", "missing_text", '
         '"extra_text", "verse_structure", "table_structure", "other".'
     )
-    description: str = Field(description="Short explanation of the problem, in English.")
+    description: str = Field(
+        description="Short explanation of the problem written entirely in natural Persian (Farsi)."
+    )
     snippet: str = Field(description="The affected text as it currently appears in the transcription (verbatim excerpt).")
     bbox: Optional[list[int]] = Field(
         default=None,
@@ -216,6 +218,7 @@ VERIFY IN PARTICULAR
 RULES
 - Only report actual discrepancies against the image; do not restyle, modernize, or "improve" faithful text.
 - Minor stylistic judgment calls are not issues. Uncertainty about a blurry word is an issue only if the transcription is likely wrong.
+- Write every issue `description` entirely in natural Persian (Farsi), using Persian sentence structure and punctuation. Do not write English prose or repeat the English issue `type` in the description. Use Persian terms such as «نیم‌فاصله» instead of English technical labels. Text quoted from the transcription may remain exactly as it appears.
 - Quotation marks: Persian guillemets «…» are the standard Persian quotation marks; differences or conversions between «…», "…", '…' or other quote styles are NEVER an issue — do not report them and do not change quote characters in suggested corrections.
 - verdict "pass" requires zero real issues; otherwise "fail" with every issue listed.
 - suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical.

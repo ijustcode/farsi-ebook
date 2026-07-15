@@ -34,7 +34,6 @@ from .workspace import PROJECT_ROOT, Workspace
 DEFAULT_PORT = 8765
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "Vazirmatn-Regular.ttf"
 
-
 # ---------------------------------------------------------------------------
 # sidecar helpers
 # ---------------------------------------------------------------------------
@@ -876,7 +875,21 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-group:last-child { margin-bottom: 0; }
 .qc-issue-list { margin: 0 0 0.5rem; padding-inline-start: 1.2rem; }
 .qc-issue-list li { margin-bottom: 0.5rem; }
-.qc-issue-head { font-size: 0.9rem; }
+.qc-issue-head {
+  font-size: 0.9rem;
+  direction: rtl;
+  unicode-bidi: isolate;
+}
+.qc-issue-type {
+  direction: ltr;
+  unicode-bidi: isolate;
+  display: inline-block;
+  font-family: "Courier New", monospace;
+}
+.qc-issue-description {
+  direction: rtl;
+  unicode-bidi: isolate;
+}
 .qc-snippet {
   font-family: "Courier New", monospace;
   font-size: 0.8rem;
@@ -1020,7 +1033,7 @@ button:disabled { opacity: 0.5; cursor: default; }
           <ul class="qc-issue-list">
             <li>
               {% if g.issue %}
-              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}>{{ g.issue.type }} &mdash; {{ g.issue.description }}</div>
+              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}><bdi class="qc-issue-type" dir="ltr">{{ g.issue.type }}</bdi><span aria-hidden="true"> &mdash; </span><span class="qc-issue-description" dir="rtl" lang="fa">{{ g.issue.description }}</span></div>
               {% if g.issue.snippet %}
               <div class="qc-snippet" dir="rtl">{{ g.issue.snippet }}</div>
               {% endif %}
