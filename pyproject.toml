@@ -9,6 +9,7 @@ description = "Convert Farsi PDF books to EPUB via a vision-LLM pipeline"
 requires-python = ">=3.10"
 dependencies = [
     "pymupdf",
+    "numpy",
     "anthropic",
     "ebooklib",
     "jinja2",

@@ -2,7 +2,8 @@
 
 Given a page's Markdown transcription and a set of query snippets (QC issue
 text or correction-hunk old text), locate each on the source PDF page and
-return a 0-1-fraction box. Two tiers, each self-gating per page:
+return a 0-1-fraction box. Three deterministic tiers, each self-gating per
+page:
 
   - Tier A "match": fuzzy normalized word/fragment-window scoring against
     ``page.get_text('words')``. Immune to RTL intra-word character reordering
@@ -13,13 +14,16 @@ return a 0-1-fraction box. Two tiers, each self-gating per page:
     onto the PDF's cumulative per-line character counts. The line *rects* are
     real geometry even when the text layer is a non-Unicode cipher, so this
     works where Tier A cannot.
+  - Tier C "scan": detects printed lines and word gaps directly from page
+    pixels, then maps the Markdown character offset onto that image geometry.
+    It requires no PDF text layer and is insensitive to font age or OCR support.
 
-Flow per query: Tier A (if the layer decodes) else Tier B else None. review.py
-then falls back to the QC verifier's model bbox (Tier C) when this returns
-None.
+Flow per query: Tier A (if the layer decodes) else Tier B else Tier C else
+None. review.py then falls back to the QC verifier's model bbox (Tier D) when
+this returns None.
 
 Coordinates are 0-1 fractions of the page (x0,y0,x1,y1) plus a "source" of
-"match" or "layout"; review.py scales them to CSS percentages.
+"match", "layout", or "scan"; review.py scales them to CSS percentages.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 import fitz  # PyMuPDF
+import numpy as np
 
 
 # Tier A acceptance / tuning constants (measured; see plan).
@@ -51,6 +56,13 @@ _ARABIC_WORD_FRAC = 0.30
 # Fuzzy snippet-span acceptance (for QC snippets not verbatim in the markdown).
 _FUZZY_ACCEPT = 0.65
 
+# Tier C render / segmentation tuning. The scan is deliberately modest
+# resolution: enough to resolve line and word gaps while keeping review-page
+# startup fast even for dozens of flagged pages.
+_SCAN_SCALE = 1.5
+_SCAN_X_MARGIN = 0.04
+_SCAN_MAX_BLANK_ROWS = 1
+
 
 @dataclass(frozen=True)
 class Query:
@@ -62,6 +74,15 @@ class Query:
 
     text: str
     span: Optional[tuple[int, int]] = None
+
+
+@dataclass
+class _ScanLine:
+    """One printed line detected from page pixels, in PDF page coordinates."""
+
+    rect: fitz.Rect
+    words: list[fitz.Rect]
+    weight: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +369,196 @@ def _locate_layout(
 
 
 # ---------------------------------------------------------------------------
+# Tier C: image-only scan layout
+# ---------------------------------------------------------------------------
+
+
+def _otsu_threshold(gray: np.ndarray) -> int:
+    """Return a conservative global ink threshold for a grayscale page."""
+    hist = np.bincount(gray.reshape(-1), minlength=256).astype(np.float64)
+    total = float(gray.size)
+    values = np.arange(256, dtype=np.float64)
+    cumulative_n = np.cumsum(hist)
+    cumulative_sum = np.cumsum(hist * values)
+    total_sum = cumulative_sum[-1]
+    denom = cumulative_n * (total - cumulative_n)
+    between = np.zeros(256, dtype=np.float64)
+    valid = denom > 0
+    delta = total_sum * cumulative_n - cumulative_sum * total
+    between[valid] = (delta[valid] ** 2) / denom[valid]
+    # Avoid turning paper texture into ink or erasing thin old type.
+    return max(70, min(190, int(np.argmax(between))))
+
+
+def _true_runs(values: np.ndarray) -> list[tuple[int, int]]:
+    """Return half-open runs where the one-dimensional bool array is true."""
+    padded = np.pad(values.astype(np.int8), (1, 1))
+    changes = np.diff(padded)
+    starts = np.flatnonzero(changes == 1)
+    ends = np.flatnonzero(changes == -1)
+    return list(zip(starts.tolist(), ends.tolist()))
+
+
+def _merge_nearby_runs(
+    runs: list[tuple[int, int]], max_gap: int
+) -> list[tuple[int, int]]:
+    if not runs:
+        return []
+    merged = [runs[0]]
+    for start, end in runs[1:]:
+        old_start, old_end = merged[-1]
+        if start - old_end <= max_gap:
+            merged[-1] = (old_start, end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _scan_page_lines(page: fitz.Page) -> list[_ScanLine]:
+    """Detect text-line and visual-word rectangles directly from page pixels.
+
+    This is script-agnostic image geometry, not OCR. Horizontal ink projection
+    finds lines despite old fonts or soft scans; vertical gaps inside each line
+    provide word-boundary snapping for tighter RTL boxes.
+    """
+    scale = _SCAN_SCALE
+    pix = page.get_pixmap(
+        matrix=fitz.Matrix(scale, scale), colorspace=fitz.csGRAY, alpha=False
+    )
+    gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+    ink = gray < _otsu_threshold(gray)
+    _h, w = ink.shape
+    xlo = int(w * _SCAN_X_MARGIN)
+    xhi = int(w * (1.0 - _SCAN_X_MARGIN))
+    min_row_ink = max(3, int(w * 0.003))
+    active_rows = ink[:, xlo:xhi].sum(axis=1) >= min_row_ink
+    row_runs = _merge_nearby_runs(
+        _true_runs(active_rows), max_gap=_SCAN_MAX_BLANK_ROWS
+    )
+
+    detected: list[_ScanLine] = []
+    for y0, y1 in row_runs:
+        sub = ink[y0:y1, xlo:xhi]
+        _ys, xs = np.nonzero(sub)
+        if not len(xs):
+            continue
+        px0 = xlo + int(xs.min())
+        px1 = xlo + int(xs.max()) + 1
+        line_h = y1 - y0
+        line_w = px1 - px0
+        if line_h < 3 or line_w < 10:
+            continue
+        # Rules and border noise are wide but only a pixel or two tall.
+        if line_w / max(1, line_h) > 50:
+            continue
+
+        rect = fitz.Rect(px0 / scale, y0 / scale, px1 / scale, y1 / scale)
+        # Running page numbers are omitted from Markdown; discard isolated,
+        # narrow marks at the extreme page edges so they do not shift offsets.
+        yfrac = ((rect.y0 + rect.y1) / 2 - page.rect.y0) / (page.rect.height or 1)
+        if (yfrac < 0.04 or yfrac > 0.92) and rect.width / page.rect.width < 0.15:
+            continue
+
+        col_active = sub.sum(axis=0) > 0
+        glyph_runs = _true_runs(col_active)
+        # A real inter-word space scales with font height; smaller gaps are
+        # disconnected letters or dots within one Persian word.
+        word_gap = max(3, int(round(line_h * 0.20)))
+        word_runs = _merge_nearby_runs(glyph_runs, max_gap=word_gap)
+        words = [
+            fitz.Rect(
+                (xlo + start) / scale,
+                y0 / scale,
+                (xlo + end) / scale,
+                y1 / scale,
+            )
+            for start, end in word_runs
+            if end > start
+        ]
+        words.sort(key=lambda r: -r.x1)  # RTL reading order
+        detected.append(_ScanLine(rect=rect, words=words))
+
+    detected.sort(key=lambda line: (line.rect.y0, -line.rect.x1))
+    if not detected:
+        return []
+
+    median_h = float(np.median([line.rect.height for line in detected])) or 1.0
+    for line in detected:
+        # Width / font-height approximates character capacity across headings,
+        # body text, and smaller footnotes better than raw line width alone.
+        effective_h = min(max(line.rect.height, median_h * 0.65), median_h * 1.5)
+        line.weight = max(1e-6, line.rect.width / effective_h)
+    return detected
+
+
+def _scan_line_extent(line: _ScanLine, u0: float, u1: float) -> fitz.Rect:
+    """Snap an estimated RTL within-line range to detected visual words."""
+    lo = max(0.0, min(1.0, u0))
+    hi = max(lo + 1e-6, min(1.0, u1))
+    right = line.rect.x1 - lo * line.rect.width
+    left = line.rect.x1 - hi * line.rect.width
+    selected = [word for word in line.words if word.x1 > left and word.x0 < right]
+    if not selected and line.words:
+        center = (left + right) / 2
+        selected = [
+            min(line.words, key=lambda word: abs((word.x0 + word.x1) / 2 - center))
+        ]
+    return (
+        _union_rects(selected)
+        if selected
+        else fitz.Rect(left, line.rect.y0, right, line.rect.y1)
+    )
+
+
+def _locate_scan(
+    page: fitz.Page,
+    md: str,
+    span: tuple[int, int],
+    lines: list[_ScanLine],
+) -> Optional[dict]:
+    """Map a Markdown span onto image-detected line/word geometry."""
+    total_md = _countable(md)
+    total_layout = sum(line.weight for line in lines)
+    if total_md == 0 or total_layout == 0:
+        return None
+
+    pos, end = span
+    prefix_n = _countable(md[:pos])
+    fa = prefix_n / total_md
+    fb = (prefix_n + _countable(md[pos:end])) / total_md
+    if fb < fa:
+        fa, fb = fb, fa
+
+    candidates: list[tuple[float, fitz.Rect]] = []
+    cumulative = 0.0
+    for line in lines:
+        ls = cumulative / total_layout
+        le = (cumulative + line.weight) / total_layout
+        cumulative += line.weight
+        if le <= fa or ls >= fb:
+            continue
+        width_f = le - ls
+        u0 = (max(fa, ls) - ls) / width_f
+        u1 = (min(fb, le) - ls) / width_f
+        overlap = min(fb, le) - max(fa, ls)
+        candidates.append((overlap, _scan_line_extent(line, u0, u1)))
+
+    if not candidates:
+        return None
+    # A short word cannot genuinely wrap. If proportional offset estimation
+    # straddles a line boundary, keep the line carrying most of the estimated
+    # span instead of drawing a huge diagonal union across both lines.
+    span_chars = _countable(md[pos:end])
+    if span_chars <= 14 and len(candidates) > 1:
+        rects = [max(candidates, key=lambda item: item[0])[1]]
+    else:
+        rects = [rect for _overlap, rect in candidates]
+    box = _rect_to_fracs(_union_rects(rects), page.rect)
+    box["source"] = "scan"
+    return box
+
+
+# ---------------------------------------------------------------------------
 # Tier A: fuzzy word-window match
 # ---------------------------------------------------------------------------
 
@@ -488,9 +699,10 @@ def locate_queries(
     queries: list[Query],
 ) -> list[Optional[dict]]:
     """Locate each query on page `page_no` (1-based). Returns, per query, a box
-    dict {"x0","y0","x1","y1","source"} (source "match" or "layout") in 0-1
-    page fractions, or None. Tiers self-gate per page; a query that neither tier
-    can place yields None (review.py then uses the model bbox).
+    dict {"x0","y0","x1","y1","source"} (source "match", "layout", or
+    "scan") in 0-1 page fractions, or None. Tiers self-gate per page; a query
+    that no deterministic tier can place yields None (review.py then uses the
+    model bbox).
     """
     doc = fitz.open(str(pdf_path))
     try:
@@ -500,8 +712,10 @@ def locate_queries(
         lines = _pdf_lines(page)
 
         results: list[Optional[dict]] = []
+        spans: list[Optional[tuple[int, int]]] = []
         for q in queries:
             span = _resolve_span(page_md, q)
+            spans.append(span)
             b_box = _locate_layout(page, page_md, span, lines, pwords) if span else None
             expected_y = ((b_box["y0"] + b_box["y1"]) / 2) if b_box else None
 
@@ -511,6 +725,17 @@ def locate_queries(
             if box is None and b_box is not None:
                 box = b_box
             results.append(box)
+
+        # Image analysis is the expensive fallback, so render/segment at most
+        # once and only when a text-layer tier left a resolvable query unplaced.
+        if any(
+            box is None and span is not None
+            for box, span in zip(results, spans)
+        ):
+            scan_lines = _scan_page_lines(page)
+            for i, (box, span) in enumerate(zip(results, spans)):
+                if box is None and span is not None:
+                    results[i] = _locate_scan(page, page_md, span, scan_lines)
         return results
     finally:
         doc.close()

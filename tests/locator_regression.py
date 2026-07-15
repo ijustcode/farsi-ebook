@@ -12,7 +12,7 @@ import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from farsi2epub.locate import _fold_word, _locate_match  # noqa: E402
+from farsi2epub.locate import Query, _fold_word, _locate_match, locate_queries  # noqa: E402
 
 
 class _Page:
@@ -41,6 +41,40 @@ def main() -> int:
     assert box["source"] == "match"
     assert abs(box["x0"] - 141 / 420) < 1e-9
     assert abs(box["x1"] - 246 / 420) < 1e-9
+
+    # Real image-only scan regression. This page has zero PDF text words; the
+    # phrase appears on the first short body line beneath the opening paragraph.
+    root = Path(__file__).resolve().parent.parent / "books" / "bachehaye_ghali"
+    if (root / "source.pdf").is_file():
+        md = (root / "text" / "0008.md").read_text(encoding="utf-8")
+        scan_box = locate_queries(
+            root / "source.pdf", 8, md, [Query("بداالله دنبال خر بود")]
+        )[0]
+        assert scan_box is not None
+        assert scan_box["source"] == "scan"
+        assert 0.44 < scan_box["y0"] < 0.51
+        assert scan_box["x1"] - scan_box["x0"] < 0.60
+
+        # A finding with no verifier bbox still gets deterministic geometry.
+        md21 = (root / "text" / "0021.md").read_text(encoding="utf-8")
+        no_model_box = locate_queries(
+            root / "source.pdf", 21, md21, [Query("کشیدبه طرف کاهدان")]
+        )[0]
+        assert no_model_box is not None and no_model_box["source"] == "scan"
+
+    # Keep the original digital-PDF failure fixed as the scan tier evolves.
+    digital_root = Path(__file__).resolve().parent.parent / "books" / "boof-e-koor"
+    if (digital_root / "source.pdf").is_file():
+        md46 = (digital_root / "text" / "0046.md").read_text(encoding="utf-8")
+        digital_box = locate_queries(
+            digital_root / "source.pdf",
+            46,
+            md46,
+            [Query("خواهربرادر شیری بودیم")],
+        )[0]
+        assert digital_box is not None and digital_box["source"] == "match"
+        assert 0.33 < digital_box["x0"] < 0.35
+        assert 0.58 < digital_box["x1"] < 0.60
     print("ALL LOCATOR REGRESSION CHECKS PASSED")
     return 0
 

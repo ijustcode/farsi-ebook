@@ -809,6 +809,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-box { position: absolute; border-radius: 2px; }
 .qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
 .qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
+.qc-box-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
 .qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .qc-box.hot { outline: 2px solid #ffffff; }
 .qc-box.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
@@ -842,6 +843,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 }
 .legend-swatch.legend-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
 .legend-swatch.legend-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
+.legend-swatch.legend-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
 .legend-swatch.legend-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .page-block .col-text { flex: 0 0 48%; max-width: 48%; display: flex; flex-direction: column; }
 .meta-row {
@@ -1079,6 +1081,7 @@ button:disabled { opacity: 0.5; cursor: default; }
         <div class="qc-legend">
           <span><span class="legend-swatch legend-match"></span>located (word match)</span>
           <span><span class="legend-swatch legend-layout"></span>located (layout)</span>
+          <span><span class="legend-swatch legend-scan"></span>located (image layout)</span>
           <span><span class="legend-swatch legend-model"></span>model estimate</span>
         </div>
         {% endif %}
