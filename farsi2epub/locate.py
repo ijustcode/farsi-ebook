@@ -4,9 +4,10 @@ Given a page's Markdown transcription and a set of query snippets (QC issue
 text or correction-hunk old text), locate each on the source PDF page and
 return a 0-1-fraction box. Two tiers, each self-gating per page:
 
-  - Tier A "match": fuzzy normalized word-window scoring against
+  - Tier A "match": fuzzy normalized word/fragment-window scoring against
     ``page.get_text('words')``. Immune to RTL intra-word character reordering
-    (char-sorted equality) and Arabic/Persian letterform variation (folding).
+    (char-sorted equality), Arabic/Persian letterform variation, presentation-
+    form glyphs, and legacy text layers that split words into several tokens.
     Requires a decodable Unicode text layer.
   - Tier B "layout": maps the snippet's character offset in the page Markdown
     onto the PDF's cumulative per-line character counts. The line *rects* are
@@ -90,6 +91,11 @@ _NONWORD_RE = re.compile(r"[^؀-ۿ0-9a-zA-Z]")
 def _fold_word(w: str) -> str:
     """Normalize a single word: fold letterforms, strip combining diacritics,
     drop everything that is not an Arabic-block or ASCII alphanumeric char."""
+    # Older Persian PDFs commonly encode visible glyphs with the Arabic
+    # Presentation Forms blocks (for example ``ﺧ`` instead of ``خ``).
+    # NFKC converts those compatibility glyphs back to ordinary Arabic
+    # codepoints before _NONWORD_RE gets a chance to discard them.
+    w = unicodedata.normalize("NFKC", w)
     w = w.translate(_FOLD)
     w = "".join(c for c in w if not unicodedata.combining(c))
     return _NONWORD_RE.sub("", w)
@@ -412,6 +418,37 @@ def _locate_match(
                             best = s
                 total += best
             candidates.append((total / n - penalty, start, L))
+
+    # Some legacy RTL text layers split one visible word into many extraction
+    # tokens (occasionally one token per joined-glyph run). Word-for-word
+    # alignment cannot match those pages: a three-word query may correspond to
+    # seven PDF tokens. Compare contiguous same-line fragments as a joined
+    # character stream as well. _wsim's char-sorted equality deliberately
+    # tolerates the intra-fragment reversal produced by these PDFs, while the
+    # returned start/L still gives us the exact union of the source glyph
+    # rectangles.
+    qjoined = "".join(qwords)
+    qchars = len(qjoined)
+    if qchars:
+        min_chars = max(1, int(qchars * 0.65))
+        max_chars = max(min_chars, int(qchars * 1.35))
+        for start in range(m):
+            first_rect = pwords[start][0]
+            joined = ""
+            for stop in range(start, m):
+                rect, word = pwords[stop]
+                # Never let a fragment candidate spill onto another printed
+                # line, even when the PDF's extraction order is unusual.
+                if abs(rect.y0 - first_rect.y0) > 1.0:
+                    break
+                joined += word
+                nchars = len(joined)
+                if nchars > max_chars:
+                    break
+                if nchars >= min_chars:
+                    length_drift = abs(nchars - qchars) / qchars
+                    score = _wsim(qjoined, joined) - _DRIFT_PENALTY * length_drift
+                    candidates.append((score, start, stop - start + 1))
 
     if not candidates:
         return None
