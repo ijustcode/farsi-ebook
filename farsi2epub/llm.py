@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import os
+import sys
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 import anthropic
+import pydantic
 from pydantic import BaseModel, Field
 
 from .config import PRICES
@@ -15,6 +18,35 @@ from .config import PRICES
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 MAX_OUTPUT_TOKENS = 8000
+
+T = TypeVar("T")
+
+
+def _call_with_retry(fn: Callable[[], T], *, page_no: int, what: str, attempts: int = 3, backoff_s: float = 2.0) -> T:
+    """Call fn() up to `attempts` times, retrying only on transient/parse failures.
+
+    Retries on anthropic.APIStatusError with status_code in {429, 500, 502, 503, 529},
+    anthropic.APIConnectionError, and pydantic.ValidationError (malformed JSON from
+    the model's raw output). Everything else (401/403/400 etc.) propagates
+    immediately on first occurrence. Re-raises the last exception once attempts
+    are exhausted.
+    """
+    last_exc: BaseException = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except anthropic.APIStatusError as exc:
+            if exc.status_code not in {429, 500, 502, 503, 529}:
+                raise
+            last_exc = exc
+        except anthropic.APIConnectionError as exc:
+            last_exc = exc
+        except pydantic.ValidationError as exc:
+            last_exc = exc
+        if attempt < attempts:
+            print(f"  page {page_no}: {what} attempt {attempt} failed ({last_exc}); retrying...", file=sys.stderr)
+            time.sleep(backoff_s * attempt)
+    raise last_exc
 
 
 class PageTranscription(BaseModel):
@@ -164,17 +196,21 @@ def transcribe_page(
         # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
         kwargs["thinking"] = {"type": "disabled"}
 
-    response = client.messages.parse(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        system=TRANSCRIBE_SYSTEM,
-        messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
-        output_format=PageTranscription,
-        **kwargs,
-    )
+    def _call():
+        response = client.messages.parse(
+            model=model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=TRANSCRIBE_SYSTEM,
+            messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
+            output_format=PageTranscription,
+            **kwargs,
+        )
+        if response.parsed_output is None:
+            raise RuntimeError(f"Model {model} returned unparseable output for page {page_no}")
+        return response
+
+    response = _call_with_retry(_call, page_no=page_no, what="transcribe")
     result = response.parsed_output
-    if result is None:
-        raise RuntimeError(f"Model {model} returned unparseable output for page {page_no}")
     usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
     return result, usage, cost_of(response.usage, model)
 
@@ -240,17 +276,21 @@ def qc_verify_page(
     kwargs: dict = {}
     if model.startswith("claude-sonnet-5"):
         kwargs["thinking"] = {"type": "disabled"}
-    response = client.messages.parse(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        system=QC_SYSTEM,
-        messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
-        output_format=QCReport,
-        **kwargs,
-    )
+    def _call():
+        response = client.messages.parse(
+            model=model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=QC_SYSTEM,
+            messages=[{"role": "user", "content": [_image_block(png_bytes), {"type": "text", "text": user_text}]}],
+            output_format=QCReport,
+            **kwargs,
+        )
+        if response.parsed_output is None:
+            raise RuntimeError(f"QC model {model} returned unparseable output for page {page_no}")
+        return response
+
+    response = _call_with_retry(_call, page_no=page_no, what="qc")
     report = response.parsed_output
-    if report is None:
-        raise RuntimeError(f"QC model {model} returned unparseable output for page {page_no}")
     usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
     return report, usage, cost_of(response.usage, model)
 

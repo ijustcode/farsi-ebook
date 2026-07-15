@@ -13,11 +13,16 @@ import difflib
 import functools
 import json
 import math
+import os
 import re
 import socket
+import subprocess
+import sys
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1896,6 +1901,107 @@ def _find_free_port(preferred: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# backgroundable server state (books/<slug>/review/server.json)
+# ---------------------------------------------------------------------------
+
+
+def _server_state_path(ws: Workspace) -> Path:
+    return ws.review_dir / "server.json"
+
+
+def _write_server_state(ws: Workspace, pid: int, port: int, url: str) -> None:
+    """Atomically write the review server's state file (temp file + replace)."""
+    path = _server_state_path(ws)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "pid": pid,
+        "port": port,
+        "url": url,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp_path, path)
+
+
+def _clear_server_state(ws: Workspace) -> None:
+    """Best-effort removal of the server state file."""
+    try:
+        _server_state_path(ws).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def read_server_state(ws: Workspace) -> Optional[dict]:
+    """Return the persisted server state if a server is actually live, else
+    None (deleting a stale file if the pid is dead or nothing is listening).
+    """
+    path = _server_state_path(ws)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        pid = int(data["pid"])
+        port = int(data["port"])
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        _clear_server_state(ws)
+        return None
+    except PermissionError:
+        pass  # alive, just owned by another user
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            pass
+    except OSError:
+        _clear_server_state(ws)
+        return None
+
+    return data
+
+
+def launch_review_background(
+    ws: Workspace, budget_all: bool = False, open_browser: bool = True
+) -> str:
+    """Ensure a review server is running for `ws`, starting one detached if
+    needed. Returns its URL. Raises RuntimeError if a newly-spawned server
+    doesn't come up within a short timeout.
+    """
+    existing = read_server_state(ws)
+    if existing is not None:
+        return existing["url"]
+
+    ws.review_dir.mkdir(parents=True, exist_ok=True)
+    log_path = ws.review_dir / "server.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+
+    args = [sys.argv[0], "review", ws.slug, "--_child"]
+    if budget_all:
+        args.append("--all")
+
+    subprocess.Popen(
+        args,
+        start_new_session=True,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+    )
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        state = read_server_state(ws)
+        if state is not None:
+            return state["url"]
+        time.sleep(0.25)
+
+    raise RuntimeError(f"review server did not start within 5s; check {log_path}")
+
+
+# ---------------------------------------------------------------------------
 # public entry point
 # ---------------------------------------------------------------------------
 
@@ -1931,6 +2037,7 @@ def run_review(
     state.httpd = httpd
 
     url = f"http://127.0.0.1:{free_port}/"
+    _write_server_state(ws, os.getpid(), free_port, url)
     print(f"Review server running at {url}")
     print(f"Surfaced {len(surfaced)} page(s) for review: {surfaced}")
     print("Press Ctrl+C when finished (or click Done in the page).")
@@ -1951,6 +2058,7 @@ def run_review(
         server_thread.join()
     finally:
         httpd.server_close()
+        _clear_server_state(ws)
 
     edited = len(state.edited)
     accepted = len(state.accepted)

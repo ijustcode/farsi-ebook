@@ -388,12 +388,18 @@ def _clean_bbox(b) -> Optional[list[int]]:
     return vals
 
 
-def _select_pages(ws: Workspace, all_pages: bool, force: bool = False) -> tuple[list[int], list[int]]:
+def _select_pages(
+    ws: Workspace, all_pages: bool, force: bool = False, pages: list[int] | None = None
+) -> tuple[list[int], list[int]]:
     """Choose pages to verify. Returns (selected, skipped_pending).
 
     Pages whose previous QC suggestion is still pending are normally diverted
     to `skipped_pending`; with `force` they go through normal selection (and
     a re-verification will replace their old suggestion).
+
+    `pages`, if given, restricts the candidate set (before forced/risky/clean
+    bucketing) to those page numbers; `None` considers every transcribed page
+    in the workspace, the original whole-book behavior.
     """
     weights = compute_feature_weights(load_events())
     source_type = ws.meta.get("source_type", "")
@@ -403,7 +409,8 @@ def _select_pages(ws: Workspace, all_pages: bool, force: bool = False) -> tuple[
     clean: list[int] = []           # everything else (random-sample pool)
     skipped_pending: list[int] = []
 
-    for n in ws.pages_done():
+    candidates = ws.pages_done() if pages is None else [n for n in ws.pages_done() if n in set(pages)]
+    for n in candidates:
         try:
             sc = _read_sidecar(ws, n)
         except Exception:
@@ -499,10 +506,15 @@ def _verify_one(ws: Workspace, client, n: int, source_type: str, state: _QCState
     return f"page {n:>4}  {tag}  {n_issues} issue(s)  ${cost:.4f}"
 
 
-def _run_auto(ws: Workspace, all_pages: bool, assume_yes: bool, force: bool = False) -> None:
+def _run_auto(
+    ws: Workspace, all_pages: bool, assume_yes: bool, force: bool = False, pages: list[int] | None = None
+) -> None:
+    """Run one auto-QC pass. `pages`, if given, restricts candidate selection
+    to that page set (see `_select_pages`); `None` is the whole-book default.
+    """
     source_type = ws.meta.get("source_type", "")
 
-    selected, skipped_pending = _select_pages(ws, all_pages, force=force)
+    selected, skipped_pending = _select_pages(ws, all_pages, force=force, pages=pages)
     if skipped_pending:
         click.echo(f"Skipping {len(skipped_pending)} page(s) with a pending qc suggestion: {skipped_pending}")
     if force:
@@ -552,8 +564,9 @@ def _run_auto(ws: Workspace, all_pages: bool, assume_yes: bool, force: bool = Fa
     if state.failed:
         from . import review  # lazy: review imports qc (circular at module level)
 
-        click.echo("Launching review on flagged pages ...")
-        review.run_review(ws, budget_all=True)
+        url = review.launch_review_background(ws, budget_all=True)
+        click.echo(f"Review server started in background: {url}")
+        click.echo(f"Run 'farsi2epub review {ws.slug} --stop' when done.")
 
 
 def run_qc(
@@ -562,20 +575,25 @@ def run_qc(
     all_pages: bool = False,
     assume_yes: bool = False,
     force: bool = False,
+    pages: list[int] | None = None,
 ) -> None:
     """Run quality control over a book workspace.
 
     mode "auto": risk-select pages (or all), confirm cost, verify each with
     ``llm.qc_verify_page``, write the sidecar ``qc`` key + history events, then
     open the review UI on any flagged pages. `force` also re-verifies pages
-    whose previous suggestion is still pending (replacing it).
-    mode "manual": launch the review UI directly.
+    whose previous suggestion is still pending (replacing it). `pages`, if
+    given, restricts candidate selection to that page set (e.g. only the
+    pages a `transcribe` invocation just touched); `None` risk-selects across
+    every transcribed page in the workspace, the original whole-book default.
+    mode "manual": launch the review UI directly (intentionally unscoped by
+    `pages` — manual review budget is still whole-book).
     """
     if mode == "manual":
         from . import review  # lazy: avoid circular import (review imports qc)
 
         review.run_review(ws, budget_all=all_pages)
     elif mode == "auto":
-        _run_auto(ws, all_pages, assume_yes, force=force)
+        _run_auto(ws, all_pages, assume_yes, force=force, pages=pages)
     else:
         raise ValueError(f"unknown qc mode: {mode!r} (expected 'auto' or 'manual')")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -161,7 +162,7 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
     if resolved_qc_mode in ("auto", "manual"):
         try:
-            qc.run_qc(ws, resolved_qc_mode, assume_yes=assume_yes)
+            qc.run_qc(ws, resolved_qc_mode, assume_yes=assume_yes, pages=pages)
         except NotImplementedError:
             click.echo("QC module not yet implemented (coming in a later task).")
 
@@ -176,11 +177,13 @@ main.add_command(transcribe_cmd, name="transcribe")
 @click.option("--all", "all_pages", is_flag=True, help="Verify/review every transcribed page instead of risk-selected ones.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip cost confirmation and proceed with QC.")
 @click.option("--force", is_flag=True, help="Also re-verify pages whose previous QC suggestion is still pending (replaces the old suggestion).")
-def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool, force: bool):
+@click.option("--pages", "pages_spec", default=None, help='Restrict QC to this page range, e.g. "5", "3-10", "1,3-5" (default: risk-select across all transcribed pages).')
+def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool, force: bool, pages_spec: str | None):
     """Run quality control checks for workspace SLUG."""
     ws = Workspace.load(slug)
+    pages = parse_pages_spec(pages_spec, ws.meta.get("page_count")) if pages_spec else None
     try:
-        qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes, force=force)
+        qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes, force=force, pages=pages)
     except NotImplementedError:
         click.echo("QC module not yet implemented (coming in a later task).")
 
@@ -192,7 +195,11 @@ main.add_command(qc_cmd, name="qc")
 @click.argument("slug")
 @click.option("--all", "all_pages", is_flag=True, help="Surface every flagged page, ignoring the review budget.")
 @click.option("--reset", "reset", is_flag=True, help="Undo all human review decisions (keeps text edits and .orig.md backups) and exit.")
-def review_cmd(slug: str, all_pages: bool, reset: bool):
+@click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
+@click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
+@click.option("--stop", "stop_server", is_flag=True, help="Stop a running review server for this workspace.")
+@click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
+def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status: bool, stop_server: bool, is_child: bool):
     """Launch the review workflow for workspace SLUG."""
     ws = Workspace.load(slug)
     if reset:
@@ -204,6 +211,74 @@ def review_cmd(slug: str, all_pages: bool, reset: bool):
             f"review event(s). Run: farsi2epub review {slug}"
         )
         return
+
+    if status:
+        state = review.read_server_state(ws)
+        if state:
+            click.echo(f"Review server running: {state['url']} (pid {state['pid']})")
+        else:
+            click.echo(f"No review server running for '{slug}'.")
+        return
+
+    if stop_server:
+        state = review.read_server_state(ws)
+        if not state:
+            click.echo(f"No review server running for '{slug}'.")
+            return
+        # POST /quit with a short timeout; reuse stdlib (urllib.request), no new deps.
+        import urllib.request
+
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(state["url"] + "quit", method="POST"), timeout=3
+            )
+            click.echo(f"Stopped review server for '{slug}'.")
+        except Exception:
+            # Fall back to SIGTERM if /quit is unreachable.
+            import signal
+
+            try:
+                os.kill(state["pid"], signal.SIGTERM)
+                click.echo(
+                    f"Review server for '{slug}' was unresponsive; sent SIGTERM (pid {state['pid']})."
+                )
+            except ProcessLookupError:
+                click.echo(f"No review server running for '{slug}'.")
+        return
+
+    if is_child:
+        # This is the detached child process spawned by launch_review_background
+        # — just run normally.
+        try:
+            review.run_review(ws, budget_all=all_pages)
+        except NotImplementedError:
+            click.echo("Review module not yet implemented (coming in a later task).")
+        return
+
+    # Plain `review <slug>` or `--background`: never start a duplicate server.
+    existing = review.read_server_state(ws)
+    if existing:
+        click.echo(f"Review server already running: {existing['url']} (pid {existing['pid']})")
+        if not background:
+            try:
+                import webbrowser
+
+                webbrowser.open(existing["url"])
+            except Exception:
+                pass
+        return
+
+    if background:
+        try:
+            url = review.launch_review_background(ws, budget_all=all_pages)
+        except RuntimeError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+        click.echo(f"Review server started in background: {url}")
+        click.echo(f"Logs: {ws.review_dir / 'server.log'}")
+        click.echo(f"Run 'farsi2epub review {slug} --stop' when done.")
+        return
+
     try:
         review.run_review(ws, budget_all=all_pages)
     except NotImplementedError:
