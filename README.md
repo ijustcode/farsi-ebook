@@ -78,12 +78,12 @@ After this step, `books/my-book/text/` holds one Markdown file per page plus a J
 
 ```bash
 farsi2epub qc my-book            # auto: LLM verifier pass over risky pages
-farsi2epub review my-book        # local web UI for human correction
+farsi2epub review my-book        # blocking local web UI for human correction
 ```
 
-Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown. Each QC-suggested correction appears as its own item with an **Approve / Edit / Reject** choice: approve applies that one correction to the text, reject keeps the original, and edit lets you type your own replacement for that spot. When the verifier flags a phrase but doesn't propose a fix, you still get an **Edit-only** item — Approve/Reject are greyed out and the edit box is prefilled with the flagged text so you can correct it in place.
+Auto QC runs an LLM verifier over the pages most likely to have problems and attaches suggested corrections — it never overwrites the transcription on its own. `review` then opens a local web app showing each flagged page image next to its editable Markdown. The command is intentionally **blocking**: its terminal remains attached to the review server until you click **Done** in the browser or press `Ctrl+C`. Each QC-suggested correction appears as its own item with an **Approve / Edit / Reject** choice: approve applies that one correction to the text, reject keeps the original, and edit lets you type your own replacement for that spot. When the verifier flags a phrase but doesn't propose a fix, you still get an **Edit-only** item — Approve/Reject are greyed out and the edit box is prefilled with the flagged text so you can correct it in place.
 
-Where a correction can be located on the page, a box is drawn on the page image, colored by how it was found: **blue** = matched word-for-word in the PDF's text layer, **teal** = located from the page layout (works even when the text layer is unusable — scanned-style or garbled encodings), **dashed orange** = the verifier's own estimate. Hovering a correction highlights its box and vice versa. Clicking a correction (or its box) smoothly **zooms** the page image into that spot and marks the correction active; while zoomed you can **drag to pan**, and a plain click, `Escape`, or clicking the background zooms back out.
+Where a correction can be located on the page, a box is drawn on the page image, colored by how it was found: **blue** = matched word-for-word in the PDF's text layer, **teal** = located from PDF text-line geometry, **green** = located directly from image layout on a scanned page, **dashed orange** = the verifier's own estimate. Hovering a correction highlights its box and vice versa. Clicking a correction (or its box) smoothly **zooms** the page image into that spot and marks the correction active; while zoomed you can **drag to pan**, and a plain click, `Escape`, or clicking the background zooms back out.
 
 The review UI surfaces pages flagged by *either* check: pages the deterministic validators flagged during transcription (with their issues shown, e.g. `embedded_mismatch`) and pages the LLM QC pass failed. To keep review quick, only the worst fifth of flagged pages are surfaced by default — pass `--all` to see every flagged page:
 
@@ -97,6 +97,13 @@ Two more options worth knowing:
 
 - `farsi2epub qc <slug> --force` re-verifies pages whose previous suggestion is still pending (replacing it) — useful after model or prompt improvements.
 - `farsi2epub review <slug> --reset` undoes all your review decisions for a book (re-flags the pages, returns suggestions to pending) while keeping any text edits, so you can redo the review from scratch.
+
+To reset the review decisions and then start a blocking review session showing every flagged page:
+
+```bash
+farsi2epub review my-book --reset
+farsi2epub review my-book --all
+```
 
 Both steps are optional — you can go straight to `build` — but they catch the errors that matter most.
 
