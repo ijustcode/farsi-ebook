@@ -63,7 +63,7 @@ class PageTranscription(BaseModel):
         description="True if the last paragraph is cut off mid-sentence at the bottom of the page."
     )
     confidence: float = Field(
-        description="Honest 0.0-1.0 estimate that the transcription is character-accurate. Below 0.8 means parts were hard to read."
+        description="Honest 0.0-1.0 estimate that the transcription is both character-accurate AND complete. Below 0.8 means parts were hard to read, or you were unable to fit or transcribe all visible body text."
     )
 
 
@@ -85,6 +85,7 @@ TRANSCRIPTION RULES
 - Keep Persian digits (۰۱۲۳۴۵۶۷۸۹) as printed.
 - Remove kashida/tatweel stretching: write بهتر even if printed بـــهـــتر.
 - Do not modernize spelling, correct perceived typos, translate, or summarize. Transcribe.
+- Completeness is as important as accuracy: transcribe every line of body text and every dialogue exchange visible on the page, however long the paragraph or how many speakers trade lines. Never omit, truncate, or silently drop a paragraph, verse line, or dialogue turn — including ones that continue for many lines or wrap around the page.
 
 IGNORE COMPLETELY (never transcribe):
 - Running headers and footers: a running header is a short line at the extreme top or bottom margin repeating the book or chapter title on page after page, plus page numbers wherever they appear. A title in the middle of the page, or sitting directly above new content, is NOT a running header — it is a real heading and must be transcribed.
@@ -116,7 +117,7 @@ FIELDS
 - headings: the exact heading strings you emitted as `#`/`##`/`###` lines in text_md (without the # marks), in order; empty list if none. This list and the heading lines in text_md must match one-to-one.
 - is_blank: true for pages with no body text at all; then text_md must be "".
 - flags: subset of "image", "table", "illegible", "two_column", "marginalia", "non_persian", "decorative_only".
-- confidence: honest 0.0-1.0 character-accuracy estimate. Use values below 0.8 whenever print quality, scan blur, or unusual typography made you unsure of any words."""
+- confidence: honest 0.0-1.0 estimate covering both character accuracy and completeness. Use values below 0.8 whenever print quality, scan blur, or unusual typography made you unsure of any words, or whenever you could not confirm you transcribed every visible line of body text."""
 
 METADATA_SYSTEM = """You are looking at the opening page(s) of a Persian (Farsi) PDF. Determine whether they form a cover or title page (صفحهٔ عنوان) and, only if so, extract the book's bibliographic metadata exactly as printed.
 
@@ -245,6 +246,7 @@ class QCReport(BaseModel):
 QC_SYSTEM = """You are a meticulous quality-control verifier for Persian (Farsi) book transcriptions. You receive one page of a book as an image, followed by the current Markdown transcription of that page. Compare them character by character and report real discrepancies.
 
 VERIFY IN PARTICULAR
+- Completeness: check that every paragraph, dialogue exchange, and verse line visible in the image is present in the transcription — read the whole page image top to bottom and confirm nothing was skipped, even a single missing line or a dialogue turn. Report any gap as a "missing_text" issue, with the surrounding text as the snippet and a bbox for the missing region when you can localize it.
 - Headings: every chapter/page title, boxed or banner section title (even inside decorative frames), and bold standalone label on the page must appear as a `#` / `##` / `###` line. Report missing or wrongly-leveled headings. Running headers at the extreme top/bottom margin and page numbers are correctly omitted — do not report those.
 - Words containing ه at a joining boundary (e.g. علاقه‌مند، خانه‌ها): verify the exact letters and the zero-width non-joiner (U+200C) usage against the image.
 - Footnotes: every superscript marker printed in the body must appear as [^n] in the text, with a matching [^n]: definition at the end of the page.

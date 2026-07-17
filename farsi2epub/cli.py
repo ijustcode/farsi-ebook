@@ -24,6 +24,14 @@ def _slugify(name: str) -> str:
     return slug or "book"
 
 
+def _load_workspace(slug: str) -> Workspace:
+    try:
+        return Workspace.load(slug)
+    except FileNotFoundError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
 @click.group()
 def main():
     """farsi2epub: convert Farsi PDF books to EPUB via a vision-LLM pipeline."""
@@ -106,7 +114,7 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the auto-QC cost confirmation prompt.")
 def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str, assume_yes: bool):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
-    ws = Workspace.load(slug)
+    ws = _load_workspace(slug)
     meta = ws.meta
     page_count = meta.get("page_count")
     if page_count is None:
@@ -180,7 +188,7 @@ main.add_command(transcribe_cmd, name="transcribe")
 @click.option("--pages", "pages_spec", default=None, help='Restrict QC to this page range, e.g. "5", "3-10", "1,3-5" (default: risk-select across all transcribed pages).')
 def qc_cmd(slug: str, qc_mode: str, all_pages: bool, assume_yes: bool, force: bool, pages_spec: str | None):
     """Run quality control checks for workspace SLUG."""
-    ws = Workspace.load(slug)
+    ws = _load_workspace(slug)
     pages = parse_pages_spec(pages_spec, ws.meta.get("page_count")) if pages_spec else None
     try:
         qc.run_qc(ws, qc_mode, all_pages=all_pages, assume_yes=assume_yes, force=force, pages=pages)
@@ -201,7 +209,7 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
 def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status: bool, stop_server: bool, is_child: bool):
     """Launch the review workflow for workspace SLUG."""
-    ws = Workspace.load(slug)
+    ws = _load_workspace(slug)
     if reset:
         if all_pages:
             click.echo("Note: --all is ignored with --reset.")
@@ -292,7 +300,7 @@ main.add_command(review_cmd, name="review")
 @click.argument("slug")
 def build(slug: str):
     """Build the final EPUB for workspace SLUG."""
-    ws = Workspace.load(slug)
+    ws = _load_workspace(slug)
     try:
         epub.build_epub(ws)
     except NotImplementedError:

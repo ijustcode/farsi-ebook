@@ -15,6 +15,14 @@ source venv/bin/activate
 pip install -e .          # editable install (entry point: farsi2epub)
 ```
 
+### Shell completion
+
+click 8 auto-generates tab completion for the `farsi2epub` entry point. Add to `~/.zshrc` (or `~/.bashrc`, using `bash_source`):
+
+```bash
+eval "$(_FARSI2EPUB_COMPLETE=zsh_source farsi2epub)"
+```
+
 The pipeline is four sequential CLI steps, each operating on a per-book workspace identified by a slug:
 
 ```bash
