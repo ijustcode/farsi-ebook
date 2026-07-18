@@ -39,6 +39,7 @@ from farsi2epub.review import (  # noqa: E402
     _build_boxes,
     _cap_words,
     _read_sidecar,
+    _ripped_segment_points,
     _ScanBoxRefiner,
 )
 from farsi2epub.workspace import Workspace, parse_pages_spec  # noqa: E402
@@ -79,10 +80,10 @@ def _hunk_query_text(h: dict) -> str:
     return _cap_words(h["old"])
 
 
-def _crop_png(page: fitz.Page, box: dict, color_hex: str) -> bytes:
+def _crop_png(page: fitz.Page, box: dict, color_hex: str, key: str) -> bytes:
     """PNG crop of the page around `box` (0-1 fractions) with the box outline
-    drawn on it. Margin is generous (~2 box widths of context) so a human can
-    instantly judge whether the box contains the snippet."""
+    drawn on it. Segmented scan_vlm results use the review UI's same stable
+    ripped-edge polygon geometry."""
     pr = page.rect
     bx0 = pr.x0 + box["x0"] * pr.width
     by0 = pr.y0 + box["y0"] * pr.height
@@ -103,11 +104,6 @@ def _crop_png(page: fitz.Page, box: dict, color_hex: str) -> bytes:
     if pix.colorspace is None or pix.colorspace.n != 3:
         pix = fitz.Pixmap(fitz.csRGB, pix)
 
-    # Box corners in crop pixel coordinates.
-    px0 = int(round((bx0 - clip.x0) * scale))
-    py0 = int(round((by0 - clip.y0) * scale))
-    px1 = int(round((bx1 - clip.x0) * scale))
-    py1 = int(round((by1 - clip.y0) * scale))
     t = max(2, int(round(pix.width * 0.004)))
     rgb = _hex_to_rgb(color_hex)
 
@@ -118,10 +114,50 @@ def _crop_png(page: fitz.Page, box: dict, color_hex: str) -> bytes:
         if not r.is_empty:
             pix.set_rect(r, rgb)
 
-    _edge(px0 - t, py0 - t, px1 + t, py0)  # top
-    _edge(px0 - t, py1, px1 + t, py1 + t)  # bottom
-    _edge(px0 - t, py0, px0, py1)  # left
-    _edge(px1, py0, px1 + t, py1)  # right
+    def _line(a: tuple[float, float], b: tuple[float, float]) -> None:
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        steps = max(1, int(round(max(abs(dx), abs(dy)))))
+        half = max(1, t // 2)
+        for i in range(steps + 1):
+            x = int(round(a[0] + dx * i / steps))
+            y = int(round(a[1] + dy * i / steps))
+            _edge(x - half, y - half, x + half + 1, y + half + 1)
+
+    def _to_pixel(x_frac: float, y_frac: float) -> tuple[float, float]:
+        x = pr.x0 + x_frac * pr.width
+        y = pr.y0 + y_frac * pr.height
+        return ((x - clip.x0) * scale, (y - clip.y0) * scale)
+
+    segments = box.get("segments") if box.get("source") == "scan_vlm" else None
+    polygons: list[list[tuple[float, float]]] = []
+    if isinstance(segments, list) and len(segments) > 1:
+        view_segments = [
+            {
+                "x0": s["x0"] * 100.0,
+                "y0": s["y0"] * 100.0,
+                "x1": s["x1"] * 100.0,
+                "y1": s["y1"] * 100.0,
+                "w": (s["x1"] - s["x0"]) * 100.0,
+                "h": (s["y1"] - s["y0"]) * 100.0,
+            }
+            for s in segments
+        ]
+        for index, segment in enumerate(view_segments):
+            points = _ripped_segment_points(segment, index, len(view_segments), key)
+            polygons.append([_to_pixel(x / 100.0, y / 100.0) for x, y in points])
+    else:
+        polygons.append(
+            [
+                _to_pixel(box["x0"], box["y0"]),
+                _to_pixel(box["x1"], box["y0"]),
+                _to_pixel(box["x1"], box["y1"]),
+                _to_pixel(box["x0"], box["y1"]),
+            ]
+        )
+
+    for polygon in polygons:
+        for i, point in enumerate(polygon):
+            _line(point, polygon[(i + 1) % len(polygon)])
     return pix.tobytes("png")
 
 
@@ -219,7 +255,7 @@ def main() -> int:
                 continue
             tier_counts[box["source"]] = tier_counts.get(box["source"], 0) + 1
             rows.append(
-                {"page": n, "source": box["source"], "snippet": snippet, "kind": kind, "box": box}
+                {"page": n, "source": box["source"], "snippet": snippet, "kind": kind, "box": box, "key": f"h{h['id']}"}
             )
         for i, iss in enumerate(issues):
             if i in linked:
@@ -231,7 +267,7 @@ def main() -> int:
                 continue
             tier_counts[box["source"]] = tier_counts.get(box["source"], 0) + 1
             rows.append(
-                {"page": n, "source": box["source"], "snippet": snippet, "kind": "issue", "box": box}
+                {"page": n, "source": box["source"], "snippet": snippet, "kind": "issue", "box": box, "key": f"i{i}"}
             )
 
     # Refinement cost actually incurred by this run (new cache entries).
@@ -247,7 +283,7 @@ def main() -> int:
         for r in shown:
             page = doc[r["page"] - 1]
             color = TIER_COLORS.get(r["source"], "#888888")
-            png = _crop_png(page, r["box"], color)
+            png = _crop_png(page, r["box"], color, r["key"])
             r["img"] = base64.standard_b64encode(png).decode("ascii")
     finally:
         doc.close()

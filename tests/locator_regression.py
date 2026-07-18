@@ -10,9 +10,13 @@ one API-gated live check of `llm.read_strips` (skipped without a key).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 
@@ -33,6 +37,14 @@ from farsi2epub.locate import (  # noqa: E402
     _union_rects,
     locate_queries,
     refine_scan_boxes,
+)
+from farsi2epub.review import (  # noqa: E402
+    _LOCATE_VLM_CACHE_VERSION,
+    _PAGE_TEMPLATE,
+    _ScanBoxRefiner,
+    _attach_boxes,
+    _ripped_segment_points,
+    _tear_profile,
 )
 
 
@@ -77,25 +89,26 @@ def _check_align_strip_synthetic() -> None:
     # 1. Exact word-index mapping: line counts agree, per-line word counts
     # agree, query = words 2-4 (0-based) of line 1 -> rect must equal the
     # union of exactly those detected word rects.
-    rect = _align_strip([["دفتر", "مدرسه", "معلم"]], vlm, strip, None)
-    assert rect is not None
+    rects = _align_strip([["دفتر", "مدرسه", "معلم"]], vlm, strip, None)
+    assert rects is not None and len(rects) == 1
     expected = _union_rects(strip[1].words[2:5])
-    assert _rects_close(rect, expected), f"{rect} != {expected}"
+    assert _rects_close(rects[0], expected), f"{rects[0]} != {expected}"
 
     # 2. RTL orientation: the FIRST word of a VLM line (reading order) maps to
     # the RIGHTMOST detected rect of that line.
-    rect = _align_strip([["کتاب"]], vlm, strip, None)
-    assert rect is not None
+    rects = _align_strip([["کتاب"]], vlm, strip, None)
+    assert rects is not None and len(rects) == 1
     rightmost = max(strip[1].words, key=lambda r: r.x1)
-    assert _rects_close(rect, strip[1].words[0])
-    assert _rects_close(rect, rightmost)
+    assert _rects_close(rects[0], strip[1].words[0])
+    assert _rects_close(rects[0], rightmost)
 
     # 3. Count-mismatch fallback: VLM says 4 words on a line where only 3
     # visual words were detected -> char-proportional placement, box must
     # still land inside that line's rect.
     line = _mk_line(200, 220, ["ا", "ب", "پ"])  # 3 detected word rects
-    rect = _align_strip([["دو", "سه"]], ["یک دو سه چهار"], [line], None)
-    assert rect is not None
+    rects = _align_strip([["دو", "سه"]], ["یک دو سه چهار"], [line], None)
+    assert rects is not None and len(rects) == 1
+    rect = rects[0]
     assert rect.x0 >= line.rect.x0 - 1e-9 and rect.x1 <= line.rect.x1 + 1e-9
     assert rect.y0 >= line.rect.y0 - 1e-9 and rect.y1 <= line.rect.y1 + 1e-9
     assert rect.width < line.rect.width  # narrowed, not the whole line
@@ -103,9 +116,9 @@ def _check_align_strip_synthetic() -> None:
     # 4. Alt rescue: the main query text is garbage (scores below the accept
     # threshold) but an alternate (corrected) text matches -> accepted.
     assert _align_strip([["قظفغصضچجح"]], vlm, strip, None) is None
-    rect = _align_strip([["قظفغصضچجح"], ["مدرسه", "معلم"]], vlm, strip, None)
-    assert rect is not None
-    assert _rects_close(rect, _union_rects(strip[1].words[3:5]))
+    rects = _align_strip([["قظفغصضچجح"], ["مدرسه", "معلم"]], vlm, strip, None)
+    assert rects is not None and len(rects) == 1
+    assert _rects_close(rects[0], _union_rects(strip[1].words[3:5]))
 
     # 5. Rejection: garbage VLM lines never reach the accept threshold.
     assert (
@@ -123,9 +136,121 @@ def _check_align_strip_synthetic() -> None:
     vlm2 = ["گل بلبل باغ", "میز صندلی فرش", "گل بلبل باغ"]
     q = [["گل", "بلبل", "باغ"]]
     top = _align_strip(q, vlm2, twice, fitz.Point(300, 110))
-    assert top is not None and _rects_close(top, _union_rects(twice[0].words))
+    assert top is not None and len(top) == 1
+    assert _rects_close(top[0], _union_rects(twice[0].words))
     bottom = _align_strip(q, vlm2, twice, fitz.Point(300, 170))
-    assert bottom is not None and _rects_close(bottom, _union_rects(twice[2].words))
+    assert bottom is not None and len(bottom) == 1
+    assert _rects_close(bottom[0], _union_rects(twice[2].words))
+
+    # 7. Two-line RTL wrap: preserve one tight rectangle per printed line in
+    # top-to-bottom reading order instead of returning their page-wide union.
+    wrapped = _align_strip(
+        [["ماه", "ستاره", "کتاب", "قلم"]], vlm, strip, None
+    )
+    assert wrapped is not None and len(wrapped) == 2
+    assert _rects_close(wrapped[0], _union_rects(strip[0].words[3:5]))
+    assert _rects_close(wrapped[1], _union_rects(strip[1].words[0:2]))
+
+    # 8. Three-line wrap: intermediate lines remain independent segments.
+    three_lines = _align_strip(
+        [["ستاره", "کتاب", "قلم", "دفتر", "مدرسه", "معلم", "کلاس", "نان"]],
+        vlm,
+        strip,
+        None,
+    )
+    assert three_lines is not None and len(three_lines) == 3
+    assert _rects_close(three_lines[0], strip[0].words[4])
+    assert _rects_close(three_lines[1], _union_rects(strip[1].words))
+    assert _rects_close(three_lines[2], strip[2].words[0])
+
+    # 9. When VLM and detected line counts disagree, the proportional fallback
+    # still groups selected visual words by detected line.
+    mismatch_strip = [
+        _mk_line(230, 250, ["ا", "ب", "پ"]),
+        _mk_line(260, 280, ["ت", "ث", "ج"]),
+    ]
+    mismatch = _align_strip(
+        [["پ", "ت"]], ["ا ب پ ت ث ج"], mismatch_strip, None
+    )
+    assert mismatch is not None and len(mismatch) == 2
+    assert mismatch[0].y0 == mismatch_strip[0].rect.y0
+    assert mismatch[1].y0 == mismatch_strip[1].rect.y0
+
+
+def _check_review_segment_plumbing() -> None:
+    """Segment payload, torn presentation geometry, zoom contract, and cache."""
+    hunk: dict = {}
+    located = {
+        "x0": 0.10,
+        "y0": 0.20,
+        "x1": 0.90,
+        "y1": 0.36,
+        "source": "scan_vlm",
+        "segments": [
+            {"x0": 0.10, "y0": 0.20, "x1": 0.28, "y1": 0.24},
+            {"x0": 0.72, "y0": 0.26, "x1": 0.90, "y1": 0.30},
+            {"x0": 0.12, "y0": 0.32, "x1": 0.30, "y1": 0.36},
+        ],
+    }
+    specs = [("h7", Query("الف"), None, hunk, None)]
+    view = _attach_boxes(specs, [located])[0]
+    assert view["x0"] == 10.0 and view["x1"] == 90.0  # union compatibility envelope
+    assert len(view["segments"]) == 3 and len(view["paths"]) == 3
+    assert hunk["box"] is located  # payload keeps 0-1 source geometry
+
+    first, middle, last = view["segments"]
+    first_pts = _ripped_segment_points(first, 0, 3, "h7")
+    middle_pts = _ripped_segment_points(middle, 1, 3, "h7")
+    last_pts = _ripped_segment_points(last, 2, 3, "h7")
+
+    def interior(
+        points: list[tuple[float, float]], segment: dict
+    ) -> list[tuple[float, float]]:
+        return [p for p in points if segment["y0"] < p[1] < segment["y1"]]
+
+    first_inner = interior(first_pts, first)
+    middle_inner = interior(middle_pts, middle)
+    last_inner = interior(last_pts, last)
+    assert first_inner and all(x < first["x0"] + 1.0 for x, _y in first_inner)
+    assert any(x > first["x0"] for x, _y in first_inner)  # left edge torn inward
+    assert any(x < middle["x1"] for x, _y in middle_inner)  # right edge torn
+    assert any(x > middle["x0"] for x, _y in middle_inner)  # left edge torn
+    assert last_inner and all(x > last["x1"] - 1.0 for x, _y in last_inner)
+    assert any(x < last["x1"] for x, _y in last_inner)  # right edge torn inward
+    assert _tear_profile("h7", 0) == _tear_profile("h7", 0)  # stable pair profile
+
+    # Browser renderer contract: no connector, stable logical box IDs, and
+    # multipart focus set from the first ordered segment.
+    assert "qc-box-connector" not in _PAGE_TEMPLATE
+    assert "'box-' + page + '-' + b.key" in _PAGE_TEMPLATE
+    assert "setFocusGeometry(svg, segments[0])" in _PAGE_TEMPLATE
+    assert "data-focus-x0" in _PAGE_TEMPLATE
+
+    # Versioned cache keys make union-only v1 entries miss once. Negative v2
+    # entries count as resolved; positive segmented geometry round-trips.
+    with tempfile.TemporaryDirectory() as tmp:
+        refiner = _ScanBoxRefiner(SimpleNamespace(root=Path(tmp)), "test-model")
+        q = Query("الف", (0, 3))
+        page_md = "الف"
+        current_key = refiner._key(1, page_md, q)
+        md_sha = hashlib.sha1(page_md.encode("utf-8")).hexdigest()
+        legacy_raw = json.dumps(
+            [1, md_sha, q.text, list(q.alts), list(q.span)], ensure_ascii=False
+        )
+        legacy_key = hashlib.sha1(legacy_raw.encode("utf-8")).hexdigest()
+        assert _LOCATE_VLM_CACHE_VERSION == 2 and current_key != legacy_key
+
+        scan_box = {"x0": 0.1, "y0": 0.2, "x1": 0.2, "y1": 0.3, "source": "scan"}
+        refiner.cache_path.write_text(
+            json.dumps({current_key: {"box": None, "cost": 0.0}}), encoding="utf-8"
+        )
+        assert not refiner.pending(1, page_md, [q], [scan_box])
+        assert refiner.apply_cached(1, page_md, [q], [scan_box]) == [scan_box]
+
+        refined_box = dict(located)
+        refiner._cache = {current_key: {"box": refined_box, "cost": 0.0}}
+        applied = refiner.apply_cached(1, page_md, [q], [scan_box])[0]
+        assert applied is not None and len(applied["segments"]) == 3
 
 
 def _check_refine_plumbing(root: Path) -> None:
@@ -190,6 +315,11 @@ def _check_refine_plumbing(root: Path) -> None:
         assert refined[1] is None
         box = refined[2]
         assert box is not None and box["source"] == "scan_vlm"
+        assert len(box["segments"]) == 1
+        assert all(
+            abs(box[k] - box["segments"][0][k]) < 1e-9
+            for k in ("x0", "y0", "x1", "y1")
+        )
         assert len(calls) == 1  # aligned on the first (radius 1) pass
         assert 0.44 < box["y0"] < box["y1"] < 0.51
         line_frac = _rect_to_fracs(lines[target].rect, page.rect)
@@ -213,6 +343,51 @@ def _check_refine_plumbing(root: Path) -> None:
         )
         assert failed[0] is None
         assert len(garbage_calls) == 2, garbage_calls
+    finally:
+        doc.close()
+
+
+def _check_wrapped_real_case(root: Path) -> None:
+    """The reported page-44 RTL wrap yields two narrow refined segments."""
+    md = (root / "text" / "0044.md").read_text(encoding="utf-8")
+    q = Query("نخ‌های عمودی سایید ه بودند.")
+    scan_box = locate_queries(root / "source.pdf", 44, md, [q])[0]
+    assert scan_box is not None and scan_box["source"] == "scan"
+
+    doc = fitz.open(root / "source.pdf")
+    try:
+        page = doc[43]
+        lines = _scan_page_lines(page)
+        span = _resolve_span(md, q)
+        assert span is not None
+        hits = _scan_hits(md, span, lines)
+        assert len(hits) == 2
+        lo = max(0, hits[0][0] - 1)
+        hi = min(len(lines) - 1, hits[-1][0] + 1)
+        reading = ["میز صندلی" for _ in range(lo, hi + 1)]
+        upper_n = len(lines[hits[0][0]].words)
+        lower_n = len(lines[hits[1][0]].words)
+        assert upper_n >= 2 and lower_n >= 3
+        reading[hits[0][0] - lo] = " ".join(
+            ["بالا"] * (upper_n - 2) + ["نخ‌های", "عمودی"]
+        )
+        reading[hits[1][0] - lo] = " ".join(
+            ["سایید", "ه", "بودند"] + ["پایین"] * (lower_n - 3)
+        )
+
+        def _reader(strips: list[bytes]) -> list[list[str]]:
+            return [list(reading) for _ in strips]
+
+        refined = refine_scan_boxes(
+            root / "source.pdf", 44, md, [q], [scan_box], _reader
+        )[0]
+        assert refined is not None and refined["source"] == "scan_vlm"
+        segments = refined["segments"]
+        assert len(segments) == 2
+        assert segments[0]["y0"] < segments[1]["y0"]
+        assert segments[0]["x1"] - segments[0]["x0"] < 0.5
+        assert segments[1]["x1"] - segments[1]["x0"] < 0.5
+        assert refined["x1"] - refined["x0"] > 0.7  # legacy envelope remains wide
     finally:
         doc.close()
 
@@ -288,6 +463,7 @@ def main() -> int:
 
     # Pure synthetic checks for the VLM strip-alignment helper.
     _check_align_strip_synthetic()
+    _check_review_segment_plumbing()
 
     # This mirrors the problematic PDF's extraction: three visible words are
     # seven fragments, and one fragment has RTL-reversed character order.
@@ -329,6 +505,7 @@ def main() -> int:
 
         # Fake-reader plumbing for the scan_vlm refinement path.
         _check_refine_plumbing(root)
+        _check_wrapped_real_case(root)
 
         # One real strip transcription (API-gated; skips without a key).
         _check_read_strips_live(root)

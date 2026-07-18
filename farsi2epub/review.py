@@ -133,6 +133,8 @@ def _json_for_script(obj) -> Markup:
 # model bbox fallback)
 # ---------------------------------------------------------------------------
 
+_LOCATE_VLM_CACHE_VERSION = 2  # v2 preserves ordered per-line segments
+
 
 @functools.lru_cache(maxsize=512)
 def _locate_queries_cached(
@@ -191,8 +193,8 @@ class _ScanBoxRefiner:
     """Upgrades "scan"-sourced boxes to VLM-verified "scan_vlm" boxes via
     locate.refine_scan_boxes, billing each (page text, query) at most once per
     book: every outcome — including a None failure — is cached in
-    books/<slug>/locate_vlm.json, keyed on a sha1 of (page_no, sha1(page_md),
-    query text, alts, span). page_md in the key gives the same invalidation
+    books/<slug>/locate_vlm.json, keyed on a sha1 of (cache version, page_no,
+    sha1(page_md), query text, alts, span). page_md in the key gives the same invalidation
     semantics as _locate_queries_cached: an Accept that rewrites the page
     re-refines fresh boxes on the next GET. Two paths share the cache:
     apply_cached (pure disk-cache lookup, never touches the API — the render
@@ -240,7 +242,14 @@ class _ScanBoxRefiner:
     def _key(page_no: int, page_md: str, q: Query) -> str:
         md_sha = hashlib.sha1(page_md.encode("utf-8")).hexdigest()
         raw = json.dumps(
-            [page_no, md_sha, q.text, list(q.alts), list(q.span) if q.span else None],
+            [
+                _LOCATE_VLM_CACHE_VERSION,
+                page_no,
+                md_sha,
+                q.text,
+                list(q.alts),
+                list(q.span) if q.span else None,
+            ],
             ensure_ascii=False,
         )
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
@@ -438,6 +447,77 @@ def _box_specs(
     return specs
 
 
+def _tear_profile(key: str, pair_index: int) -> list[tuple[float, float]]:
+    """Stable normalized (vertical-position, inward-offset) tear profile.
+
+    Adjacent RTL line segments request the same pair index on their facing
+    left/right edges, producing complementary mirrored tears. This is
+    presentation geometry only; locator/cache data remains rectangular.
+    """
+    seed = 2166136261
+    for byte in f"{key}:{pair_index}".encode("utf-8"):
+        seed ^= byte
+        seed = (seed * 16777619) & 0xFFFFFFFF
+    seed = seed or 1
+
+    def random_unit() -> float:
+        nonlocal seed
+        seed = (seed * 1664525 + 1013904223) & 0xFFFFFFFF
+        return seed / 4294967296
+
+    points = [(0.0, 0.0)]
+    steps = 15  # seven irregular peaks plus clean endpoints
+    for i in range(1, steps):
+        jitter = (random_unit() - 0.5) * 0.22
+        t = (i + jitter) / steps
+        peak = i % 2 == 1
+        offset = (
+            0.62 + random_unit() * 0.38
+            if peak
+            else 0.08 + random_unit() * 0.24
+        )
+        points.append((t, offset))
+    points.append((1.0, 0.0))
+    return points
+
+
+def _ripped_segment_points(
+    segment: dict, index: int, count: int, key: str
+) -> list[tuple[float, float]]:
+    """Clockwise SVG polygon points for one percent-coordinate segment."""
+    left_torn = index < count - 1  # RTL line exit
+    right_torn = index > 0  # RTL continuation entry
+    depth = min(0.8, max(0.06, segment["w"] * 0.16), segment["w"] * 0.24)
+
+    def edge(side: str, profile: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        x = segment["x0"] if side == "left" else segment["x1"]
+        sign = 1.0 if side == "left" else -1.0
+        return [
+            (
+                x + sign * depth * offset,
+                segment["y0"] + segment["h"] * t,
+            )
+            for t, offset in profile
+        ]
+
+    left = (
+        edge("left", _tear_profile(key, index))
+        if left_torn
+        else [(segment["x0"], segment["y0"]), (segment["x0"], segment["y1"])]
+    )
+    right = (
+        edge("right", _tear_profile(key, index - 1))
+        if right_torn
+        else [(segment["x1"], segment["y0"]), (segment["x1"], segment["y1"])]
+    )
+    return [left[0], *right, left[-1], *reversed(left[1:-1])]
+
+
+def _ripped_segment_path(segment: dict, index: int, count: int, key: str) -> str:
+    points = _ripped_segment_points(segment, index, count, key)
+    return "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in points) + " Z"
+
+
 def _attach_boxes(
     specs: list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]],
     located: list[Optional[dict]],
@@ -458,18 +538,39 @@ def _attach_boxes(
             issue["box"] = box
         if box is None:
             continue
-        boxes.append(
-            {
-                "key": key,
-                "x0": box["x0"] * 100.0,
-                "y0": box["y0"] * 100.0,
-                "x1": box["x1"] * 100.0,
-                "y1": box["y1"] * 100.0,
-                "w": (box["x1"] - box["x0"]) * 100.0,
-                "h": (box["y1"] - box["y0"]) * 100.0,
-                "source": box["source"],
-            }
-        )
+        view_box = {
+            "key": key,
+            "x0": box["x0"] * 100.0,
+            "y0": box["y0"] * 100.0,
+            "x1": box["x1"] * 100.0,
+            "y1": box["y1"] * 100.0,
+            "w": (box["x1"] - box["x0"]) * 100.0,
+            "h": (box["y1"] - box["y0"]) * 100.0,
+            "source": box["source"],
+        }
+        segments = box.get("segments")
+        if box.get("source") == "scan_vlm" and isinstance(segments, list):
+            view_box["segments"] = [
+                {
+                    "x0": segment["x0"] * 100.0,
+                    "y0": segment["y0"] * 100.0,
+                    "x1": segment["x1"] * 100.0,
+                    "y1": segment["y1"] * 100.0,
+                    "w": (segment["x1"] - segment["x0"]) * 100.0,
+                    "h": (segment["y1"] - segment["y0"]) * 100.0,
+                }
+                for segment in segments
+                if isinstance(segment, dict)
+                and all(k in segment for k in ("x0", "y0", "x1", "y1"))
+            ]
+            if len(view_box["segments"]) > 1:
+                view_box["paths"] = [
+                    _ripped_segment_path(
+                        segment, index, len(view_box["segments"]), key
+                    )
+                    for index, segment in enumerate(view_box["segments"])
+                ]
+        boxes.append(view_box)
     return boxes
 
 
@@ -1093,17 +1194,45 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .img-viewport.zoomed { cursor: grab; }
 .img-viewport.panning { cursor: grabbing; }
 .qc-box { position: absolute; border-radius: 2px; }
-.qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
-.qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
-.qc-box-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
-.qc-box-scan_vlm { border: 2px solid #2e8b57; background: rgba(46,139,87,.12); }
-.qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
-.qc-box.hot { outline: 2px solid #ffffff; }
-.qc-box.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
+.qc-box-single.qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
+.qc-box-single.qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
+.qc-box-single.qc-box-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
+.qc-box-single.qc-box-scan_vlm { border: 2px solid #2e8b57; background: rgba(46,139,87,.12); }
+.qc-box-single.qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
+.qc-box-single.hot { outline: 2px solid #ffffff; }
+.qc-box-single.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
+.qc-box-multipart {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+.qc-box-multipart .qc-box-shape {
+  fill: rgba(46,139,87,.12);
+  stroke: #2e8b57;
+  stroke-width: 2;
+  stroke-linejoin: bevel;
+  vector-effect: non-scaling-stroke;
+  pointer-events: all;
+}
+.qc-box-multipart.hot .qc-box-shape {
+  filter: drop-shadow(0 0 2px #ffffff);
+}
+.qc-box-multipart.zoom-target { z-index: 5; }
+.qc-box-multipart.zoom-target .qc-box-shape {
+  animation: qc-svg-glow 0.6s ease-in-out 2;
+}
 @keyframes qc-glow {
   0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
   50%  { box-shadow: 0 0 0 5px rgba(255,255,255,.85); }
   100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+}
+@keyframes qc-svg-glow {
+  0%   { filter: drop-shadow(0 0 0 rgba(255,255,255,0)); }
+  50%  { filter: drop-shadow(0 0 5px rgba(255,255,255,.95)); }
+  100% { filter: drop-shadow(0 0 0 rgba(255,255,255,0)); }
 }
 .hunk-item.hot { border-color: #3a9ff0; }
 .hunk-item.active {
@@ -1291,9 +1420,6 @@ button:disabled { opacity: 0.5; cursor: default; }
       <div class="img-viewport" id="viewport-{{ p.page }}" data-page="{{ p.page }}">
         <div class="img-wrap" id="imgwrap-{{ p.page }}">
           <img src="{{ p.image_url }}" alt="page {{ p.page }}">
-          {% for b in p.boxes %}
-          <div class="qc-box qc-box-{{ b.source }}" id="box-{{ p.page }}-{{ b.key }}" style="left:{{ '%.2f'|format(b.x0) }}%;top:{{ '%.2f'|format(b.y0) }}%;width:{{ '%.2f'|format(b.w) }}%;height:{{ '%.2f'|format(b.h) }}%"></div>
-          {% endfor %}
         </div>
       </div>
       {% else %}
@@ -1420,6 +1546,70 @@ function pagePayload(page) {
   } catch (e) {
     showStatus(page, 'internal error: could not parse page payload: ' + e, true);
     return null;
+  }
+}
+
+// -- finding-box rendering -------------------------------------------------
+// Refined wrapped scan findings carry ordered line-local rectangles. Their
+// stable torn SVG paths are derived server-side from the finding key and
+// rectangle geometry, never persisted in the locator cache.
+
+function setFocusGeometry(el, segment) {
+  el.setAttribute('data-focus-x0', segment.x0);
+  el.setAttribute('data-focus-y0', segment.y0);
+  el.setAttribute('data-focus-w', segment.w);
+  el.setAttribute('data-focus-h', segment.h);
+}
+
+function createBoxElement(page, b) {
+  var id = 'box-' + page + '-' + b.key;
+  var segments = b.source === 'scan_vlm' && Array.isArray(b.segments)
+    ? b.segments : [];
+  if (segments.length > 1) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'qc-box qc-box-multipart qc-box-' + b.source);
+    svg.setAttribute('id', id);
+    svg.setAttribute('viewBox', '0 0 100 100');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'multi-line located finding');
+    setFocusGeometry(svg, segments[0]);
+    for (var i = 0; i < segments.length; i++) {
+      var path = document.createElementNS(ns, 'path');
+      path.setAttribute('class', 'qc-box-shape');
+      path.setAttribute('d', b.paths[i]);
+      path.setAttribute('data-segment', i);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+  var div = document.createElement('div');
+  div.className = 'qc-box qc-box-single qc-box-' + b.source;
+  div.id = id;
+  div.style.left = b.x0.toFixed(2) + '%';
+  div.style.top = b.y0.toFixed(2) + '%';
+  div.style.width = b.w.toFixed(2) + '%';
+  div.style.height = b.h.toFixed(2) + '%';
+  setFocusGeometry(div, segments.length === 1 ? segments[0] : b);
+  return div;
+}
+
+function renderBoxes(page, boxes) {
+  var wrap = document.getElementById('imgwrap-' + page);
+  if (!wrap) return;
+  var old = wrap.querySelectorAll('.qc-box');
+  var i;
+  for (i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+  for (i = 0; i < boxes.length; i++) wrap.appendChild(createBoxElement(page, boxes[i]));
+}
+
+function renderInitialBoxes() {
+  var blocks = document.querySelectorAll('.page-block');
+  for (var i = 0; i < blocks.length; i++) {
+    var page = blocks[i].getAttribute('data-page');
+    var payload = pagePayload(page);
+    renderBoxes(page, payload && payload.boxes ? payload.boxes : []);
   }
 }
 
@@ -1702,21 +1892,22 @@ function zoomOut(page) {
   clearActiveHunk(page);
 }
 
-function zoomTo(page, boxId) {
+function zoomTo(page, boxId, forceRetarget) {
   var box = document.getElementById(boxId);
   var wrap = document.getElementById('imgwrap-' + page);
   var vp = document.getElementById('viewport-' + page);
   if (!box || !wrap || !vp) return;
   // Re-click the current target zooms back out.
-  if (zoomState[page] === boxId) { zoomOut(page); return; }
+  if (zoomState[page] === boxId && !forceRetarget) { zoomOut(page); return; }
   clearGlow(page);
 
-  // Box geometry from its CSS left/top/width/height percents (RTL-safe: these
-  // are always measured from the left edge, unlike offsetLeft/scrollLeft).
-  var fx = parseFloat(box.style.left) / 100;
-  var fy = parseFloat(box.style.top) / 100;
-  var fw = parseFloat(box.style.width) / 100;
-  var fh = parseFloat(box.style.height) / 100;
+  // Every overlay carries explicit focus geometry. For a wrapped scan_vlm
+  // finding this is segments[0] (the upper-line beginning in RTL reading
+  // order), not the page-spanning compatibility envelope.
+  var fx = parseFloat(box.getAttribute('data-focus-x0')) / 100;
+  var fy = parseFloat(box.getAttribute('data-focus-y0')) / 100;
+  var fw = parseFloat(box.getAttribute('data-focus-w')) / 100;
+  var fh = parseFloat(box.getAttribute('data-focus-h')) / 100;
   if (!(fw > 0) || !(fh > 0)) return;
 
   var vw = vp.clientWidth, vh = vp.clientHeight;
@@ -1901,24 +2092,14 @@ function applyRefinedBoxes(page, data) {
       }
     }
   }
-  // Rebuild the overlay divs (same ids/classes/percent geometry the server
-  // template emits); the hover/zoom handlers are delegated, so recreated
-  // boxes keep working without rebinding.
-  var wrap = document.getElementById('imgwrap-' + page);
-  if (!wrap) return;
-  var old = wrap.querySelectorAll('.qc-box');
-  for (i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
-  var boxes = data.boxes || [];
-  for (i = 0; i < boxes.length; i++) {
-    var b = boxes[i];
-    var div = document.createElement('div');
-    div.className = 'qc-box qc-box-' + b.source;
-    div.id = 'box-' + page + '-' + b.key;
-    div.style.left = b.x0.toFixed(2) + '%';
-    div.style.top = b.y0.toFixed(2) + '%';
-    div.style.width = b.w.toFixed(2) + '%';
-    div.style.height = b.h.toFixed(2) + '%';
-    wrap.appendChild(div);
+  // Initial and progressively-refined overlays share the same renderer. If
+  // this page was already zoomed, keep it active and recenter on the refined
+  // beginning segment rather than toggling out.
+  var activeId = zoomState[page] || null;
+  renderBoxes(page, data.boxes || []);
+  if (activeId) {
+    if (document.getElementById(activeId)) zoomTo(page, activeId, true);
+    else zoomOut(page);
   }
 }
 
@@ -1956,6 +2137,7 @@ function startBoxPolling() {
     offset += 350;
   }
 }
+renderInitialBoxes();
 startBoxPolling();
 
 document.getElementById('done-link').addEventListener('click', async function (ev) {
@@ -2082,6 +2264,7 @@ def _page_view(ws: Workspace, n: int) -> dict:
         "page": n,
         "issues": issues,
         "hunks": hunks,
+        "boxes": boxes,
         "has_suggestion": has_suggestion,
         "suggestion_matches_current": matches_current,
     }

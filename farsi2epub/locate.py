@@ -23,8 +23,9 @@ None. review.py then falls back to the QC verifier's model bbox (Tier D) when
 this returns None. Scan-sourced boxes can afterwards be upgraded by
 ``refine_scan_boxes`` (source "scan_vlm"): a caller-injected VLM reader
 transcribes clean strip crops of the hit line(s) and the query is re-aligned
-onto the detected word rectangles — locate.py itself never imports an LLM
-client.
+onto the detected word rectangles. Refined results preserve an ordered
+``segments`` list (one rectangle per printed line) as well as the legacy union
+envelope — locate.py itself never imports an LLM client.
 
 Coordinates are 0-1 fractions of the page (x0,y0,x1,y1) plus a "source" of
 "match", "layout", or "scan"; review.py scales them to CSS percentages.
@@ -807,7 +808,7 @@ def _align_strip(
     vlm_lines: list[str],
     strip_lines: list[_ScanLine],
     prior_center: Optional[fitz.Point],
-) -> Optional[fitz.Rect]:
+) -> Optional[list[fitz.Rect]]:
     """Align a query (any of its normalized-word variants) inside a VLM strip
     transcription and map the winning window back onto detected word rects.
 
@@ -815,8 +816,10 @@ def _align_strip(
     arrive top-to-bottom; VLM words within a line are in reading order and
     `_ScanLine.words` is already RTL reading order (rightmost first), so word
     index i of a VLM line corresponds to `words[i]` whenever counts agree.
-    Returns a page-coordinate rect, or None when no window reaches
-    _REFINE_ACCEPT.
+    Returns page-coordinate rectangles in printed reading order, one unioned
+    rectangle per covered line, or None when no window reaches _REFINE_ACCEPT.
+    Keeping line-local geometry here prevents a wrapped RTL phrase from
+    collapsing into a page-width diagonal envelope.
     """
     vwords = [_norm_words(t) for t in vlm_lines]
     flat: list[tuple[int, int, str]] = []  # (vlm line, in-line index, word)
@@ -856,7 +859,7 @@ def _align_strip(
 
     counts_agree = len(vlm_lines) == len(strip_lines)
 
-    def _window_rect(start: int, L: int) -> Optional[fitz.Rect]:
+    def _window_rects(start: int, L: int) -> Optional[list[fitz.Rect]]:
         window = flat[start : start + L]
         if not counts_agree:
             # The VLM segmented the strip into a different number of lines
@@ -869,22 +872,32 @@ def _align_strip(
             c0 = sum(len(w) for _j, _i, w in flat[:start])
             c1 = c0 + sum(len(w) for _j, _i, w in window)
             u0, u1 = c0 / total_chars, c1 / total_chars
-            rects_ro = [r for line in strip_lines for r in line.words]
-            total_w = sum(r.width for r in rects_ro)
+            rects_ro = [
+                (line_idx, r)
+                for line_idx, line in enumerate(strip_lines)
+                for r in line.words
+            ]
+            total_w = sum(r.width for _line_idx, r in rects_ro)
             if not rects_ro or total_w <= 0:
                 return None
-            selected: list[fitz.Rect] = []
+            selected: list[tuple[int, fitz.Rect]] = []
             cum = 0.0
-            for r in rects_ro:
+            for line_idx, r in rects_ro:
                 w0 = cum / total_w
                 w1 = (cum + r.width) / total_w
                 if w1 > u0 and w0 < u1:
-                    selected.append(r)
+                    selected.append((line_idx, r))
                 cum += r.width
             if not selected:
                 idx = min(int(u0 * len(rects_ro)), len(rects_ro) - 1)
                 selected = [rects_ro[idx]]
-            return _union_rects(selected)
+            by_detected_line: dict[int, list[fitz.Rect]] = {}
+            for line_idx, rect in selected:
+                by_detected_line.setdefault(line_idx, []).append(rect)
+            return [
+                _union_rects(by_detected_line[line_idx])
+                for line_idx in sorted(by_detected_line)
+            ]
 
         rects: list[fitz.Rect] = []
         by_line: dict[int, list[int]] = {}  # window words are contiguous per line
@@ -894,7 +907,7 @@ def _align_strip(
             line = strip_lines[j]
             ws = vwords[j]
             if line.words and len(ws) == len(line.words):
-                rects.extend(line.words[i] for i in idxs)
+                rects.append(_union_rects([line.words[i] for i in idxs]))
             else:
                 # Word segmentation disagrees on this line only: place the
                 # covered folded-char run proportionally within the line.
@@ -902,31 +915,33 @@ def _align_strip(
                 i0, i1 = min(idxs), max(idxs)
                 c0 = sum(len(w) for w in ws[:i0])
                 c1 = sum(len(w) for w in ws[: i1 + 1])
-                rects.append(_scan_line_extent(line, c0 / total, c1 / total))
-        return _union_rects(rects) if rects else None
+                if total:
+                    rects.append(_scan_line_extent(line, c0 / total, c1 / total))
+        return rects or None
 
     best_start, best_L = candidates[0][1], candidates[0][2]
     if prior_center is not None:
         # Mirror _MATCH_TIE handling: among near-best windows prefer the one
         # whose center is closest to the original scan placement.
         best_d: Optional[float] = None
-        best_rect: Optional[fitz.Rect] = None
+        best_rects: Optional[list[fitz.Rect]] = None
         for score, start, L in candidates:
             if score < top_score - _MATCH_TIE:
                 break
-            r = _window_rect(start, L)
-            if r is None:
+            rects = _window_rects(start, L)
+            if rects is None:
                 continue
+            r = _union_rects(rects)
             d = (
                 ((r.x0 + r.x1) / 2 - prior_center.x) ** 2
                 + ((r.y0 + r.y1) / 2 - prior_center.y) ** 2
             )
             if best_d is None or d < best_d:
                 best_d = d
-                best_rect = r
-        if best_rect is not None:
-            return best_rect
-    return _window_rect(best_start, best_L)
+                best_rects = rects
+        if best_rects is not None:
+            return best_rects
+    return _window_rects(best_start, best_L)
 
 
 def refine_scan_boxes(
@@ -946,9 +961,10 @@ def refine_scan_boxes(
     query (and any Query.alts) inside the reading and snap it onto the
     detected word rectangles: line identification becomes exact, within-line
     placement a word-index lookup. Failures widen to +-2 lines for one more
-    batched call. Returns per query a box with source "scan_vlm", or None
-    (non-scan position, or refinement failed — the caller keeps the plain
-    scan box).
+    batched call. Returns per query a box with source "scan_vlm", an ordered
+    per-line ``segments`` list, and the segments' union as the legacy envelope;
+    or None (non-scan position, or refinement failed — the caller keeps the
+    plain scan box).
     """
     results: list[Optional[dict]] = [None] * len(queries)
     todo = [
@@ -1013,17 +1029,20 @@ def refine_scan_boxes(
             for i in pending:
                 si = strip_of.get(i)
                 reading = readings[si] if si is not None and si < len(readings) else []
-                rect = None
+                rects = None
                 if reading:
                     lo, hi = strip_range[si]
-                    rect = _align_strip(
+                    rects = _align_strip(
                         variants[i], reading, lines[lo : hi + 1], priors[i]
                     )
-                if rect is None:
+                if not rects:
                     failed.append(i)
                     continue
-                box = _rect_to_fracs(rect, page.rect)
+                box = _rect_to_fracs(_union_rects(rects), page.rect)
                 box["source"] = "scan_vlm"
+                box["segments"] = [
+                    _rect_to_fracs(rect, page.rect) for rect in rects
+                ]
                 results[i] = box
             pending = failed
         return results
