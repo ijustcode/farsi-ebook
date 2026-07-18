@@ -297,6 +297,72 @@ def qc_verify_page(
     return report, usage, cost_of(response.usage, model)
 
 
+class StripReading(BaseModel):
+    strip_index: int = Field(description="The number from the strip's 'Strip N:' label.")
+    lines: list[str] = Field(
+        description="The strip's printed text lines, top to bottom, one list entry per printed line."
+    )
+
+
+class StripReadings(BaseModel):
+    strips: list[StripReading] = Field(description="One reading per strip, in the order the strips were given.")
+
+
+READ_STRIPS_SYSTEM = """You receive several narrow strips cropped from a scanned Persian (Farsi) book page, each preceded by a label like "Strip 1:". Transcribe each strip exactly as printed.
+
+- One list entry per printed text line, top to bottom. Never merge two printed lines into one entry and never split one printed line across entries.
+- Plain text only: no Markdown, no heading syntax (#), no corrections, no modernized spelling. Transcribe what is printed.
+- Use standard Persian codepoints: always ی (U+06CC) and ک (U+06A9), never Arabic ي or ك. Keep zero-width non-joiner (U+200C) where the print shows joined-boundary compounds (می‌رود، کتاب‌ها).
+- A strip may clip letters or dots at its top or bottom edge; transcribe the line anyway as best you can.
+- If a word is hard to read, give your best guess rather than omitting it. Never leave out a line.
+- Echo each strip's label number as strip_index."""
+
+
+def read_strips(
+    client: anthropic.Anthropic,
+    png_strips: list[bytes],
+    model: str,
+    page_no: int,
+) -> tuple[list[list[str]], dict, float]:
+    """Transcribe cropped line-strips of one scanned page in a single batched
+    call. Returns (per-strip line lists, usage_dict, cost_usd). Slots are
+    filled by the model's strip_index; a strip it skipped or mislabeled yields
+    [] rather than raising."""
+    content: list[dict] = []
+    for i, png in enumerate(png_strips):
+        content.append({"type": "text", "text": f"Strip {i + 1}:"})
+        content.append(_image_block(png))
+    content.append(
+        {"type": "text", "text": f"Transcribe each of the {len(png_strips)} strips above per the system instructions."}
+    )
+    kwargs: dict = {}
+    if model.startswith("claude-sonnet-5"):
+        # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
+        kwargs["thinking"] = {"type": "disabled"}
+
+    def _call():
+        response = client.messages.parse(
+            model=model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=READ_STRIPS_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            output_format=StripReadings,
+            **kwargs,
+        )
+        if response.parsed_output is None:
+            raise RuntimeError(f"Model {model} returned unparseable strip readings for page {page_no}")
+        return response
+
+    response = _call_with_retry(_call, page_no=page_no, what="read_strips")
+    slots: list[list[str]] = [[] for _ in png_strips]
+    for reading in response.parsed_output.strips:
+        idx = reading.strip_index - 1  # labels are 1-based
+        if 0 <= idx < len(slots):
+            slots[idx] = list(reading.lines)
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return slots, usage, cost_of(response.usage, model)
+
+
 def propose_metadata(
     client: anthropic.Anthropic, png_pages: list[bytes], model: str
 ) -> tuple[Optional[BookMetadata], float]:

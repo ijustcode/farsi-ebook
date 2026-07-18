@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import difflib
 import functools
+import hashlib
 import json
 import math
 import os
+import queue
 import re
 import socket
 import subprocess
@@ -32,8 +34,9 @@ from urllib.parse import urlparse
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import qc
-from .locate import Query, locate_queries
+from . import llm, qc
+from .config import MODEL_STRONG
+from .locate import Query, locate_queries, refine_scan_boxes
 from .workspace import PROJECT_ROOT, Workspace
 
 DEFAULT_PORT = 8765
@@ -126,7 +129,8 @@ def _json_for_script(obj) -> Markup:
 
 
 # ---------------------------------------------------------------------------
-# QC box overlays (tiered locate.py match/layout + model bbox fallback)
+# QC box overlays (tiered locate.py match/layout/scan, VLM-refined scan_vlm,
+# model bbox fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -183,28 +187,218 @@ def _bbox_to_box(bbox) -> Optional[dict]:
     return {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "source": "model"}
 
 
-def _build_boxes(
-    ws: Workspace,
-    n: int,
+class _ScanBoxRefiner:
+    """Upgrades "scan"-sourced boxes to VLM-verified "scan_vlm" boxes via
+    locate.refine_scan_boxes, billing each (page text, query) at most once per
+    book: every outcome — including a None failure — is cached in
+    books/<slug>/locate_vlm.json, keyed on a sha1 of (page_no, sha1(page_md),
+    query text, alts, span). page_md in the key gives the same invalidation
+    semantics as _locate_queries_cached: an Accept that rewrites the page
+    re-refines fresh boxes on the next GET. Two paths share the cache:
+    apply_cached (pure disk-cache lookup, never touches the API — the render
+    path and /boxes route use it so GET / is instant) and refine (the
+    API-calling warmer, driven by the background pipeline and bbox_eval). The
+    instance lock guards only the cache dict, its atomic file save, and the
+    in-flight key set — the API call itself runs outside it so several pages
+    refine concurrently; keys registered in-flight are skipped by other
+    callers instead of blocking (a later poll picks the results up). The
+    anthropic client is created lazily on the first strip actually sent.
+    """
+
+    def __init__(self, ws: Workspace, model: str):
+        self.ws = ws
+        self.model = model
+        self.cache_path = ws.root / "locate_vlm.json"
+        self.lock = threading.Lock()
+        self._cache: Optional[dict] = None
+        self._client = None
+        self._inflight: set[str] = set()
+
+    def _load_cache(self) -> dict:
+        if self._cache is None:
+            try:
+                with open(self.cache_path, "r", encoding="utf-8") as f:
+                    self._cache = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                self._cache = {}
+        return self._cache
+
+    def _save_cache(self) -> None:
+        """Atomic cache write (temp file + os.replace), same as the sidecars."""
+        tmp_path = self.cache_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(self._cache, f, ensure_ascii=False)
+        os.replace(tmp_path, self.cache_path)
+
+    def _get_client(self):
+        with self.lock:
+            if self._client is None:
+                self._client = llm.get_client()
+            return self._client
+
+    @staticmethod
+    def _key(page_no: int, page_md: str, q: Query) -> str:
+        md_sha = hashlib.sha1(page_md.encode("utf-8")).hexdigest()
+        raw = json.dumps(
+            [page_no, md_sha, q.text, list(q.alts), list(q.span) if q.span else None],
+            ensure_ascii=False,
+        )
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _scan_indices(boxes: list[Optional[dict]]) -> list[int]:
+        return [
+            i for i, b in enumerate(boxes) if b is not None and b.get("source") == "scan"
+        ]
+
+    def apply_cached(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+    ) -> list[Optional[dict]]:
+        """Return `boxes` with scan-sourced entries upgraded to their cached
+        scan_vlm box where one exists. Pure disk-cache lookup — never creates
+        a client or calls the API, so it is safe (and fast) on the render
+        path; uncached entries pass through as plain scan boxes.
+        """
+        scan_idx = self._scan_indices(boxes)
+        if not scan_idx:
+            return boxes
+        out = list(boxes)
+        with self.lock:
+            cache = self._load_cache()
+            for i in scan_idx:
+                entry = cache.get(self._key(page_no, page_md, queries[i]))
+                if entry and entry.get("box"):
+                    out[i] = dict(entry["box"])
+        return out
+
+    def pending(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+    ) -> bool:
+        """True when any scan-sourced entry in `boxes` (the raw located boxes,
+        before apply_cached upgrades) has no cache entry yet — i.e. the
+        background pipeline still owes this page a refinement pass. Negative
+        cache entries count as resolved.
+        """
+        scan_idx = self._scan_indices(boxes)
+        if not scan_idx:
+            return False
+        with self.lock:
+            cache = self._load_cache()
+            return any(
+                self._key(page_no, page_md, queries[i]) not in cache for i in scan_idx
+            )
+
+    def refine(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+    ) -> list[Optional[dict]]:
+        """Return `boxes` with scan-sourced entries upgraded to their refined
+        scan_vlm box where refinement succeeded (cached or fresh); every other
+        entry — match/layout hits, Nones — passes through untouched. Called by
+        the background pipeline and tests/bbox_eval.py, never by the render
+        path. Logs one stderr line per page that actually called the API;
+        cache-only pages log nothing. Keys another thread is already refining
+        are skipped, not waited on — the caller's next cache read sees them.
+        """
+        scan_idx = self._scan_indices(boxes)
+        if not scan_idx:
+            return boxes
+        out = list(boxes)
+        keys = {i: self._key(page_no, page_md, queries[i]) for i in scan_idx}
+        with self.lock:
+            cache = self._load_cache()
+            for i in scan_idx:
+                entry = cache.get(keys[i])
+                if entry and entry.get("box"):
+                    out[i] = dict(entry["box"])
+            # Claim only keys nobody has cached or is currently refining; the
+            # claim (not the whole API round-trip) is what the lock protects.
+            uncached = {
+                i
+                for i in scan_idx
+                if keys[i] not in cache and keys[i] not in self._inflight
+            }
+            if not uncached:
+                return out
+            self._inflight.update(keys[i] for i in uncached)
+
+        try:
+            total_cost = 0.0
+            total_strips = 0
+
+            def _read(strips: list[bytes]) -> list[list[str]]:
+                nonlocal total_cost, total_strips
+                lines, _usage, cost = llm.read_strips(
+                    self._get_client(), strips, self.model, page_no
+                )
+                total_cost += cost
+                total_strips += len(strips)
+                return lines
+
+            # Mask cached/in-flight positions so refine_scan_boxes only works
+            # (and the VLM only reads strips for) positions we claimed. The
+            # API call runs outside the lock so pages refine concurrently.
+            masked: list[Optional[dict]] = [
+                boxes[i] if i in uncached else None for i in range(len(boxes))
+            ]
+            refined = refine_scan_boxes(
+                str(self.ws.pdf_path), page_no, page_md, queries, masked, _read
+            )
+            per_cost = total_cost / len(uncached)
+            with self.lock:
+                cache = self._load_cache()
+                for i in uncached:
+                    box = refined[i] if i < len(refined) else None
+                    cache[keys[i]] = {"box": box, "cost": per_cost}
+                    if box is not None:
+                        out[i] = dict(box)
+                self._save_cache()
+            if total_strips:
+                print(
+                    f"bbox refine p{page_no}: {total_strips} strips, ${total_cost:.4f}",
+                    file=sys.stderr,
+                )
+        finally:
+            with self.lock:
+                self._inflight.difference_update(keys[i] for i in uncached)
+        return out
+
+
+# Configured by run_review (None = refinement off: disabled by flag, no API
+# key, or review.py used outside the server e.g. in tests).
+_REFINER: Optional[_ScanBoxRefiner] = None
+
+
+def _box_specs(
     issues: list[dict],
     hunks: list[dict],
     text: str,
-) -> list[dict]:
-    """Attach a "box" (0-1 fractions + source, or None) to every hunk and
-    every issue, and return the template-facing box list (percent values).
+) -> list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]]:
+    """Locate-query specs for a page's hunks and unlinked issues:
+    (key, Query, model-bbox fallback, hunk-or-None, issue-or-None). Shared by
+    _build_boxes, the /boxes route, and the background refine pipeline so all
+    three derive byte-identical queries — and therefore identical VLM cache
+    keys.
 
     Per hunk the query is its old text at its exact markdown span (computed via
     nth-occurrence of ctx_before+old+ctx_after, mirroring the JS apply logic);
     whitespace-only hunks query the whole context window (old alone may be pure
     whitespace). Issues not linked to any hunk are queried by their snippet.
-    A tiered locate.py hit ("match"/"layout") wins; otherwise the (linked)
-    issue's model-estimated sidecar bbox ("model"); otherwise no box.
+    Non-whitespace hunks also carry the capped corrected text as a Query alt:
+    for wrong-word findings the old text is exactly what the image does NOT
+    say, so refinement also tries the fix.
     """
-    for iss in issues:
-        iss.setdefault("box", None)
-    if not issues and not hunks:
-        return []
-
     linked = {h["issue_idx"] for h in hunks if h["issue_idx"] is not None}
     specs: list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]] = []
     for h in hunks:
@@ -229,18 +423,29 @@ def _build_boxes(
         # text is untouched — only where we draw/zoom the box changes.
         qtext_c = _cap_words(qtext)
         span_c = (span[0], span[0] + len(qtext_c)) if span is not None else None
-        specs.append((f"h{h['id']}", Query(qtext_c, span_c), fallback, h, None))
+        alts: tuple[str, ...] = ()
+        if not h["ws_only"]:
+            new_c = _cap_words(h["new"])
+            if new_c:
+                alts = (new_c,)
+        specs.append((f"h{h['id']}", Query(qtext_c, span_c, alts), fallback, h, None))
     for i, iss in enumerate(issues):
         if i in linked:
             continue
         specs.append(
             (f"i{i}", Query(_cap_words(iss.get("snippet") or ""), None), iss.get("bbox"), None, iss)
         )
+    return specs
 
-    located: tuple = _locate_queries_cached(
-        str(ws.pdf_path), n, text, tuple(s[1] for s in specs)
-    )
 
+def _attach_boxes(
+    specs: list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]],
+    located: list[Optional[dict]],
+) -> list[dict]:
+    """Set "box" on each spec's hunk/issue from its located box (falling back
+    to the model-estimated sidecar bbox) and return the template-facing box
+    list (percent values). Shared by _build_boxes and the /boxes route.
+    """
     boxes: list[dict] = []
     for (key, _query, fallback, hunk, issue), loc in zip(specs, located):
         if loc:
@@ -266,6 +471,82 @@ def _build_boxes(
             }
         )
     return boxes
+
+
+def _build_boxes(
+    ws: Workspace,
+    n: int,
+    issues: list[dict],
+    hunks: list[dict],
+    text: str,
+) -> list[dict]:
+    """Attach a "box" (0-1 fractions + source, or None) to every hunk and
+    every issue, and return the template-facing box list (percent values).
+
+    A tiered locate.py hit ("match"/"layout"/"scan") wins; otherwise the
+    (linked) issue's model-estimated sidecar bbox ("model"); otherwise no box.
+    When a refiner is configured, "scan" boxes (proportional pixel estimates,
+    often a few words off) are upgraded to their disk-cached VLM-verified
+    "scan_vlm" boxes — cache lookups only, never the API, so rendering stays
+    instant: the background pipeline warms the cache and the browser polls
+    /boxes/<n> to swap refined boxes in. Any failure degrades to the
+    un-refined boxes, same philosophy as _locate_queries_cached.
+    """
+    for iss in issues:
+        iss.setdefault("box", None)
+    if not issues and not hunks:
+        return []
+
+    specs = _box_specs(issues, hunks, text)
+    located = list(
+        _locate_queries_cached(str(ws.pdf_path), n, text, tuple(s[1] for s in specs))
+    )
+
+    refiner = _REFINER
+    if refiner is not None:
+        try:
+            located = refiner.apply_cached(n, text, [s[1] for s in specs], located)
+        except Exception:
+            pass
+
+    return _attach_boxes(specs, located)
+
+
+def _boxes_payload(ws: Workspace, n: int) -> dict:
+    """JSON body for GET /boxes/<n>: {"pending": true} while the background
+    pipeline still owes the page uncached scan refinements, else the full
+    refreshed geometry — "boxes" in the template's percent form plus
+    "hunk_boxes"/"issue_boxes" maps in the payload's 0-1-fraction form so the
+    client can patch click-to-zoom data in place. Runs only the cheap tiers
+    and cache lookups; never the API. With no refiner configured the answer
+    is always non-pending.
+    """
+    _sidecar, issues, hunks, text, _panel_kind = _page_box_inputs(ws, n)
+    for iss in issues:
+        iss.setdefault("box", None)
+    if not issues and not hunks:
+        return {"pending": False, "boxes": [], "hunk_boxes": {}, "issue_boxes": {}}
+
+    specs = _box_specs(issues, hunks, text)
+    queries = [s[1] for s in specs]
+    located = list(_locate_queries_cached(str(ws.pdf_path), n, text, tuple(queries)))
+
+    refiner = _REFINER
+    if refiner is not None:
+        try:
+            if refiner.pending(n, text, queries, located):
+                return {"pending": True}
+            located = refiner.apply_cached(n, text, queries, located)
+        except Exception:
+            pass
+
+    boxes = _attach_boxes(specs, located)
+    return {
+        "pending": False,
+        "boxes": boxes,
+        "hunk_boxes": {str(h["id"]): h.get("box") for h in hunks},
+        "issue_boxes": {str(i): iss.get("box") for i, iss in enumerate(issues)},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +1096,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
 .qc-box-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
 .qc-box-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
+.qc-box-scan_vlm { border: 2px solid #2e8b57; background: rgba(46,139,87,.12); }
 .qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .qc-box.hot { outline: 2px solid #ffffff; }
 .qc-box.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
@@ -849,6 +1131,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .legend-swatch.legend-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
 .legend-swatch.legend-layout { border: 2px solid #2fb6a8; background: rgba(47,182,168,.12); }
 .legend-swatch.legend-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
+.legend-swatch.legend-scan_vlm { border: 2px solid #2e8b57; background: rgba(46,139,87,.12); }
 .legend-swatch.legend-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .page-block .col-text { flex: 0 0 48%; max-width: 48%; display: flex; flex-direction: column; }
 .meta-row {
@@ -985,6 +1268,7 @@ button.accept { background: #2fa35a; color: white; border-color: #2fa35a; }
 button:disabled { opacity: 0.5; cursor: default; }
 .status-note { font-size: 0.85rem; color: #8fce9f; direction: ltr; align-self: center; }
 .status-note.err { color: #f5b5b8; }
+.meta-row span.pill.refine-chip { color: #9a9ba3; border-color: #3a3b42; font-size: 0.75rem; }
 </style>
 </head>
 <body>
@@ -1087,6 +1371,7 @@ button:disabled { opacity: 0.5; cursor: default; }
           <span><span class="legend-swatch legend-match"></span>located (word match)</span>
           <span><span class="legend-swatch legend-layout"></span>located (layout)</span>
           <span><span class="legend-swatch legend-scan"></span>located (image layout)</span>
+          <span><span class="legend-swatch legend-scan_vlm"></span>located (image + VLM)</span>
           <span><span class="legend-swatch legend-model"></span>model estimate</span>
         </div>
         {% endif %}
@@ -1103,6 +1388,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   {% endfor %}
 </main>
 <script>
+var BBOX_REFINE = {{ 'true' if bbox_refine else 'false' }};
 var payloadCache = {};
 var hunkState = {};
 
@@ -1331,6 +1617,7 @@ async function acceptPage(page) {
       showStatus(page, msg, false);
       markDone(page);
       disablePage(page);
+      stopBoxPolling(page);
     } else {
       showStatus(page, 'error: ' + (data.error || 'unknown'), true);
     }
@@ -1554,6 +1841,123 @@ document.addEventListener('keydown', function (ev) {
   }
 });
 
+// -- progressive scan_vlm box refinement -----------------------------------
+// While the background pipeline warms the VLM cache, pages whose payload
+// still carries plain "scan" boxes poll /boxes/<n> and swap the refined
+// geometry in place. Gated on BBOX_REFINE so a --no-bbox-refine server
+// (scan boxes present but never refined) never polls.
+var pollTimers = {};
+
+function hasScanBox(p) {
+  var lists = [p.hunks || [], p.issues || []];
+  for (var li = 0; li < lists.length; li++) {
+    for (var i = 0; i < lists[li].length; i++) {
+      var b = lists[li][i].box;
+      if (b && b.source === 'scan') return true;
+    }
+  }
+  return false;
+}
+
+function setRefineChip(page, show) {
+  var el = document.getElementById('refine-chip-' + page);
+  if (show && !el) {
+    var row = document.querySelector('#block-' + page + ' .meta-row');
+    if (!row) return;
+    el = document.createElement('span');
+    el.className = 'pill refine-chip';
+    el.id = 'refine-chip-' + page;
+    el.setAttribute('dir', 'rtl');
+    el.setAttribute('lang', 'fa');
+    el.textContent = 'دقت جعبه‌ها در حال بهبود…';
+    row.appendChild(el);
+  } else if (!show && el) {
+    el.parentNode.removeChild(el);
+  }
+}
+
+function stopBoxPolling(page) {
+  if (pollTimers[page]) {
+    clearTimeout(pollTimers[page]);
+    delete pollTimers[page];
+  }
+  setRefineChip(page, false);
+}
+
+function applyRefinedBoxes(page, data) {
+  // Patch the in-memory payload (pagePayload always serves from payloadCache
+  // once parsed) so click-to-zoom and hunk apply use the new geometry.
+  var p = pagePayload(page);
+  var i;
+  if (p) {
+    if (p.hunks) {
+      for (i = 0; i < p.hunks.length; i++) {
+        p.hunks[i].box = data.hunk_boxes[String(p.hunks[i].id)] || null;
+      }
+    }
+    if (p.issues) {
+      for (i = 0; i < p.issues.length; i++) {
+        p.issues[i].box = data.issue_boxes[String(i)] || null;
+      }
+    }
+  }
+  // Rebuild the overlay divs (same ids/classes/percent geometry the server
+  // template emits); the hover/zoom handlers are delegated, so recreated
+  // boxes keep working without rebinding.
+  var wrap = document.getElementById('imgwrap-' + page);
+  if (!wrap) return;
+  var old = wrap.querySelectorAll('.qc-box');
+  for (i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+  var boxes = data.boxes || [];
+  for (i = 0; i < boxes.length; i++) {
+    var b = boxes[i];
+    var div = document.createElement('div');
+    div.className = 'qc-box qc-box-' + b.source;
+    div.id = 'box-' + page + '-' + b.key;
+    div.style.left = b.x0.toFixed(2) + '%';
+    div.style.top = b.y0.toFixed(2) + '%';
+    div.style.width = b.w.toFixed(2) + '%';
+    div.style.height = b.h.toFixed(2) + '%';
+    wrap.appendChild(div);
+  }
+}
+
+function pollBoxes(page) {
+  fetch('/boxes/' + page).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function (data) {
+    if (!pollTimers[page]) return;  // stopped (e.g. page accepted) mid-flight
+    if (data.pending) return;       // pipeline still working; keep polling
+    applyRefinedBoxes(page, data);
+    stopBoxPolling(page);
+  }).catch(function () { /* transient error; the next tick retries */ });
+}
+
+function startBoxPolling() {
+  if (!BBOX_REFINE) return;
+  var blocks = document.querySelectorAll('.page-block');
+  var offset = 0;
+  for (var i = 0; i < blocks.length; i++) {
+    var block = blocks[i];
+    if (block.classList.contains('done')) continue;
+    var page = block.getAttribute('data-page');
+    var p = pagePayload(page);
+    if (!p || !hasScanBox(p)) continue;
+    setRefineChip(page, true);
+    // Self-rescheduling timeout (not setInterval) with staggered first
+    // ticks, so a big book's polls don't all burst at once.
+    (function (pg, delay) {
+      pollTimers[pg] = setTimeout(function tick() {
+        pollBoxes(pg);
+        if (pollTimers[pg]) pollTimers[pg] = setTimeout(tick, 2500);
+      }, delay);
+    })(page, offset);
+    offset += 350;
+  }
+}
+startBoxPolling();
+
 document.getElementById('done-link').addEventListener('click', async function (ev) {
   ev.preventDefault();
   await fetch('/quit', {method: 'POST'});
@@ -1573,25 +1977,24 @@ def _relpath_for_image(ws: Workspace, path: Path) -> str:
     return "/media/" + str(rel).replace("\\", "/")
 
 
-def _page_view(ws: Workspace, n: int) -> dict:
-    """Build the template + payload model for one surfaced page."""
+def _page_box_inputs(
+    ws: Workspace, n: int
+) -> tuple[dict, list[dict], list[dict], str, Optional[str]]:
+    """(sidecar, issues, hunks, text, panel_kind) for page `n` — everything
+    box-building needs, derived once here so _page_view, the /boxes route,
+    the background refine pipeline, and tests/bbox_eval.py all agree.
+    panel_kind is None when the page has no pending QC suggestion (issues and
+    hunks are then empty and no boxes get built), else "no_suggestion" /
+    "identical" / "hunks".
+    """
     sidecar = _read_sidecar(ws, n)
     md_path = ws.page_md_path(n)
     text = md_path.read_text(encoding="utf-8") if md_path.is_file() else ""
-    img_path = _image_path_for(ws, n)
-    reviewed = bool(sidecar.get("reviewed")) and not sidecar.get("needs_review")
-
-    validator_issues = (sidecar.get("validators") or {}).get("issues") or []
-    qc_data = sidecar.get("qc")
-    qc_issue_types = [i.get("type") for i in (qc_data or {}).get("issues", []) or []]
 
     issues: list[dict] = []
     hunks: list[dict] = []
-    qc_panel: Optional[dict] = None
     panel_kind: Optional[str] = None
-    has_suggestion = False
-    matches_current = False
-
+    qc_data = sidecar.get("qc")
     if (
         qc_data
         and qc_data.get("verdict") == "fail"
@@ -1610,11 +2013,8 @@ def _page_view(ws: Workspace, n: int) -> dict:
         if suggested is None:
             panel_kind = "no_suggestion"
         elif suggested == text:
-            has_suggestion = True
-            matches_current = True
             panel_kind = "identical"
         else:
-            has_suggestion = True
             panel_kind = "hunks"
             hunks = _derive_hunks(text, suggested)
             _link_issues_to_hunks(issues, hunks)
@@ -1623,6 +2023,23 @@ def _page_view(ws: Workspace, n: int) -> dict:
         # no_suggestion/identical page, or unlinked issues on a hunks page)
         # gets an edit-only hunk so it can still be corrected in place.
         hunks += _derive_finding_hunks(text, issues, hunks)
+
+    return sidecar, issues, hunks, text, panel_kind
+
+
+def _page_view(ws: Workspace, n: int) -> dict:
+    """Build the template + payload model for one surfaced page."""
+    sidecar, issues, hunks, text, panel_kind = _page_box_inputs(ws, n)
+    img_path = _image_path_for(ws, n)
+    reviewed = bool(sidecar.get("reviewed")) and not sidecar.get("needs_review")
+
+    validator_issues = (sidecar.get("validators") or {}).get("issues") or []
+    qc_data = sidecar.get("qc")
+    qc_issue_types = [i.get("type") for i in (qc_data or {}).get("issues", []) or []]
+
+    qc_panel: Optional[dict] = None
+    has_suggestion = panel_kind in ("identical", "hunks")
+    matches_current = panel_kind == "identical"
 
     # Overlay boxes: sets "box" on each hunk / unlinked issue, returns the
     # template list (percent geometry). Must run before view_hunks copies.
@@ -1690,6 +2107,7 @@ def _render_index(
     ws: Workspace,
     surfaced: list[int],
     skipped: list[int],
+    bbox_refine: bool = False,
 ) -> str:
     pages = [_page_view(ws, n) for n in surfaced]
     reviewed_count = sum(1 for p in pages if p["reviewed"])
@@ -1699,6 +2117,7 @@ def _render_index(
         skipped=skipped,
         reviewed_count=reviewed_count,
         total_count=len(pages),
+        bbox_refine=bbox_refine,
     )
 
 
@@ -1724,6 +2143,57 @@ class _ReviewState:
         self.suggestion_edited = 0
         self.suggestion_rejected = 0
         self.httpd: Optional[ThreadingHTTPServer] = None
+
+
+# Background scan-box refinement fan-out. The render path never calls the
+# API, so these workers are what actually warms locate_vlm.json; the browser
+# polls /boxes/<n> and swaps refined boxes in as pages complete.
+_REFINE_WORKERS = 4
+
+
+def _start_refine_pipeline(state: _ReviewState) -> None:
+    """Warm the VLM box cache for every surfaced page, in review order, on
+    _REFINE_WORKERS daemon threads. Each worker rebuilds a page's queries and
+    located boxes exactly the way _build_boxes does, then calls
+    refiner.refine — the refiner's in-flight set keeps two workers (or a
+    worker and bbox_eval) from double-billing the same keys. Per-page errors
+    are logged and skipped; the page just keeps its plain scan boxes.
+    """
+    refiner = _REFINER
+    if refiner is None:
+        return
+    todo: queue.Queue[int] = queue.Queue()
+    for n in state.surfaced:
+        todo.put(n)
+    print(
+        f"bbox refine: background pipeline over {len(state.surfaced)} pages "
+        f"({_REFINE_WORKERS} workers)",
+        file=sys.stderr,
+    )
+
+    def _worker() -> None:
+        while True:
+            try:
+                n = todo.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                _sidecar, issues, hunks, text, _kind = _page_box_inputs(state.ws, n)
+                if not issues and not hunks:
+                    continue
+                specs = _box_specs(issues, hunks, text)
+                queries = [s[1] for s in specs]
+                located = list(
+                    _locate_queries_cached(
+                        str(state.ws.pdf_path), n, text, tuple(queries)
+                    )
+                )
+                refiner.refine(n, text, queries, located)
+            except Exception as exc:
+                print(f"bbox refine p{n}: pipeline error: {exc}", file=sys.stderr)
+
+    for _ in range(_REFINE_WORKERS):
+        threading.Thread(target=_worker, daemon=True).start()
 
 
 def _make_handler(state: _ReviewState):
@@ -1764,8 +2234,25 @@ def _make_handler(state: _ReviewState):
             path = parsed.path
 
             if path == "/":
-                index_html = _render_index(ws, state.surfaced, state.skipped)
+                index_html = _render_index(
+                    ws, state.surfaced, state.skipped, bbox_refine=_REFINER is not None
+                )
                 self._send_bytes(index_html.encode("utf-8"), "text/html; charset=utf-8")
+                return
+
+            if path.startswith("/boxes/"):
+                try:
+                    n = int(path[len("/boxes/"):])
+                except ValueError:
+                    self.send_error(HTTPStatus.NOT_FOUND, "not found")
+                    return
+                if n not in state.surfaced:
+                    self.send_error(HTTPStatus.NOT_FOUND, "not found")
+                    return
+                try:
+                    self._send_json(_boxes_payload(ws, n))
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=500)
                 return
 
             if path == "/font/vazirmatn.ttf":
@@ -1965,7 +2452,11 @@ def read_server_state(ws: Workspace) -> Optional[dict]:
 
 
 def launch_review_background(
-    ws: Workspace, budget_all: bool = False, open_browser: bool = True
+    ws: Workspace,
+    budget_all: bool = False,
+    open_browser: bool = True,
+    bbox_refine: bool = True,
+    bbox_refine_model: str = MODEL_STRONG,
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
@@ -1982,6 +2473,8 @@ def launch_review_background(
     args = [sys.argv[0], "review", ws.slug, "--_child"]
     if budget_all:
         args.append("--all")
+    args.append("--bbox-refine" if bbox_refine else "--no-bbox-refine")
+    args += ["--bbox-refine-model", bbox_refine_model]
 
     subprocess.Popen(
         args,
@@ -2011,6 +2504,8 @@ def run_review(
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
     budget_all: bool = False,
+    bbox_refine: bool = True,
+    bbox_refine_model: str = MODEL_STRONG,
 ) -> None:
     surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all)
 
@@ -2029,7 +2524,24 @@ def run_review(
             f"despite flags (not shown): {skipped}"
         )
 
+    # Scan-box VLM refinement: on by default, but the server must stay fully
+    # usable offline — no key (or --no-bbox-refine) just means plain scan boxes.
+    global _REFINER
+    _REFINER = None
+    if bbox_refine:
+        llm.load_env()
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            _REFINER = _ScanBoxRefiner(ws, bbox_refine_model)
+        else:
+            print("bbox refine: no ANTHROPIC_API_KEY, scan boxes will not be refined")
+
     state = _ReviewState(ws, surfaced, skipped)
+
+    # Warm the VLM box cache in the background so GET / serves instantly with
+    # whatever is cached; the browser polls /boxes/<n> for the rest.
+    if _REFINER is not None:
+        _start_refine_pipeline(state)
+
     handler_cls = _make_handler(state)
 
     free_port = _find_free_port(port)

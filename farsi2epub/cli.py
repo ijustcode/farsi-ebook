@@ -206,8 +206,10 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
 @click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
 @click.option("--stop", "stop_server", is_flag=True, help="Stop a running review server for this workspace.")
+@click.option("--bbox-refine/--no-bbox-refine", "bbox_refine", default=True, help="Refine scan-located finding boxes with a VLM strip reader (results cached per book; needs ANTHROPIC_API_KEY; without a key or with --no-bbox-refine, plain scan boxes are shown).")
+@click.option("--bbox-refine-model", "bbox_refine_model", default=MODEL_STRONG, show_default=True, help="Model used for bbox-refinement strip reading.")
 @click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
-def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status: bool, stop_server: bool, is_child: bool):
+def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status: bool, stop_server: bool, bbox_refine: bool, bbox_refine_model: str, is_child: bool):
     """Launch the review workflow for workspace SLUG."""
     ws = _load_workspace(slug)
     if reset:
@@ -258,7 +260,12 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
         # This is the detached child process spawned by launch_review_background
         # — just run normally.
         try:
-            review.run_review(ws, budget_all=all_pages)
+            review.run_review(
+                ws,
+                budget_all=all_pages,
+                bbox_refine=bbox_refine,
+                bbox_refine_model=bbox_refine_model,
+            )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
         return
@@ -278,7 +285,12 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
 
     if background:
         try:
-            url = review.launch_review_background(ws, budget_all=all_pages)
+            url = review.launch_review_background(
+                ws,
+                budget_all=all_pages,
+                bbox_refine=bbox_refine,
+                bbox_refine_model=bbox_refine_model,
+            )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
             sys.exit(1)
@@ -288,7 +300,12 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
         return
 
     try:
-        review.run_review(ws, budget_all=all_pages)
+        review.run_review(
+            ws,
+            budget_all=all_pages,
+            bbox_refine=bbox_refine,
+            bbox_refine_model=bbox_refine_model,
+        )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")
 

@@ -20,7 +20,11 @@ page:
 
 Flow per query: Tier A (if the layer decodes) else Tier B else Tier C else
 None. review.py then falls back to the QC verifier's model bbox (Tier D) when
-this returns None.
+this returns None. Scan-sourced boxes can afterwards be upgraded by
+``refine_scan_boxes`` (source "scan_vlm"): a caller-injected VLM reader
+transcribes clean strip crops of the hit line(s) and the query is re-aligned
+onto the detected word rectangles — locate.py itself never imports an LLM
+client.
 
 Coordinates are 0-1 fractions of the page (x0,y0,x1,y1) plus a "source" of
 "match", "layout", or "scan"; review.py scales them to CSS percentages.
@@ -34,7 +38,7 @@ import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import fitz  # PyMuPDF
 import numpy as np
@@ -63,17 +67,28 @@ _SCAN_SCALE = 1.5
 _SCAN_X_MARGIN = 0.04
 _SCAN_MAX_BLANK_ROWS = 1
 
+# Scan-box VLM refinement: acceptance for aligning a query inside a strip
+# transcription (same scale as _MATCH_ACCEPT), plus strip crop padding so
+# dots/diacritics at the crop edges are not clipped.
+_REFINE_ACCEPT = 0.72
+_STRIP_Y_PAD = 0.25  # fraction of median detected line height
+_STRIP_X_PAD = 0.02  # fraction of page width
+
 
 @dataclass(frozen=True)
 class Query:
     """A snippet to locate. `span` is the exact [start, end) char span in the
     page Markdown when the caller already knows it (correction hunks); None
-    means locate.py must find it. Frozen so instances are hashable and usable
-    as lru_cache keys.
+    means locate.py must find it. `alts` carries alternate texts refinement
+    may also try (for wrong-word findings the query is the incorrect
+    transcription while the image shows the corrected text); the deterministic
+    tiers ignore it. Frozen so instances are hashable and usable as lru_cache
+    keys.
     """
 
     text: str
     span: Optional[tuple[int, int]] = None
+    alts: tuple[str, ...] = ()
 
 
 @dataclass
@@ -510,17 +525,22 @@ def _scan_line_extent(line: _ScanLine, u0: float, u1: float) -> fitz.Rect:
     )
 
 
-def _locate_scan(
-    page: fitz.Page,
+def _scan_hits(
     md: str,
     span: tuple[int, int],
     lines: list[_ScanLine],
-) -> Optional[dict]:
-    """Map a Markdown span onto image-detected line/word geometry."""
+) -> list[tuple[int, float, float, float]]:
+    """Proportionally map a Markdown char span onto detected line weights.
+
+    Returns, per overlapped line in reading order, (line_index, u0, u1,
+    overlap) where [u0, u1] is the within-line RTL char range and `overlap`
+    the span fraction the line carries; [] when the page or span has no
+    countable geometry. Shared by _locate_scan and refine_scan_boxes.
+    """
     total_md = _countable(md)
     total_layout = sum(line.weight for line in lines)
     if total_md == 0 or total_layout == 0:
-        return None
+        return []
 
     pos, end = span
     prefix_n = _countable(md[:pos])
@@ -529,9 +549,9 @@ def _locate_scan(
     if fb < fa:
         fa, fb = fb, fa
 
-    candidates: list[tuple[float, fitz.Rect]] = []
+    hits: list[tuple[int, float, float, float]] = []
     cumulative = 0.0
-    for line in lines:
+    for i, line in enumerate(lines):
         ls = cumulative / total_layout
         le = (cumulative + line.weight) / total_layout
         cumulative += line.weight
@@ -541,18 +561,28 @@ def _locate_scan(
         u0 = (max(fa, ls) - ls) / width_f
         u1 = (min(fb, le) - ls) / width_f
         overlap = min(fb, le) - max(fa, ls)
-        candidates.append((overlap, _scan_line_extent(line, u0, u1)))
+        hits.append((i, u0, u1, overlap))
+    return hits
 
-    if not candidates:
+
+def _locate_scan(
+    page: fitz.Page,
+    md: str,
+    span: tuple[int, int],
+    lines: list[_ScanLine],
+) -> Optional[dict]:
+    """Map a Markdown span onto image-detected line/word geometry."""
+    hits = _scan_hits(md, span, lines)
+    if not hits:
         return None
+    pos, end = span
     # A short word cannot genuinely wrap. If proportional offset estimation
     # straddles a line boundary, keep the line carrying most of the estimated
     # span instead of drawing a huge diagonal union across both lines.
     span_chars = _countable(md[pos:end])
-    if span_chars <= 14 and len(candidates) > 1:
-        rects = [max(candidates, key=lambda item: item[0])[1]]
-    else:
-        rects = [rect for _overlap, rect in candidates]
+    if span_chars <= 14 and len(hits) > 1:
+        hits = [max(hits, key=lambda h: h[3])]
+    rects = [_scan_line_extent(lines[i], u0, u1) for i, u0, u1, _overlap in hits]
     box = _rect_to_fracs(_union_rects(rects), page.rect)
     box["source"] = "scan"
     return box
@@ -736,6 +766,266 @@ def locate_queries(
             for i, (box, span) in enumerate(zip(results, spans)):
                 if box is None and span is not None:
                     results[i] = _locate_scan(page, page_md, span, scan_lines)
+        return results
+    finally:
+        doc.close()
+
+
+# ---------------------------------------------------------------------------
+# scan-box refinement: VLM strip oracle ("scan_vlm")
+# ---------------------------------------------------------------------------
+
+
+def _strip_rect(
+    page: fitz.Page, lines: list[_ScanLine], lo: int, hi: int, median_h: float
+) -> fitz.Rect:
+    """Padded page-coordinate crop rect covering detected lines lo..hi
+    (inclusive), full line width, clamped to the page. Padding keeps dots and
+    diacritics at the crop edges from being clipped."""
+    u = _union_rects([line.rect for line in lines[lo : hi + 1]])
+    return fitz.Rect(
+        max(page.rect.x0, u.x0 - _STRIP_X_PAD * page.rect.width),
+        max(page.rect.y0, u.y0 - _STRIP_Y_PAD * median_h),
+        min(page.rect.x1, u.x1 + _STRIP_X_PAD * page.rect.width),
+        min(page.rect.y1, u.y1 + _STRIP_Y_PAD * median_h),
+    )
+
+
+def _render_strip(page: fitz.Page, rect: fitz.Rect) -> Optional[bytes]:
+    """Clean PNG crop of `rect` — page pixels only, nothing occluding glyphs.
+    Scale targets ~1600px of strip width, clamped to 2-4x so narrow strips
+    stay legible without ballooning the payload."""
+    if rect.width < 1.0 or rect.height < 1.0:
+        return None
+    s = max(2.0, min(4.0, 1600 / rect.width))
+    pix = page.get_pixmap(matrix=fitz.Matrix(s, s), clip=rect)
+    return pix.tobytes("png")
+
+
+def _align_strip(
+    query_words_variants: list[list[str]],
+    vlm_lines: list[str],
+    strip_lines: list[_ScanLine],
+    prior_center: Optional[fitz.Point],
+) -> Optional[fitz.Rect]:
+    """Align a query (any of its normalized-word variants) inside a VLM strip
+    transcription and map the winning window back onto detected word rects.
+
+    Pure scoring/geometry — no PDF, no API — so it is unit-testable. VLM lines
+    arrive top-to-bottom; VLM words within a line are in reading order and
+    `_ScanLine.words` is already RTL reading order (rightmost first), so word
+    index i of a VLM line corresponds to `words[i]` whenever counts agree.
+    Returns a page-coordinate rect, or None when no window reaches
+    _REFINE_ACCEPT.
+    """
+    vwords = [_norm_words(t) for t in vlm_lines]
+    flat: list[tuple[int, int, str]] = []  # (vlm line, in-line index, word)
+    for j, ws in enumerate(vwords):
+        for i, w in enumerate(ws):
+            flat.append((j, i, w))
+    m = len(flat)
+    if m == 0:
+        return None
+
+    # Same scoring shape as _locate_match: mean best _wsim per query word
+    # against the window word at the same index +-1, length-drift penalized.
+    candidates: list[tuple[float, int, int]] = []  # (score, start, L)
+    for qwords in query_words_variants:
+        n = len(qwords)
+        if n == 0:
+            continue
+        for L in range(max(1, n - 1), n + 2):
+            penalty = _DRIFT_PENALTY * abs(L - n)
+            for start in range(0, m - L + 1):
+                total = 0.0
+                for k in range(n):
+                    best = 0.0
+                    for j in (k - 1, k, k + 1):
+                        if 0 <= j < L:
+                            s = _wsim(qwords[k], flat[start + j][2])
+                            if s > best:
+                                best = s
+                    total += best
+                candidates.append((total / n - penalty, start, L))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: -t[0])
+    top_score = candidates[0][0]
+    if top_score < _REFINE_ACCEPT:
+        return None
+
+    counts_agree = len(vlm_lines) == len(strip_lines)
+
+    def _window_rect(start: int, L: int) -> Optional[fitz.Rect]:
+        window = flat[start : start + L]
+        if not counts_agree:
+            # The VLM segmented the strip into a different number of lines
+            # than were detected: no per-line index mapping exists, so place
+            # the window char-proportionally over all strip word rects in
+            # reading order (width-weighted).
+            total_chars = sum(len(w) for _j, _i, w in flat)
+            if total_chars == 0:
+                return None
+            c0 = sum(len(w) for _j, _i, w in flat[:start])
+            c1 = c0 + sum(len(w) for _j, _i, w in window)
+            u0, u1 = c0 / total_chars, c1 / total_chars
+            rects_ro = [r for line in strip_lines for r in line.words]
+            total_w = sum(r.width for r in rects_ro)
+            if not rects_ro or total_w <= 0:
+                return None
+            selected: list[fitz.Rect] = []
+            cum = 0.0
+            for r in rects_ro:
+                w0 = cum / total_w
+                w1 = (cum + r.width) / total_w
+                if w1 > u0 and w0 < u1:
+                    selected.append(r)
+                cum += r.width
+            if not selected:
+                idx = min(int(u0 * len(rects_ro)), len(rects_ro) - 1)
+                selected = [rects_ro[idx]]
+            return _union_rects(selected)
+
+        rects: list[fitz.Rect] = []
+        by_line: dict[int, list[int]] = {}  # window words are contiguous per line
+        for j, i, _w in window:
+            by_line.setdefault(j, []).append(i)
+        for j, idxs in sorted(by_line.items()):
+            line = strip_lines[j]
+            ws = vwords[j]
+            if line.words and len(ws) == len(line.words):
+                rects.extend(line.words[i] for i in idxs)
+            else:
+                # Word segmentation disagrees on this line only: place the
+                # covered folded-char run proportionally within the line.
+                total = sum(len(w) for w in ws)
+                i0, i1 = min(idxs), max(idxs)
+                c0 = sum(len(w) for w in ws[:i0])
+                c1 = sum(len(w) for w in ws[: i1 + 1])
+                rects.append(_scan_line_extent(line, c0 / total, c1 / total))
+        return _union_rects(rects) if rects else None
+
+    best_start, best_L = candidates[0][1], candidates[0][2]
+    if prior_center is not None:
+        # Mirror _MATCH_TIE handling: among near-best windows prefer the one
+        # whose center is closest to the original scan placement.
+        best_d: Optional[float] = None
+        best_rect: Optional[fitz.Rect] = None
+        for score, start, L in candidates:
+            if score < top_score - _MATCH_TIE:
+                break
+            r = _window_rect(start, L)
+            if r is None:
+                continue
+            d = (
+                ((r.x0 + r.x1) / 2 - prior_center.x) ** 2
+                + ((r.y0 + r.y1) / 2 - prior_center.y) ** 2
+            )
+            if best_d is None or d < best_d:
+                best_d = d
+                best_rect = r
+        if best_rect is not None:
+            return best_rect
+    return _window_rect(best_start, best_L)
+
+
+def refine_scan_boxes(
+    pdf_path: str | Path,
+    page_no: int,
+    page_md: str,
+    queries: list[Query],
+    boxes: list[Optional[dict]],
+    read_strips: Callable[[list[bytes]], list[list[str]]],
+) -> list[Optional[dict]]:
+    """Refine Tier C boxes using a VLM as a local transcription oracle.
+
+    For each query whose `boxes[i]` came from the scan tier, render a clean
+    strip crop of the initially-hit detected line(s) +-1, have `read_strips`
+    (caller-injected — locate.py never talks to an LLM) transcribe every
+    unique strip in ONE batched call, then deterministically re-align the
+    query (and any Query.alts) inside the reading and snap it onto the
+    detected word rectangles: line identification becomes exact, within-line
+    placement a word-index lookup. Failures widen to +-2 lines for one more
+    batched call. Returns per query a box with source "scan_vlm", or None
+    (non-scan position, or refinement failed — the caller keeps the plain
+    scan box).
+    """
+    results: list[Optional[dict]] = [None] * len(queries)
+    todo = [
+        i
+        for i, box in enumerate(boxes[: len(queries)])
+        if box is not None and box.get("source") == "scan"
+    ]
+    if not todo:
+        return results
+
+    doc = fitz.open(str(pdf_path))
+    try:
+        page = doc[page_no - 1]
+        lines = _scan_page_lines(page)
+        if not lines:
+            return results
+        median_h = float(np.median([line.rect.height for line in lines])) or 1.0
+
+        ranges: dict[int, tuple[int, int]] = {}  # hit-line index range
+        priors: dict[int, fitz.Point] = {}  # original placement center
+        variants: dict[int, list[list[str]]] = {}  # normalized query + alts
+        for i in todo:
+            span = _resolve_span(page_md, queries[i])
+            hits = _scan_hits(page_md, span, lines) if span else []
+            if not hits:
+                continue
+            ranges[i] = (hits[0][0], hits[-1][0])
+            box = boxes[i]
+            priors[i] = fitz.Point(
+                page.rect.x0 + (box["x0"] + box["x1"]) / 2 * page.rect.width,
+                page.rect.y0 + (box["y0"] + box["y1"]) / 2 * page.rect.height,
+            )
+            qv = [_norm_words(queries[i].text)]
+            qv.extend(_norm_words(alt) for alt in queries[i].alts)
+            variants[i] = [v for v in qv if v]
+
+        pending = [i for i in ranges if variants.get(i)]
+        for radius in (1, 2):  # first pass +-1 line; failures retry once at +-2
+            if not pending:
+                break
+            strips: list[bytes] = []
+            strip_range: list[tuple[int, int]] = []
+            by_key: dict[tuple[int, int], int] = {}  # dedupe identical crops
+            strip_of: dict[int, int] = {}
+            for i in pending:
+                lo = max(0, ranges[i][0] - radius)
+                hi = min(len(lines) - 1, ranges[i][1] + radius)
+                key = (lo, hi)
+                if key not in by_key:
+                    png = _render_strip(page, _strip_rect(page, lines, lo, hi, median_h))
+                    if png is None:
+                        continue
+                    by_key[key] = len(strips)
+                    strips.append(png)
+                    strip_range.append(key)
+                if key in by_key:
+                    strip_of[i] = by_key[key]
+            if not strips:
+                break
+            readings = read_strips(strips)
+            failed: list[int] = []
+            for i in pending:
+                si = strip_of.get(i)
+                reading = readings[si] if si is not None and si < len(readings) else []
+                rect = None
+                if reading:
+                    lo, hi = strip_range[si]
+                    rect = _align_strip(
+                        variants[i], reading, lines[lo : hi + 1], priors[i]
+                    )
+                if rect is None:
+                    failed.append(i)
+                    continue
+                box = _rect_to_fracs(rect, page.rect)
+                box["source"] = "scan_vlm"
+                results[i] = box
+            pending = failed
         return results
     finally:
         doc.close()
