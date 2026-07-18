@@ -2322,9 +2322,10 @@ class _ReviewState:
         self.lock = threading.Lock()
         self.edited: set[int] = set()
         self.accepted: set[int] = set()
-        self.suggestion_accepted = 0
-        self.suggestion_edited = 0
-        self.suggestion_rejected = 0
+        # Per-correction (hunk) decisions the user clicked, keyed by page so a
+        # re-accepted page overwrites rather than double-counts; the page-level
+        # sets above stay coarse.
+        self.hunk_decisions_by_page: dict[int, dict[str, int]] = {}
         self.httpd: Optional[ThreadingHTTPServer] = None
 
 
@@ -2508,12 +2509,12 @@ def _make_handler(state: _ReviewState):
                     else:
                         state.accepted.add(n)
                         state.edited.discard(n)
-                    if outcome.suggestion_status == "accepted":
-                        state.suggestion_accepted += 1
-                    elif outcome.suggestion_status == "edited":
-                        state.suggestion_edited += 1
-                    elif outcome.suggestion_status == "rejected":
-                        state.suggestion_rejected += 1
+                    counts: dict[str, int] = {}
+                    for d in hunk_decisions:
+                        dec = d.get("decision") if isinstance(d, dict) else None
+                        if dec in ("approved", "edited", "rejected", "pending"):
+                            counts[dec] = counts.get(dec, 0) + 1
+                    state.hunk_decisions_by_page[n] = counts
 
                 for detected_by, issue_type, old_frag, new_frag in outcome.events:
                     try:
@@ -2764,12 +2765,15 @@ def run_review(
             remaining += 1
     remaining += len(skipped)
 
+    totals = {"approved": 0, "edited": 0, "rejected": 0, "pending": 0}
+    for counts in state.hunk_decisions_by_page.values():
+        for k, v in counts.items():
+            totals[k] += v
+
     print("")
-    print(f"Summary: edited {edited}, accepted {accepted}, remaining flagged {remaining}.")
-    if state.suggestion_accepted or state.suggestion_edited or state.suggestion_rejected:
+    print(f"Summary: pages       — {edited} edited, {accepted} accepted, {remaining} still flagged")
+    if any(totals.values()):
         print(
-            "Suggestion outcomes: "
-            f"accepted {state.suggestion_accepted}, "
-            f"edited {state.suggestion_edited}, "
-            f"rejected {state.suggestion_rejected}."
+            f"         corrections — {totals['approved']} approved, {totals['edited']} edited, "
+            f"{totals['rejected']} rejected, {totals['pending']} undecided"
         )
