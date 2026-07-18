@@ -28,12 +28,22 @@ The pipeline is four sequential CLI steps, each operating on a per-book workspac
 ```bash
 farsi2epub analyze <pdf> [--slug s] [--pages 3-10] [--force]   # create workspace, classify PDF, estimate cost
 farsi2epub transcribe <slug> [--pages ...] [--force] [--max-cost N] [--concurrency 4] [--model ...] [--qc auto|manual|skip|ask] [--yes]  # --yes skips the auto-QC cost prompt
-farsi2epub qc <slug> [--mode auto|manual] [--all] [--yes]      # auto = LLM verifier pass (suggest-only), manual = review UI
-farsi2epub review <slug>     # local web UI for human correction of flagged pages
+farsi2epub qc <slug> [--mode auto|manual] [--all] [--yes] [--force] [--pages ...]  # auto = LLM verifier pass (suggest-only), manual = review UI
+farsi2epub review <slug> [--all] [--reset] [--background|--status|--stop] [--no-bbox-refine] [--bbox-refine-model ...]  # local web UI for human correction; -b detaches the server
 farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 ```
 
-There is no test suite or linter configured. `epubcheck` is run automatically after `build` if it's on PATH (optional).
+`epubcheck` is run automatically after `build` if it's on PATH (optional).
+
+### Tests
+
+No pytest/linter is configured. `tests/` holds three standalone scripts (run with `./venv/bin/python`, no API key needed except where noted); they operate on real transcribed books under `books/`, so they need a book already processed:
+
+```bash
+./venv/bin/python tests/locator_regression.py             # locate.py tiers + VLM strip-alignment; one live llm.read_strips check skipped without a key
+./venv/bin/python tests/headings_regression.py            # golden pages: headings survive md → EPUB XHTML, incl. negative control
+./venv/bin/python tests/bbox_eval.py <slug> [--no-refine] # renders an HTML contact sheet of review-UI boxes for human miss-counting; uncached refinement bills the API
+```
 
 Transcription requires `ANTHROPIC_API_KEY`, read from the environment or from `.env` at the project root (see `llm.load_env`).
 
@@ -66,3 +76,5 @@ Each module is one stage; they communicate only through the workspace files abov
 - Default input resolution is **hi-res (2576px, Sonnet 5's vision maximum)**, not the 1568px standard render: a std-res Sonnet pass was measured making character-level errors hi-res avoided (bidi-reversed dotted abbreviations like ه.ق → ق.ه, word transpositions, lost diacritics) — errors the word-bag validators are structurally blind to. `transcribe --res std` is the documented economy path (~30% cheaper/page; suits crisp large-print sources or very long books) and failing pages escalate to Sonnet + hi-res, so it degrades safely. Sidecars record `resolution` used per page.
 - Sonnet is called with `thinking: {"type": "disabled"}` for transcription — it's a perception task, and adaptive thinking adds cost without accuracy.
 - Cost is estimated in `config.estimate_cost` and tracked per page in sidecars; `--max-cost` aborts a run mid-flight.
+
+`AGENTS.md` is a copy of this file for other coding agents; when updating CLAUDE.md, mirror substantive changes there.
