@@ -2557,13 +2557,13 @@ def _make_handler(state: _ReviewState):
     return Handler
 
 
-def _find_free_port(preferred: int) -> int:
+def _find_free_port(preferred: int, host: str = "127.0.0.1") -> int:
     port = preferred
     for _ in range(200):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                s.bind(("127.0.0.1", port))
+                s.bind((host, port))
             except OSError:
                 port += 1
                 continue
@@ -2641,6 +2641,7 @@ def launch_review_background(
     open_browser: bool = True,
     bbox_refine: bool = True,
     bbox_refine_model: str = MODEL_STRONG,
+    lan: bool = False,
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
@@ -2659,6 +2660,8 @@ def launch_review_background(
         args.append("--all")
     args.append("--bbox-refine" if bbox_refine else "--no-bbox-refine")
     args += ["--bbox-refine-model", bbox_refine_model]
+    if lan:
+        args.append("--lan")
 
     subprocess.Popen(
         args,
@@ -2729,7 +2732,7 @@ def run_review(
     handler_cls = _make_handler(state)
 
     free_port = _find_free_port(port)
-    httpd = ThreadingHTTPServer(("127.0.0.1", free_port), handler_cls)
+    httpd = ThreadingHTTPServer(("0.0.0.0", free_port), handler_cls)
     state.httpd = httpd
 
     url = f"http://127.0.0.1:{free_port}/"
