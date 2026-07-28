@@ -189,7 +189,34 @@ Read it as: an unchecked geometric guess is nearly worthless (the 9 cases where
 refinement failed score 0.1667), and checking what is printed does almost all
 the work. That is the justification for doing the same to Tier B.
 
-**Tier B is now the open work.** `refine_scan_boxes` refuses any box whose
+**STAGE 1 DONE 2026-07-28 — precedence flip, the cheap fix, and it was large.**
+Tier B was accepted in `locate_queries` unconditionally, and since it has
+`no_box_rate` 0.0 it always returned something — so on a glyph-cipher page Tier C
+was structurally NEVER reached, and neither was refinement. Tier B is now taken
+only when `a_usable` (the layer decodes); cipher pages fall through to Tier C,
+with Tier B retained as the fallback when scan yields nothing, so `no_box_rate`
+is unchanged at 0.0426.
+
+| | before | after |
+|---|---|---|
+| overall acc@1 (refined) | 0.6723 | **0.7787** |
+| haaji-agha | 0.4118 | **0.9020** |
+| overall acc@1 (unrefined) | 0.5447 | 0.5745 |
+| scan_vlm | 0.8430 (121) | 0.8706 (170) |
+
+**25 fixed, 0 broken, McNemar exact p = 0.0000.** Refinement of the newly
+reachable haaji-agha strips cost $0.45 once; re-scores are free.
+Reports: `out/score_010_precedence_refine.json` vs `out/score_008_frozen_refine.json`.
+
+The line-local-offset proposal that prompted this was assessed and REJECTED as
+incoherent: `llm.py:101` forbids hard-wrapping ("each paragraph is a single line
+of output"), so markdown lines have no correspondence to printed lines in prose,
+and line identity is an OUTPUT of the cumulative count, not an input. Measured
+on the layout tier: 41/47 cases already have `line_delta == 0`, and the alarming
+`mean_abs_shift=14.06` is ONE case (`haaji-agha:p53:h1`, 507 words / 32 lines);
+excluding it the mean is 3.35, median 2. Line selection was not the defect.
+
+**Remaining Tier B work.** `refine_scan_boxes` refuses any box whose
 `source` is not `"scan"` (see its `todo` filter), so layout boxes never get a
 content check at all — and layout is the cipher books, where the PDF reports
 REAL line rectangles and garbage characters, which is exactly the situation the

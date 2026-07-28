@@ -1325,6 +1325,8 @@ def locate_queries(
 
         results: list[Optional[dict]] = []
         spans: list[Optional[tuple[int, int]]] = []
+        # Tier B boxes held back on cipher pages — see the precedence note below.
+        layout_fallback: list[Optional[dict]] = []
         for q in queries:
             span = _resolve_span(page_md, q)
             spans.append(span)
@@ -1334,12 +1336,28 @@ def locate_queries(
             box: Optional[dict] = None
             if a_usable:
                 box = _locate_match(page, pwords, q.text, expected_y)
-            if box is None and b_box is not None:
-                box = b_box
+                # Tier A failed but the layer decodes, so B's line geometry is
+                # as trustworthy as it gets on this page: take it now.
+                if box is None and b_box is not None:
+                    box = b_box
+            layout_fallback.append(b_box)
             results.append(box)
 
-        # Image analysis is the expensive fallback, so render/segment at most
-        # once and only when a text-layer tier left a resolvable query unplaced.
+        # TIER PRECEDENCE ON CIPHER PAGES. Tier B used to be accepted here
+        # unconditionally, and since it has no_box_rate 0.0 it always returned
+        # something — so on a glyph-cipher page (a_usable False: real line
+        # rects, undecodable characters) Tier C was structurally NEVER reached,
+        # and neither was refine_scan_boxes, which only accepts source "scan".
+        # That is why haaji-agha, 50 of the 54 layout cases, is the worst book.
+        # Measured, unrefined, Tier C already beats Tier B 0.5748 to 0.4231, and
+        # refinement takes its cases to 0.8430 — so a cipher page is better
+        # served by ink geometry that can then be content-checked than by exact
+        # line rects that never can.
+        #
+        # Tier B stays as the FALLBACK rather than being dropped: it is the only
+        # tier here that always produces a box, and letting a scan miss fall
+        # through to no box at all would trade a mediocre box for the model's
+        # bbox estimate (measured 0.0).
         if any(
             box is None and span is not None
             for box, span in zip(results, spans)
@@ -1348,6 +1366,8 @@ def locate_queries(
             for i, (box, span) in enumerate(zip(results, spans)):
                 if box is None and span is not None:
                     results[i] = _locate_scan(page, page_md, span, scan_lines)
+                    if results[i] is None:
+                        results[i] = layout_fallback[i]
         return results
     finally:
         doc.close()
