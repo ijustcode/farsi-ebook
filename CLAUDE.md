@@ -61,9 +61,9 @@ Acquisition (once per page, ever) and scoring:
 #    ... a Claude Code subagent reads each out/pagekey/BATCHES/batch_NN.json ...
 ./venv/bin/python tests/bbox_score.py ingest-pages --manifest out/pagekey/manifest.json \
     --readings out/pagekey/readings/
-# 2. score — fully offline, free, repeatable
-./venv/bin/python tests/bbox_score.py score --cases tests/data/bbox_cases.json \
-    --sample 240 --seed 7 --stratify book,tier,kind --out out/score_NNN.json
+# 2. score the FROZEN sample — fully offline, free, repeatable, fixed population
+./venv/bin/python tests/bbox_score.py score --cases tests/data/bbox_sample240.json \
+    --out out/score_NNN.json
 # 3. compare two iterations
 ./venv/bin/python tests/bbox_score.py compare --baseline A.json --candidate B.json --gate
 ```
@@ -73,6 +73,7 @@ Guardrails, each of which exists because it failed in practice:
 - `ingest-pages` **verifies the answer key on acquisition**: every reading is scored against that page's own independent transcription (`text/NNNN.md`) by `_page_recall`, and anything below `_PAGE_RECALL_MIN` (0.85) is rejected and reported for re-reading at tile resolution. Measured on `bachehaye_ghali`, whole-page readings land at 0.91–1.00.
 - `score` **refuses to write a report** when more than `_MAX_EXCLUDED_FRACTION` (10%) of the sample has no grade, instead of warning and emitting a number computed on a biased survivor subset. `--allow-thin-denominator` overrides; the result is not a valid baseline.
 - `compare` **refuses to diff reports with different `truth_sha1`** (`--allow-truth-drift` overrides): two runs are only comparable if they graded against the same frozen readings.
+- **Score the frozen sample, not a fresh one.** `tests/data/bbox_sample240.json` is an explicit 240-case list; score it with **no `--sample` flag**. `--sample N --stratify book,tier,kind` re-samples per run and strata on `tier`, which is an *output* of the locator — so a change that moves boxes between tiers silently changes its own population. Measured: enabling Tier C refinement under `--sample` shifted the sampled set (14 cases uncached, per-book counts moved) and reported 0.6923; the same treatment on the frozen sample reports 0.6723 with 0 uncached. Case identity is the hunk, which no locator change can alter, so a frozen id list is stable forever.
 - `compare` reports **McNemar's exact p** over the discordant pairs. Paired case counts are the only evidence a change carries: "3 fixed, 0 broken" is p=0.25, i.e. noise. Detecting a true 3-point acc@1 shift at 80% power needs ~15–25 discordant pairs, so keep ≥150 *scored* cases per comparison.
 - `_align_line_sequences` aligns reading lines to detected ink lines monotonically (Needleman–Wunsch). Requiring equal line counts and otherwise spreading the reading char-proportionally over the page — the crop-era fallback — cost 15 points of acc@1 at page scale, because one undetected line discards the correspondence for all ~900 words.
 - `geom_confident` is reduced over the words the case actually rests on, not the whole image; at page scale the global version measured page size rather than alignment quality.

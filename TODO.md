@@ -155,7 +155,7 @@ Steps:
 Risk to check in step 3: `normalize.py` and the `review` hunk diff also consume
 folded words; confirm no caller depends on punctuation surviving the fold.
 
-### 3.2 Tier B/C never verify what is printed where they point (from the 2026-07-27 review)
+### 3.2 Tier B/C never verify what is printed where they point  ← Tier C MEASURED, Tier B is the open work
 
 Tier A *searches for* the query text and scores acc@1 0.73; Tiers B (layout) and
 C (scan) *interpolate* a position from character offsets and never check what is
@@ -164,3 +164,56 @@ accumulated drift it was aimed at, but drift was never the dominant defect: the
 remaining `wrong_region` cases need >1.6 line-heights of error to explain. The
 paradigm gap, not a tuning gap: give B/C a content check against the page reading
 they already have access to.
+
+**MEASURED 2026-07-28 — the content-check paradigm is confirmed for Tier C.**
+Tier C already HAS a content check in production: `refine_scan_boxes` crops the
+guessed line(s), has a VLM transcribe them (`llm.read_strips`) and re-aligns the
+query onto the real word rects. Every score before this point ran `--no-refine`,
+so scan was being measured with its content check switched OFF.
+
+On the frozen sample, 235 graded, same answer key:
+
+| | `--no-refine` | `--refine` |
+|---|---|---|
+| overall acc@1 | 0.5447 | **0.6723** |
+| scan -> scan_vlm | 0.5748 (130) | **0.8430** (121) |
+| plain scan left over | — | 0.1667 (9) |
+| bachehaye_ghali | 0.5489 | **0.7744** |
+| match / layout | unchanged | unchanged |
+
+**32 fixed, 2 broken, McNemar exact p = 0.0000** on 34 discordant pairs.
+Reports: `out/score_007_frozen_norefine.json` vs `out/score_008_frozen_refine.json`.
+Refinement cost $2.03 cold (cache 492 -> 649 entries); re-scores are free.
+
+Read it as: an unchecked geometric guess is nearly worthless (the 9 cases where
+refinement failed score 0.1667), and checking what is printed does almost all
+the work. That is the justification for doing the same to Tier B.
+
+**Tier B is now the open work.** `refine_scan_boxes` refuses any box whose
+`source` is not `"scan"` (see its `todo` filter), so layout boxes never get a
+content check at all — and layout is the cipher books, where the PDF reports
+REAL line rectangles and garbage characters, which is exactly the situation the
+strip oracle was built for. layout sits at 0.4231 over 54 cases; haaji-agha,
+almost all layout, is the worst book at 0.4118.
+
+Steps:
+1. Extend the refiner to accept `source == "layout"`: its strip geometry comes
+   from `_scan_page_lines`, so a layout box must first be mapped to the detected
+   ink line(s) it overlaps (the cipher layer's own line rects are real and can
+   seed this) before the existing `_align_strip` path runs unchanged.
+2. Keep the tier label distinct (`layout_vlm`) so the report can price it.
+3. Re-score the frozen sample and gate; expect a large effect if the analogy to
+   Tier C holds, and treat anything under McNemar p<0.05 as unproven.
+4. Watch the failure mode Tier C shows: when refinement fails the box is WORSE
+   than useless (0.1667). Decide explicitly whether a failed layout refinement
+   should keep the layout box or return no box at all.
+
+### 3.2b Sampling must not depend on the locator (fixed 2026-07-28)
+
+`--sample N --stratify book,tier,kind` strata on `tier`, which is an OUTPUT of
+the locator. Enabling Tier C refinement moved boxes from `scan` to `scan_vlm`,
+which changed the sampled population: 14 cases uncached, per-book counts moved,
+and the run reported 0.6923 against the frozen sample's 0.6723. Fixed by
+freezing the 240 case ids into `tests/data/bbox_sample240.json` and scoring that
+with no `--sample` flag. Case identity is the hunk, so the list is stable
+regardless of what the locator does.

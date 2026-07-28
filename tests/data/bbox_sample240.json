@@ -1,0 +1,6188 @@
+{
+ "ts": "2026-07-27T06:20:51+00:00",
+ "books": [
+  "Hossein_shenasi",
+  "bachehaye_ghali",
+  "boof-e-koor",
+  "haaji-agha",
+  "jameeshenasi_khodemani",
+  "review-test"
+ ],
+ "pages": null,
+ "replay": true,
+ "n_cases": 240,
+ "cases": [
+  {
+   "id": "Hossein_shenasi:p8:h0",
+   "slug": "Hossein_shenasi",
+   "page": 8,
+   "key": "h0",
+   "md_sha1": "fac52d2cf33665e641ab5ac525bbec57af01b475",
+   "replay": true,
+   "query": {
+    "text": "فصل هفتم: ادبیات جهان\n\n",
+    "span": [
+     2,
+     25
+    ],
+    "alts": [
+     "ادبیات جهان\n\n## فصل هفتم\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_heading",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p10:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 10,
+   "key": "h100001",
+   "md_sha1": "0c6f2b38c90202c47c6b4f2147a193cc711d2e7d",
+   "replay": true,
+   "query": {
+    "text": "۹",
+    "span": null,
+    "alts": [
+     "۹"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "digit_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p11:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 11,
+   "key": "h100004",
+   "md_sha1": "4ecc3d49eaaf6a8b883db6094c58c971ddba2609",
+   "replay": true,
+   "query": {
+    "text": "میان ماشزار سبز",
+    "span": [
+     1031,
+     1046
+    ],
+    "alts": [
+     "میان ماشزار سبز"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p12:h0",
+   "slug": "bachehaye_ghali",
+   "page": 12,
+   "key": "h0",
+   "md_sha1": "fe34539c8dcc6c8642f57ec9d5b514665a9d0dc2",
+   "replay": true,
+   "query": {
+    "text": "ندبد ",
+    "span": [
+     428,
+     433
+    ],
+    "alts": [
+     "ندید "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p12:h1",
+   "slug": "bachehaye_ghali",
+   "page": 12,
+   "key": "h1",
+   "md_sha1": "fe34539c8dcc6c8642f57ec9d5b514665a9d0dc2",
+   "replay": true,
+   "query": {
+    "text": "خریده. [^3]\"\n\n",
+    "span": [
+     476,
+     490
+    ],
+    "alts": [
+     "خریده.[^3]\"\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p13:h1",
+   "slug": "bachehaye_ghali",
+   "page": 13,
+   "key": "h1",
+   "md_sha1": "8c3503ac12a1fa687c81afac271048867ae7d34c",
+   "replay": true,
+   "query": {
+    "text": "جماته ",
+    "span": [
+     278,
+     284
+    ],
+    "alts": [
+     "جماعته "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p13:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 13,
+   "key": "h100002",
+   "md_sha1": "8c3503ac12a1fa687c81afac271048867ae7d34c",
+   "replay": true,
+   "query": {
+    "text": "اینجه جمع شدین",
+    "span": [
+     775,
+     789
+    ],
+    "alts": [
+     "اینجه جمع شدین"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p13:h100006",
+   "slug": "bachehaye_ghali",
+   "page": 13,
+   "key": "h100006",
+   "md_sha1": "8c3503ac12a1fa687c81afac271048867ae7d34c",
+   "replay": true,
+   "query": {
+    "text": "با الافت از توی کشتزار",
+    "span": [
+     1255,
+     1277
+    ],
+    "alts": [
+     "با الافت از توی کشتزار"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p13:h2",
+   "slug": "bachehaye_ghali",
+   "page": 13,
+   "key": "h2",
+   "md_sha1": "8c3503ac12a1fa687c81afac271048867ae7d34c",
+   "replay": true,
+   "query": {
+    "text": "حرفته ",
+    "span": [
+     934,
+     940
+    ],
+    "alts": [
+     "حرفتو "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p14:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 14,
+   "key": "h100000",
+   "md_sha1": "0d3d814cda1d6b52495c3eb4e7f3d971b829d7cd",
+   "replay": true,
+   "query": {
+    "text": "□",
+    "span": [
+     802,
+     803
+    ],
+    "alts": [
+     "□"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_heading",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p15:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 15,
+   "key": "h100002",
+   "md_sha1": "98cb7eea290d23368c00fdb229ae9d1dd9f3928a",
+   "replay": true,
+   "query": {
+    "text": "[^2]: علو = علی",
+    "span": null,
+    "alts": [
+     "[^2]: علو = علی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p17:h1",
+   "slug": "bachehaye_ghali",
+   "page": 17,
+   "key": "h1",
+   "md_sha1": "45eb1769ec89ebebe40e30891bdf21355950ec8d",
+   "replay": true,
+   "query": {
+    "text": "ویرچرک‌بود ",
+    "span": [
+     941,
+     952
+    ],
+    "alts": [
+     "و پرچرک بود "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p18:h0",
+   "slug": "bachehaye_ghali",
+   "page": 18,
+   "key": "h0",
+   "md_sha1": "0aa76cce694bee38773aa13d3f029c53d31fd490",
+   "replay": true,
+   "query": {
+    "text": "فرسق ",
+    "span": [
+     1329,
+     1334
+    ],
+    "alts": [
+     "فرسنگ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p18:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 18,
+   "key": "h100000",
+   "md_sha1": "0aa76cce694bee38773aa13d3f029c53d31fd490",
+   "replay": true,
+   "query": {
+    "text": "می‌زدی از تو رودخونه سومدی",
+    "span": null,
+    "alts": [
+     "می‌زدی از تو رودخونه سومدی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p19:h0",
+   "slug": "bachehaye_ghali",
+   "page": 19,
+   "key": "h0",
+   "md_sha1": "cbc80452aa21f59c90d7fbf91f2f7aa295676b9e",
+   "replay": true,
+   "query": {
+    "text": ".",
+    "span": [
+     1396,
+     1397
+    ],
+    "alts": [
+     ".\n\n---\n\n[^1]: اگر تو"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p19:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 19,
+   "key": "h100000",
+   "md_sha1": "cbc80452aa21f59c90d7fbf91f2f7aa295676b9e",
+   "replay": true,
+   "query": {
+    "text": "بدالله سر سبیلش را می‌جوید",
+    "span": [
+     1041,
+     1067
+    ],
+    "alts": [
+     "بدالله سر سبیلش را می‌جوید"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p19:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 19,
+   "key": "h100003",
+   "md_sha1": "cbc80452aa21f59c90d7fbf91f2f7aa295676b9e",
+   "replay": true,
+   "query": {
+    "text": "خیال کردی؟ \"اکه تو گردوی",
+    "span": [
+     432,
+     456
+    ],
+    "alts": [
+     "خیال کردی؟ \"اکه تو گردوی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p20:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 20,
+   "key": "h100000",
+   "md_sha1": "3d78c6bdf9d090f09f8de0a4323e2bfed939c632",
+   "replay": true,
+   "query": {
+    "text": "دستمال حاب مرده‌ش",
+    "span": [
+     434,
+     451
+    ],
+    "alts": [
+     "دستمال حاب مرده‌ش"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p20:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 20,
+   "key": "h100002",
+   "md_sha1": "3d78c6bdf9d090f09f8de0a4323e2bfed939c632",
+   "replay": true,
+   "query": {
+    "text": "کدخدا وافورش را گذاشت کنار",
+    "span": [
+     1151,
+     1177
+    ],
+    "alts": [
+     "کدخدا وافورش را گذاشت کنار"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p21:h1",
+   "slug": "bachehaye_ghali",
+   "page": 21,
+   "key": "h1",
+   "md_sha1": "0988a21a9dbc74d2bba71ee075ee3c02a717dd2a",
+   "replay": true,
+   "query": {
+    "text": "خوالیت ",
+    "span": [
+     742,
+     749
+    ],
+    "alts": [
+     "حالیت "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p21:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 21,
+   "key": "h100000",
+   "md_sha1": "0988a21a9dbc74d2bba71ee075ee3c02a717dd2a",
+   "replay": true,
+   "query": {
+    "text": "به جاثی نمی‌رسی",
+    "span": [
+     61,
+     76
+    ],
+    "alts": [
+     "به جاثی نمی‌رسی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p21:h2",
+   "slug": "bachehaye_ghali",
+   "page": 21,
+   "key": "h2",
+   "md_sha1": "0988a21a9dbc74d2bba71ee075ee3c02a717dd2a",
+   "replay": true,
+   "query": {
+    "text": "«کاهدان» ",
+    "span": [
+     821,
+     830
+    ],
+    "alts": [
+     "«کاهدان». "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "heh_boundary",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p22:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 22,
+   "key": "h100003",
+   "md_sha1": "3038524393a79a7401c2a653d24f082b22f24cca",
+   "replay": true,
+   "query": {
+    "text": "«خلاشه[^1] هم جمع کنین بیارین.",
+    "span": [
+     424,
+     454
+    ],
+    "alts": [
+     "«خلاشه[^1] هم جمع کنین بیارین."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p23:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 23,
+   "key": "h100001",
+   "md_sha1": "1c0f153a3d259d5b01a77e69d4ef60e653f41289",
+   "replay": true,
+   "query": {
+    "text": "ئی۳طرف جو",
+    "span": [
+     462,
+     471
+    ],
+    "alts": [
+     "ئی۳طرف جو"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p24:h0",
+   "slug": "bachehaye_ghali",
+   "page": 24,
+   "key": "h0",
+   "md_sha1": "2e9e9a1de2bb1558824ca94f54a99afe05a4131c",
+   "replay": true,
+   "query": {
+    "text": "اونجهبه ",
+    "span": [
+     2,
+     10
+    ],
+    "alts": [
+     "اونجه‌به "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p24:h1",
+   "slug": "bachehaye_ghali",
+   "page": 24,
+   "key": "h1",
+   "md_sha1": "2e9e9a1de2bb1558824ca94f54a99afe05a4131c",
+   "replay": true,
+   "query": {
+    "text": "یونه به آن یونه، ",
+    "span": [
+     92,
+     109
+    ],
+    "alts": [
+     "پونه به آن پونه، "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p24:h3",
+   "slug": "bachehaye_ghali",
+   "page": 24,
+   "key": "h3",
+   "md_sha1": "2e9e9a1de2bb1558824ca94f54a99afe05a4131c",
+   "replay": true,
+   "query": {
+    "text": "شادی‌شد. ",
+    "span": [
+     1189,
+     1198
+    ],
+    "alts": [
+     "شادی شد. "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p26:h0",
+   "slug": "bachehaye_ghali",
+   "page": 26,
+   "key": "h0",
+   "md_sha1": "65d8bd68a64b771c3940d7e285377d59c13b6e7a",
+   "replay": true,
+   "query": {
+    "text": "گاهگداری ",
+    "span": [
+     172,
+     181
+    ],
+    "alts": [
+     "کاهگداری "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p27:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 27,
+   "key": "h100000",
+   "md_sha1": "1bf4e7e3d289266c0e4a29c9ae11bb9d43732d6d",
+   "replay": true,
+   "query": {
+    "text": "من ببرم به هیزم کنی",
+    "span": [
+     0,
+     19
+    ],
+    "alts": [
+     "من ببرم به هیزم کنی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p27:h3",
+   "slug": "bachehaye_ghali",
+   "page": 27,
+   "key": "h3",
+   "md_sha1": "1bf4e7e3d289266c0e4a29c9ae11bb9d43732d6d",
+   "replay": true,
+   "query": {
+    "text": "\"۱ ",
+    "span": [
+     1117,
+     1120
+    ],
+    "alts": [
+     "\"[^1] "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p28:h1",
+   "slug": "bachehaye_ghali",
+   "page": 28,
+   "key": "h1",
+   "md_sha1": "7304b984233a77b2f41f31c4d369dd6ff74a7803",
+   "replay": true,
+   "query": {
+    "text": "دمبپرسید ",
+    "span": [
+     1025,
+     1034
+    ],
+    "alts": [
+     "دم به پرسید "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p29:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 29,
+   "key": "h100003",
+   "md_sha1": "1ff7a321850bef8814839f0b761326c949289ebe",
+   "replay": true,
+   "query": {
+    "text": "خر مم جعفر",
+    "span": [
+     658,
+     668
+    ],
+    "alts": [
+     "خر مم جعفر"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p29:h3",
+   "slug": "bachehaye_ghali",
+   "page": 29,
+   "key": "h3",
+   "md_sha1": "1ff7a321850bef8814839f0b761326c949289ebe",
+   "replay": true,
+   "query": {
+    "text": "بدالله ",
+    "span": [
+     1058,
+     1065
+    ],
+    "alts": [
+     "یدالله "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p30:h1",
+   "slug": "bachehaye_ghali",
+   "page": 30,
+   "key": "h1",
+   "md_sha1": "1a13d61c27d0625b29416a8d640774576a878a09",
+   "replay": true,
+   "query": {
+    "text": "بستونیم‌هفته ",
+    "span": [
+     786,
+     799
+    ],
+    "alts": [
+     "بستونیم هفته "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p31:h1",
+   "slug": "bachehaye_ghali",
+   "page": 31,
+   "key": "h1",
+   "md_sha1": "654daf96e50df7315fa2f83c101ef78d8de90dae",
+   "replay": true,
+   "query": {
+    "text": "جاق ",
+    "span": [
+     408,
+     412
+    ],
+    "alts": [
+     "چاق "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p31:h2",
+   "slug": "bachehaye_ghali",
+   "page": 31,
+   "key": "h2",
+   "md_sha1": "654daf96e50df7315fa2f83c101ef78d8de90dae",
+   "replay": true,
+   "query": {
+    "text": "دچارگردد کاز عهدمکار ",
+    "span": [
+     1416,
+     1437
+    ],
+    "alts": [
+     "دچار گردد که از عهده"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p32:h0",
+   "slug": "bachehaye_ghali",
+   "page": 32,
+   "key": "h0",
+   "md_sha1": "5c293bff25972112d6b6053498b6d91760285047",
+   "replay": true,
+   "query": {
+    "text": "نعکو.\n\n",
+    "span": [
+     345,
+     352
+    ],
+    "alts": [
+     "نمکو.\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p32:h6",
+   "slug": "bachehaye_ghali",
+   "page": 32,
+   "key": "h6",
+   "md_sha1": "5c293bff25972112d6b6053498b6d91760285047",
+   "replay": true,
+   "query": {
+    "text": "قالیبافخونه ",
+    "span": [
+     1306,
+     1318
+    ],
+    "alts": [
+     "قالی‌باف‌خونه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p35:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 35,
+   "key": "h100000",
+   "md_sha1": "2574b10c4d18b7b2b73d75e66fd21b066f2b1108",
+   "replay": true,
+   "query": {
+    "text": "توچشماش اشک نشسته بود",
+    "span": [
+     49,
+     70
+    ],
+    "alts": [
+     "توچشماش اشک نشسته بود"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p36:h2",
+   "slug": "bachehaye_ghali",
+   "page": 36,
+   "key": "h2",
+   "md_sha1": "71fc7a975e3e94927fa481fe7f35f7b9d4b3e5db",
+   "replay": true,
+   "query": {
+    "text": "« غمه ",
+    "span": [
+     484,
+     490
+    ],
+    "alts": [
+     "«غمه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p36:h4",
+   "slug": "bachehaye_ghali",
+   "page": 36,
+   "key": "h4",
+   "md_sha1": "71fc7a975e3e94927fa481fe7f35f7b9d4b3e5db",
+   "replay": true,
+   "query": {
+    "text": "تیا ",
+    "span": [
+     1332,
+     1336
+    ],
+    "alts": [
+     "تیغ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p36:h5",
+   "slug": "bachehaye_ghali",
+   "page": 36,
+   "key": "h5",
+   "md_sha1": "71fc7a975e3e94927fa481fe7f35f7b9d4b3e5db",
+   "replay": true,
+   "query": {
+    "text": "مزیز ",
+    "span": [
+     1453,
+     1458
+    ],
+    "alts": [
+     "مثل "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p38:h1",
+   "slug": "bachehaye_ghali",
+   "page": 38,
+   "key": "h1",
+   "md_sha1": "0c58accb5718cb024bd2b4beef878d2a9e3b3329",
+   "replay": true,
+   "query": {
+    "text": "قصه نخوری ننو! ",
+    "span": [
+     937,
+     952
+    ],
+    "alts": [
+     "فسه نخوری ننو . "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p38:h2",
+   "slug": "bachehaye_ghali",
+   "page": 38,
+   "key": "h2",
+   "md_sha1": "0c58accb5718cb024bd2b4beef878d2a9e3b3329",
+   "replay": true,
+   "query": {
+    "text": "بیسدم ",
+    "span": [
+     1551,
+     1557
+    ],
+    "alts": [
+     "بهسدم "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p40:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 40,
+   "key": "h100004",
+   "md_sha1": "3a120755e1895508386946b6eab3ba7c7a23ce41",
+   "replay": true,
+   "query": {
+    "text": "کجه‌ی؟",
+    "span": [
+     883,
+     889
+    ],
+    "alts": [
+     "کجه‌ی؟"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "heh_boundary",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p41:h0",
+   "slug": "bachehaye_ghali",
+   "page": 41,
+   "key": "h0",
+   "md_sha1": "b7777af9cd8fe3dab6bde8c337f8b3b7367d437b",
+   "replay": true,
+   "query": {
+    "text": "\" پوازته [^2] ",
+    "span": [
+     362,
+     376
+    ],
+    "alts": [
+     "«پوازته[^2]» "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p41:h1",
+   "slug": "bachehaye_ghali",
+   "page": 41,
+   "key": "h1",
+   "md_sha1": "b7777af9cd8fe3dab6bde8c337f8b3b7367d437b",
+   "replay": true,
+   "query": {
+    "text": "دستهنش ",
+    "span": [
+     525,
+     532
+    ],
+    "alts": [
+     "دستمالش "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p41:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 41,
+   "key": "h100003",
+   "md_sha1": "b7777af9cd8fe3dab6bde8c337f8b3b7367d437b",
+   "replay": true,
+   "query": {
+    "text": "» در واقع باید هر",
+    "span": null,
+    "alts": [
+     "» در واقع باید هر"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p41:h2",
+   "slug": "bachehaye_ghali",
+   "page": 41,
+   "key": "h2",
+   "md_sha1": "b7777af9cd8fe3dab6bde8c337f8b3b7367d437b",
+   "replay": true,
+   "query": {
+    "text": "فرسی ",
+    "span": [
+     700,
+     705
+    ],
+    "alts": [
+     "فارسی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p43:h1",
+   "slug": "bachehaye_ghali",
+   "page": 43,
+   "key": "h1",
+   "md_sha1": "0fd3c8bba3bb8f7ae64ac3bbedcf4d381f2498af",
+   "replay": true,
+   "query": {
+    "text": "چهارکوچه ",
+    "span": [
+     935,
+     944
+    ],
+    "alts": [
+     "چهار کوچه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p43:h2",
+   "slug": "bachehaye_ghali",
+   "page": 43,
+   "key": "h2",
+   "md_sha1": "0fd3c8bba3bb8f7ae64ac3bbedcf4d381f2498af",
+   "replay": true,
+   "query": {
+    "text": "می‌کشیدو ",
+    "span": [
+     981,
+     990
+    ],
+    "alts": [
+     "می‌کشید و "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p43:i1",
+   "slug": "bachehaye_ghali",
+   "page": 43,
+   "key": "i1",
+   "md_sha1": "0fd3c8bba3bb8f7ae64ac3bbedcf4d381f2498af",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p43:i2",
+   "slug": "bachehaye_ghali",
+   "page": 43,
+   "key": "i2",
+   "md_sha1": "0fd3c8bba3bb8f7ae64ac3bbedcf4d381f2498af",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p44:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 44,
+   "key": "h100003",
+   "md_sha1": "0c60cc2340108e6c3aeb3dad99bc75bb1064e461",
+   "replay": true,
+   "query": {
+    "text": "کارگاه نیم تاریک بودو سه",
+    "span": [
+     967,
+     991
+    ],
+    "alts": [
+     "کارگاه نیم تاریک بودو سه"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p45:h0",
+   "slug": "bachehaye_ghali",
+   "page": 45,
+   "key": "h0",
+   "md_sha1": "e437c7182ec03b46cfa4cbc5fccf81f91ccca4a7",
+   "replay": true,
+   "query": {
+    "text": "**کاهگلـا** ",
+    "span": [
+     838,
+     850
+    ],
+    "alts": [
+     "کاهگلها "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p45:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 45,
+   "key": "h100002",
+   "md_sha1": "e437c7182ec03b46cfa4cbc5fccf81f91ccca4a7",
+   "replay": true,
+   "query": {
+    "text": "چپقش‌بلند بود. ودستوافورش کوچک",
+    "span": [
+     1164,
+     1194
+    ],
+    "alts": [
+     "چپقش‌بلند بود. ودستوافورش کوچک"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p47:h1",
+   "slug": "bachehaye_ghali",
+   "page": 47,
+   "key": "h1",
+   "md_sha1": "523b782eabdfec13022731a4ed1613530a1bb5f3",
+   "replay": true,
+   "query": {
+    "text": "می خوردند، ",
+    "span": [
+     831,
+     842
+    ],
+    "alts": [
+     "می‌خوردند، "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p47:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 47,
+   "key": "h100003",
+   "md_sha1": "523b782eabdfec13022731a4ed1613530a1bb5f3",
+   "replay": true,
+   "query": {
+    "text": "قاتق باهونه، چِلو ارزن هرروز",
+    "span": [
+     915,
+     943
+    ],
+    "alts": [
+     "قاتق باهونه، چِلو ارزن هرروز"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p48:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 48,
+   "key": "h100001",
+   "md_sha1": "f4ba2f2927497f470eeccf60bb349d49d86440c0",
+   "replay": true,
+   "query": {
+    "text": "نم کارگاه دنده‌ها و یک",
+    "span": [
+     584,
+     606
+    ],
+    "alts": [
+     "نم کارگاه دنده‌ها و یک"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p49:h0",
+   "slug": "bachehaye_ghali",
+   "page": 49,
+   "key": "h0",
+   "md_sha1": "be43e5f2e18c08f01bd581df71a3dded4cc06b79",
+   "replay": true,
+   "query": {
+    "text": "هستن،قاتی ",
+    "span": [
+     273,
+     283
+    ],
+    "alts": [
+     "هستن، قاتی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p49:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 49,
+   "key": "h100003",
+   "md_sha1": "be43e5f2e18c08f01bd581df71a3dded4cc06b79",
+   "replay": true,
+   "query": {
+    "text": "زهرآبته بریز، من",
+    "span": [
+     757,
+     773
+    ],
+    "alts": [
+     "زهرآبته بریز، من"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p49:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 49,
+   "key": "h100004",
+   "md_sha1": "be43e5f2e18c08f01bd581df71a3dded4cc06b79",
+   "replay": true,
+   "query": {
+    "text": "نمکو هرهر خندید ، صفرو",
+    "span": [
+     1100,
+     1122
+    ],
+    "alts": [
+     "نمکو هرهر خندید ، صفرو"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p4:h0",
+   "slug": "bachehaye_ghali",
+   "page": 4,
+   "key": "h0",
+   "md_sha1": "3b791c21b5c10ef9962217b418d25626b4596b5e",
+   "replay": true,
+   "query": {
+    "text": "کرمانی ",
+    "span": [
+     21,
+     28
+    ],
+    "alts": [
+     "کسرایی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p4:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 4,
+   "key": "h100000",
+   "md_sha1": "3b791c21b5c10ef9962217b418d25626b4596b5e",
+   "replay": true,
+   "query": {
+    "text": "طرح روی جلد از سیاوش",
+    "span": [
+     0,
+     20
+    ],
+    "alts": [
+     "طرح روی جلد از سیاوش"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p50:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 50,
+   "key": "h100000",
+   "md_sha1": "5a7aa37859c97f4956991015c8b48fd98723dbd1",
+   "replay": true,
+   "query": {
+    "text": "ماشیشیطونو گفت",
+    "span": [
+     959,
+     973
+    ],
+    "alts": [
+     "ماشیشیطونو گفت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p50:h2",
+   "slug": "bachehaye_ghali",
+   "page": 50,
+   "key": "h2",
+   "md_sha1": "5a7aa37859c97f4956991015c8b48fd98723dbd1",
+   "replay": true,
+   "query": {
+    "text": "علومی‌ریم ",
+    "span": [
+     1065,
+     1075
+    ],
+    "alts": [
+     "علو می‌ریم "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p51:h0",
+   "slug": "bachehaye_ghali",
+   "page": 51,
+   "key": "h0",
+   "md_sha1": "c58926d7b8450de53b17313ae0c95d13cad83b65",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": [
+     284,
+     284
+    ],
+    "alts": [
+     "□\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p51:h2",
+   "slug": "bachehaye_ghali",
+   "page": 51,
+   "key": "h2",
+   "md_sha1": "c58926d7b8450de53b17313ae0c95d13cad83b65",
+   "replay": true,
+   "query": {
+    "text": "پلها غُپ غُپ صدا می‌کرد ",
+    "span": [
+     477,
+     501
+    ],
+    "alts": [
+     "پل‌ها غُپ غُپ صدا می‌کرد"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p51:h3",
+   "slug": "bachehaye_ghali",
+   "page": 51,
+   "key": "h3",
+   "md_sha1": "c58926d7b8450de53b17313ae0c95d13cad83b65",
+   "replay": true,
+   "query": {
+    "text": "نمکوبه‌دنبالش‌بود ",
+    "span": [
+     798,
+     816
+    ],
+    "alts": [
+     "نمکو به دنبالش بود "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p52:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 52,
+   "key": "h100002",
+   "md_sha1": "eabadb6450a1cff2e93d0c1dab162e6cc87ae03f",
+   "replay": true,
+   "query": {
+    "text": "اگر پیداون بکنن",
+    "span": [
+     140,
+     155
+    ],
+    "alts": [
+     "اگر پیداون بکنن"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p53:h0",
+   "slug": "bachehaye_ghali",
+   "page": 53,
+   "key": "h0",
+   "md_sha1": "8027125f530ff5de95f00a54bc24b06f04d67b5c",
+   "replay": true,
+   "query": {
+    "text": "برگ‌ها ",
+    "span": [
+     278,
+     285
+    ],
+    "alts": [
+     "ریگ‌ها "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p53:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 53,
+   "key": "h100002",
+   "md_sha1": "8027125f530ff5de95f00a54bc24b06f04d67b5c",
+   "replay": true,
+   "query": {
+    "text": "«بی کند»[^1]",
+    "span": [
+     1296,
+     1308
+    ],
+    "alts": [
+     "«بی کند»[^1]"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p54:h1",
+   "slug": "bachehaye_ghali",
+   "page": 54,
+   "key": "h1",
+   "md_sha1": "fd096e7f71e8105b9d398fd4e20760448898e58c",
+   "replay": true,
+   "query": {
+    "text": "لقط ",
+    "span": [
+     87,
+     91
+    ],
+    "alts": [
+     "فقط "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p54:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 54,
+   "key": "h100003",
+   "md_sha1": "fd096e7f71e8105b9d398fd4e20760448898e58c",
+   "replay": true,
+   "query": {
+    "text": "روی چوب پر از درمنه",
+    "span": [
+     1236,
+     1255
+    ],
+    "alts": [
+     "روی چوب پر از درمنه"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p54:h3",
+   "slug": "bachehaye_ghali",
+   "page": 54,
+   "key": "h3",
+   "md_sha1": "fd096e7f71e8105b9d398fd4e20760448898e58c",
+   "replay": true,
+   "query": {
+    "text": "الوهی ",
+    "span": [
+     1062,
+     1068
+    ],
+    "alts": [
+     "الوی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p55:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 55,
+   "key": "h100000",
+   "md_sha1": "7af204b5b76d1411d8d6451649bc93ed2f14243d",
+   "replay": true,
+   "query": {
+    "text": "صفرو کتری را گذاشت",
+    "span": [
+     47,
+     65
+    ],
+    "alts": [
+     "صفرو کتری را گذاشت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p55:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 55,
+   "key": "h100001",
+   "md_sha1": "7af204b5b76d1411d8d6451649bc93ed2f14243d",
+   "replay": true,
+   "query": {
+    "text": "شعله‌ها از اجاق جدا می‌شد",
+    "span": [
+     524,
+     549
+    ],
+    "alts": [
+     "شعله‌ها از اجاق جدا می‌شد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p55:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 55,
+   "key": "h100002",
+   "md_sha1": "7af204b5b76d1411d8d6451649bc93ed2f14243d",
+   "replay": true,
+   "query": {
+    "text": "هرم آتش پاها و دستها",
+    "span": [
+     840,
+     860
+    ],
+    "alts": [
+     "هرم آتش پاها و دستها"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "heh_boundary",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p55:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 55,
+   "key": "h100003",
+   "md_sha1": "7af204b5b76d1411d8d6451649bc93ed2f14243d",
+   "replay": true,
+   "query": {
+    "text": "دور خود می‌گشت .",
+    "span": [
+     802,
+     818
+    ],
+    "alts": [
+     "دور خود می‌گشت ."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p58:h1",
+   "slug": "bachehaye_ghali",
+   "page": 58,
+   "key": "h1",
+   "md_sha1": "9874df2cd69a2c88e3b830d53f89602ebeaa6d39",
+   "replay": true,
+   "query": {
+    "text": "سپیی ",
+    "span": [
+     223,
+     228
+    ],
+    "alts": [
+     "سپیدی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p59:h2",
+   "slug": "bachehaye_ghali",
+   "page": 59,
+   "key": "h2",
+   "md_sha1": "51ce31ef52bd54ed16521a807a8c87c9b3b0fa58",
+   "replay": true,
+   "query": {
+    "text": "ند ",
+    "span": [
+     199,
+     202
+    ],
+    "alts": [
+     "داشت "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p5:h1",
+   "slug": "bachehaye_ghali",
+   "page": 5,
+   "key": "h1",
+   "md_sha1": "9ddc672aa97c55b3a0024506e1ca5289b199df12",
+   "replay": true,
+   "query": {
+    "text": "پناهگاهشان‌دامان ",
+    "span": [
+     838,
+     855
+    ],
+    "alts": [
+     "پناهگاهشان دامان "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p60:h0",
+   "slug": "bachehaye_ghali",
+   "page": 60,
+   "key": "h0",
+   "md_sha1": "3acadeaaa46e32541378ea12770806ec049f8a41",
+   "replay": true,
+   "query": {
+    "text": "خوابیدملش ",
+    "span": [
+     1335,
+     1345
+    ],
+    "alts": [
+     "خوابیده‌اش "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p60:h100005",
+   "slug": "bachehaye_ghali",
+   "page": 60,
+   "key": "h100005",
+   "md_sha1": "3acadeaaa46e32541378ea12770806ec049f8a41",
+   "replay": true,
+   "query": {
+    "text": "سر بالهای بلند قیچی را",
+    "span": [
+     1783,
+     1805
+    ],
+    "alts": [
+     "سر بالهای بلند قیچی را"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p62:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 62,
+   "key": "h100004",
+   "md_sha1": "496a31a408ae1b2c527cf9e9cc39514712da738e",
+   "replay": true,
+   "query": {
+    "text": "[^4]: رفت بدر - بیرون",
+    "span": [
+     1323,
+     1344
+    ],
+    "alts": [
+     "[^4]: رفت بدر - بیرون"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "digit_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p62:h2",
+   "slug": "bachehaye_ghali",
+   "page": 62,
+   "key": "h2",
+   "md_sha1": "496a31a408ae1b2c527cf9e9cc39514712da738e",
+   "replay": true,
+   "query": {
+    "text": "کربه\n\n",
+    "span": [
+     1159,
+     1165
+    ],
+    "alts": [
+     "گربه\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p64:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 64,
+   "key": "h100000",
+   "md_sha1": "dc33cc582b8d368b48270f56eed27c741cc41085",
+   "replay": true,
+   "query": {
+    "text": "را تهاند",
+    "span": [
+     88,
+     96
+    ],
+    "alts": [
+     "را تهاند"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p64:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 64,
+   "key": "h100001",
+   "md_sha1": "dc33cc582b8d368b48270f56eed27c741cc41085",
+   "replay": true,
+   "query": {
+    "text": "بهخیس بود",
+    "span": [
+     443,
+     452
+    ],
+    "alts": [
+     "بهخیس بود"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p64:h100007",
+   "slug": "bachehaye_ghali",
+   "page": 64,
+   "key": "h100007",
+   "md_sha1": "dc33cc582b8d368b48270f56eed27c741cc41085",
+   "replay": true,
+   "query": {
+    "text": "که تو کاسه نیکلی",
+    "span": [
+     426,
+     442
+    ],
+    "alts": [
+     "که تو کاسه نیکلی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p64:h2",
+   "slug": "bachehaye_ghali",
+   "page": 64,
+   "key": "h2",
+   "md_sha1": "dc33cc582b8d368b48270f56eed27c741cc41085",
+   "replay": true,
+   "query": {
+    "text": "بواش بواش ",
+    "span": [
+     571,
+     581
+    ],
+    "alts": [
+     "یواش یواش "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p64:h4",
+   "slug": "bachehaye_ghali",
+   "page": 64,
+   "key": "h4",
+   "md_sha1": "dc33cc582b8d368b48270f56eed27c741cc41085",
+   "replay": true,
+   "query": {
+    "text": "ترباک ",
+    "span": [
+     1448,
+     1454
+    ],
+    "alts": [
+     "تریاک "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p65:h0",
+   "slug": "bachehaye_ghali",
+   "page": 65,
+   "key": "h0",
+   "md_sha1": "f49b5348df59d20528e1ec6859722ce24a25dc21",
+   "replay": true,
+   "query": {
+    "text": "ماشق بود. ماشق ",
+    "span": [
+     659,
+     674
+    ],
+    "alts": [
+     "ماشوق بود. ماشوق "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p65:h3",
+   "slug": "bachehaye_ghali",
+   "page": 65,
+   "key": "h3",
+   "md_sha1": "f49b5348df59d20528e1ec6859722ce24a25dc21",
+   "replay": true,
+   "query": {
+    "text": "سوارِ وتاج بر ",
+    "span": [
+     1223,
+     1237
+    ],
+    "alts": [
+     "سوار، تاج به "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p66:h2",
+   "slug": "bachehaye_ghali",
+   "page": 66,
+   "key": "h2",
+   "md_sha1": "1909f4cea1132fc4d39e729582b5318c67ac4765",
+   "replay": true,
+   "query": {
+    "text": "حیاطرساند. ",
+    "span": [
+     720,
+     731
+    ],
+    "alts": [
+     "حیاط رساند. "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p66:h3",
+   "slug": "bachehaye_ghali",
+   "page": 66,
+   "key": "h3",
+   "md_sha1": "1909f4cea1132fc4d39e729582b5318c67ac4765",
+   "replay": true,
+   "query": {
+    "text": "ولباسهاشان را توبش بتکانند. بتکانند ",
+    "span": [
+     960,
+     996
+    ],
+    "alts": [
+     "و لباس‌هاشان را توی‌اش بتکانند. "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p66:h4",
+   "slug": "bachehaye_ghali",
+   "page": 66,
+   "key": "h4",
+   "md_sha1": "1909f4cea1132fc4d39e729582b5318c67ac4765",
+   "replay": true,
+   "query": {
+    "text": "بهجاشان ",
+    "span": [
+     1117,
+     1125
+    ],
+    "alts": [
+     "به‌جاشان "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p67:h0",
+   "slug": "bachehaye_ghali",
+   "page": 67,
+   "key": "h0",
+   "md_sha1": "d6e93e476daddc183df2bdf9a3ac0809946084a7",
+   "replay": true,
+   "query": {
+    "text": "دوچرخه، ",
+    "span": [
+     529,
+     537
+    ],
+    "alts": [
+     "دوچرخه[^1]، "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p68:h0",
+   "slug": "bachehaye_ghali",
+   "page": 68,
+   "key": "h0",
+   "md_sha1": "7af8fc5b1068a704edc97e470238fc01b1343fbb",
+   "replay": true,
+   "query": {
+    "text": "بەدرک ",
+    "span": [
+     52,
+     58
+    ],
+    "alts": [
+     "به‌درک "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p68:h2",
+   "slug": "bachehaye_ghali",
+   "page": 68,
+   "key": "h2",
+   "md_sha1": "7af8fc5b1068a704edc97e470238fc01b1343fbb",
+   "replay": true,
+   "query": {
+    "text": "جسانش. ",
+    "span": [
+     394,
+     401
+    ],
+    "alts": [
+     "جسمانش. "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p69:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 69,
+   "key": "h100003",
+   "md_sha1": "cbd88a7ff577f4374dc883c9a525b5f9637b2ca9",
+   "replay": true,
+   "query": {
+    "text": "لبهاش را باد کرد‌ه‌بود",
+    "span": [
+     1121,
+     1143
+    ],
+    "alts": [
+     "لبهاش را باد کرد‌ه‌بود"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p69:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 69,
+   "key": "h100004",
+   "md_sha1": "cbd88a7ff577f4374dc883c9a525b5f9637b2ca9",
+   "replay": true,
+   "query": {
+    "text": "اشکمتون",
+    "span": [
+     1471,
+     1478
+    ],
+    "alts": [
+     "اشکمتون"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "digit_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p69:h2",
+   "slug": "bachehaye_ghali",
+   "page": 69,
+   "key": "h2",
+   "md_sha1": "cbd88a7ff577f4374dc883c9a525b5f9637b2ca9",
+   "replay": true,
+   "query": {
+    "text": "پاهاش‌بود و لبهاش را باد",
+    "span": [
+     1109,
+     1133
+    ],
+    "alts": [
+     "پاهاش بود و لبهاش را"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p69:h3",
+   "slug": "bachehaye_ghali",
+   "page": 69,
+   "key": "h3",
+   "md_sha1": "cbd88a7ff577f4374dc883c9a525b5f9637b2ca9",
+   "replay": true,
+   "query": {
+    "text": "اشکمتون[^3] کردم حرومتون باشه ،",
+    "span": [
+     1471,
+     1502
+    ],
+    "alts": [
+     "إِشکمتون[^3] کردم حرومتون باشه ،"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p6:h0",
+   "slug": "bachehaye_ghali",
+   "page": 6,
+   "key": "h0",
+   "md_sha1": "ce2222cf6902ef77d9cd13f281dcf352ddf0d24b",
+   "replay": true,
+   "query": {
+    "text": "دوربینی‌ها، ",
+    "span": [
+     299,
+     311
+    ],
+    "alts": [
+     "دوبیتی‌ها، "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p70:h100006",
+   "slug": "bachehaye_ghali",
+   "page": 70,
+   "key": "h100006",
+   "md_sha1": "2a30c969c5ad8d19436ea30b2f94b4e44318cbec",
+   "replay": true,
+   "query": {
+    "text": "می‌لرزید. می‌شلید.",
+    "span": [
+     796,
+     814
+    ],
+    "alts": [
+     "می‌لرزید. می‌شلید."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p70:h100007",
+   "slug": "bachehaye_ghali",
+   "page": 70,
+   "key": "h100007",
+   "md_sha1": "2a30c969c5ad8d19436ea30b2f94b4e44318cbec",
+   "replay": true,
+   "query": {
+    "text": "عین هزی توی گردوثی قوز.",
+    "span": [
+     1087,
+     1110
+    ],
+    "alts": [
+     "عین هزی توی گردوثی قوز."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p70:h100008",
+   "slug": "bachehaye_ghali",
+   "page": 70,
+   "key": "h100008",
+   "md_sha1": "2a30c969c5ad8d19436ea30b2f94b4e44318cbec",
+   "replay": true,
+   "query": {
+    "text": "سوخته‌ی تریاک می‌کشید.",
+    "span": [
+     1189,
+     1211
+    ],
+    "alts": [
+     "سوخته‌ی تریاک می‌کشید."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p70:h3",
+   "slug": "bachehaye_ghali",
+   "page": 70,
+   "key": "h3",
+   "md_sha1": "2a30c969c5ad8d19436ea30b2f94b4e44318cbec",
+   "replay": true,
+   "query": {
+    "text": "نیم نشسته ",
+    "span": [
+     780,
+     790
+    ],
+    "alts": [
+     "نیم‌نشسته "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p70:h4",
+   "slug": "bachehaye_ghali",
+   "page": 70,
+   "key": "h4",
+   "md_sha1": "2a30c969c5ad8d19436ea30b2f94b4e44318cbec",
+   "replay": true,
+   "query": {
+    "text": "می-",
+    "span": [
+     1241,
+     1244
+    ],
+    "alts": [
+     "می-\n\n[^1]: اِشکم داشتن= آبستن"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p71:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 71,
+   "key": "h100004",
+   "md_sha1": "927c619da8b1ef7ef0d3e474297f8307f6fbdd24",
+   "replay": true,
+   "query": {
+    "text": "سر وصدا وانشسته بود",
+    "span": [
+     1332,
+     1351
+    ],
+    "alts": [
+     "سر وصدا وانشسته بود"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p72:h100005",
+   "slug": "bachehaye_ghali",
+   "page": 72,
+   "key": "h100005",
+   "md_sha1": "b71859ee1969b2458e38b208a79587ac7c3fe3bf",
+   "replay": true,
+   "query": {
+    "text": "۱ - تُنک کار -",
+    "span": [
+     1242,
+     1256
+    ],
+    "alts": [
+     "۱ - تُنک کار -"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p72:h5",
+   "slug": "bachehaye_ghali",
+   "page": 72,
+   "key": "h5",
+   "md_sha1": "b71859ee1969b2458e38b208a79587ac7c3fe3bf",
+   "replay": true,
+   "query": {
+    "text": "۱ - ",
+    "span": [
+     1242,
+     1246
+    ],
+    "alts": [
+     "[^1]: "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p72:h6",
+   "slug": "bachehaye_ghali",
+   "page": 72,
+   "key": "h6",
+   "md_sha1": "b71859ee1969b2458e38b208a79587ac7c3fe3bf",
+   "replay": true,
+   "query": {
+    "text": "۲- نمی‌لم = نمی‌گذارم .",
+    "span": [
+     1408,
+     1431
+    ],
+    "alts": [
+     "[^2]: نمی‌لم = نمی‌گذارم ."
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p74:h0",
+   "slug": "bachehaye_ghali",
+   "page": 74,
+   "key": "h0",
+   "md_sha1": "345c7baa1063ca5af6259373fe84b4b87b5cceeb",
+   "replay": true,
+   "query": {
+    "text": "ناشد، ",
+    "span": [
+     949,
+     955
+    ],
+    "alts": [
+     "تاشد، "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p74:h1",
+   "slug": "bachehaye_ghali",
+   "page": 74,
+   "key": "h1",
+   "md_sha1": "345c7baa1063ca5af6259373fe84b4b87b5cceeb",
+   "replay": true,
+   "query": {
+    "text": "رفتیم",
+    "span": [
+     1503,
+     1508
+    ],
+    "alts": [
+     "رفتیم\n\n---\n\n[^1]: لِندره ="
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p75:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 75,
+   "key": "h100000",
+   "md_sha1": "f692cbcb9ef1cf7db62b086cbcdaff614b46a087",
+   "replay": true,
+   "query": {
+    "text": "خجیجه گفت",
+    "span": [
+     100,
+     109
+    ],
+    "alts": [
+     "خجیجه گفت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p75:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 75,
+   "key": "h100002",
+   "md_sha1": "f692cbcb9ef1cf7db62b086cbcdaff614b46a087",
+   "replay": true,
+   "query": {
+    "text": "برا اینکه بیهو نرم، به",
+    "span": [
+     1262,
+     1284
+    ],
+    "alts": [
+     "برا اینکه بیهو نرم، به"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p75:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 75,
+   "key": "h100003",
+   "md_sha1": "f692cbcb9ef1cf7db62b086cbcdaff614b46a087",
+   "replay": true,
+   "query": {
+    "text": "رخساروِ۳",
+    "span": [
+     1145,
+     1153
+    ],
+    "alts": [
+     "رخساروِ۳"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p76:h100003",
+   "slug": "bachehaye_ghali",
+   "page": 76,
+   "key": "h100003",
+   "md_sha1": "656e97ba334aa32558ec4a48e2898eb113fd853c",
+   "replay": true,
+   "query": {
+    "text": "سفرشون بیا",
+    "span": [
+     939,
+     949
+    ],
+    "alts": [
+     "سفرشون بیا"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p78:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 78,
+   "key": "h100002",
+   "md_sha1": "2f5cde5f4eb387427bb862331e4cb647c263a69e",
+   "replay": true,
+   "query": {
+    "text": "به چشمو پُرک۴ دماغشه",
+    "span": [
+     941,
+     961
+    ],
+    "alts": [
+     "به چشمو پُرک۴ دماغشه"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p79:h1",
+   "slug": "bachehaye_ghali",
+   "page": 79,
+   "key": "h1",
+   "md_sha1": "eda609db0b15a68f8800e82382c4008ad9d2392d",
+   "replay": true,
+   "query": {
+    "text": "دوشتن  ",
+    "span": [
+     1568,
+     1575
+    ],
+    "alts": [
+     "داشتن  "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p84:i1",
+   "slug": "bachehaye_ghali",
+   "page": 84,
+   "key": "i1",
+   "md_sha1": "54361692831630b4a4abbe7e3246191974a95dbf",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p85:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 85,
+   "key": "h100001",
+   "md_sha1": "92f8763ed80b768f080269722c7feaf93d1478f6",
+   "replay": true,
+   "query": {
+    "text": "گِل کاری‌سرپخ شد",
+    "span": [
+     447,
+     463
+    ],
+    "alts": [
+     "گِل کاری‌سرپخ شد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p85:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 85,
+   "key": "h100002",
+   "md_sha1": "92f8763ed80b768f080269722c7feaf93d1478f6",
+   "replay": true,
+   "query": {
+    "text": "خجیجه حرف زد",
+    "span": [
+     342,
+     354
+    ],
+    "alts": [
+     "خجیجه حرف زد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p85:h2",
+   "slug": "bachehaye_ghali",
+   "page": 85,
+   "key": "h2",
+   "md_sha1": "92f8763ed80b768f080269722c7feaf93d1478f6",
+   "replay": true,
+   "query": {
+    "text": "کلمات ",
+    "span": [
+     1332,
+     1338
+    ],
+    "alts": [
+     "کلات "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p86:h0",
+   "slug": "bachehaye_ghali",
+   "page": 86,
+   "key": "h0",
+   "md_sha1": "c5482cb424d6956275349e3c4402080dbe2cfb86",
+   "replay": true,
+   "query": {
+    "text": "کنه.\n\n\n\n",
+    "span": [
+     383,
+     391
+    ],
+    "alts": [
+     "کنه.\n\n□\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p86:h2",
+   "slug": "bachehaye_ghali",
+   "page": 86,
+   "key": "h2",
+   "md_sha1": "c5482cb424d6956275349e3c4402080dbe2cfb86",
+   "replay": true,
+   "query": {
+    "text": "وشت ",
+    "span": [
+     850,
+     854
+    ],
+    "alts": [
+     "وشت[^2] "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "footnote_marker",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100000",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100000",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "کف دست رگ رگی",
+    "span": [
+     218,
+     231
+    ],
+    "alts": [
+     "کف دست رگ رگی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100001",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100001",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "زاغ داغ بود. دست عادت",
+    "span": [
+     308,
+     329
+    ],
+    "alts": [
+     "زاغ داغ بود. دست عادت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100002",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "که می‌با بدی",
+    "span": [
+     483,
+     495
+    ],
+    "alts": [
+     "که می‌با بدی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100004",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100004",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "اما بجهت صاب قدمه ستاره‌اش",
+    "span": [
+     868,
+     894
+    ],
+    "alts": [
+     "اما بجهت صاب قدمه ستاره‌اش"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100006",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100006",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "به کف پای چپش مالید",
+    "span": [
+     1182,
+     1201
+    ],
+    "alts": [
+     "به کف پای چپش مالید"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100008",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100008",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "شاید خدا به دلش داد",
+    "span": [
+     1619,
+     1638
+    ],
+    "alts": [
+     "شاید خدا به دلش داد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p87:h100009",
+   "slug": "bachehaye_ghali",
+   "page": 87,
+   "key": "h100009",
+   "md_sha1": "e0e6e95a56fa26d5918d398d33d89361c379fe6a",
+   "replay": true,
+   "query": {
+    "text": "دست بجهات پر پهمونه",
+    "span": [
+     616,
+     635
+    ],
+    "alts": [
+     "دست بجهات پر پهمونه"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p88:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 88,
+   "key": "h100002",
+   "md_sha1": "a0ad1024cb3e7a8528f64dedf1353cc7c50d1f95",
+   "replay": true,
+   "query": {
+    "text": "به التماس.",
+    "span": [
+     873,
+     883
+    ],
+    "alts": [
+     "به التماس."
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p89:h2",
+   "slug": "bachehaye_ghali",
+   "page": 89,
+   "key": "h2",
+   "md_sha1": "3631f24f33df31e94a28f6df50b7c1c537cd415e",
+   "replay": true,
+   "query": {
+    "text": "راتپاند تو آتش و خاکستر",
+    "span": [
+     838,
+     861
+    ],
+    "alts": [
+     "را تپاند تو آتش و"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "bachehaye_ghali:p9:h100002",
+   "slug": "bachehaye_ghali",
+   "page": 9,
+   "key": "h100002",
+   "md_sha1": "67b435f371900281de49d9aed7b3d5fd8d0205ea",
+   "replay": true,
+   "query": {
+    "text": "[^4]: خود = با",
+    "span": [
+     1447,
+     1461
+    ],
+    "alts": [
+     "[^4]: خود = با"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": true,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p10:i1",
+   "slug": "boof-e-koor",
+   "page": 10,
+   "key": "i1",
+   "md_sha1": "cf614d4ce652e053d866e5577c4692c968874cae",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p11:h100001",
+   "slug": "boof-e-koor",
+   "page": 11,
+   "key": "h100001",
+   "md_sha1": "499060776d8c804e70377dae9aba52d8aa8b8854",
+   "replay": true,
+   "query": {
+    "text": "اصلا فهمیدم",
+    "span": [
+     828,
+     839
+    ],
+    "alts": [
+     "اصلا فهمیدم"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p14:h0",
+   "slug": "boof-e-koor",
+   "page": 14,
+   "key": "h0",
+   "md_sha1": "e7d1b14af85a03daa98098fd2b3d5d92533907ac",
+   "replay": true,
+   "query": {
+    "text": "راروشن ",
+    "span": [
+     536,
+     543
+    ],
+    "alts": [
+     "را روشن "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p14:h100000",
+   "slug": "boof-e-koor",
+   "page": 14,
+   "key": "h100000",
+   "md_sha1": "e7d1b14af85a03daa98098fd2b3d5d92533907ac",
+   "replay": true,
+   "query": {
+    "text": "بی‌آنکه نگاه بکند",
+    "span": [
+     23,
+     40
+    ],
+    "alts": [
+     "بی‌آنکه نگاه بکند"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p17:h100000",
+   "slug": "boof-e-koor",
+   "page": 17,
+   "key": "h100000",
+   "md_sha1": "46bdccbb822ca0fe4fdc66516201663725c07774",
+   "replay": true,
+   "query": {
+    "text": "چشم‌های بسته آمده شده خودش",
+    "span": [
+     854,
+     880
+    ],
+    "alts": [
+     "چشم‌های بسته آمده شده خودش"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p18:h100001",
+   "slug": "boof-e-koor",
+   "page": 18,
+   "key": "h100001",
+   "md_sha1": "cb670d7c0fe3303b8fb738e955a4cb072b3a202e",
+   "replay": true,
+   "query": {
+    "text": "نمای رُستنیها",
+    "span": [
+     836,
+     849
+    ],
+    "alts": [
+     "نمای رُستنیها"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p20:h1",
+   "slug": "boof-e-koor",
+   "page": 20,
+   "key": "h1",
+   "md_sha1": "2a099238aba62c18da89d3948b0f807bafa3f7aa",
+   "replay": true,
+   "query": {
+    "text": "میلولیدند ",
+    "span": [
+     1309,
+     1319
+    ],
+    "alts": [
+     "می‌لولیدند "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p25:h100000",
+   "slug": "boof-e-koor",
+   "page": 25,
+   "key": "h100000",
+   "md_sha1": "a346d70208ee522625fab05cfc0a83a908061987",
+   "replay": true,
+   "query": {
+    "text": "دست کردم جیبم کرایۀ کالسکه‌چی",
+    "span": [
+     0,
+     29
+    ],
+    "alts": [
+     "دست کردم جیبم کرایۀ کالسکه‌چی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p26:h1",
+   "slug": "boof-e-koor",
+   "page": 26,
+   "key": "h1",
+   "md_sha1": "fa71ea8dd8a1c0a19a00bed68c823943a21021e4",
+   "replay": true,
+   "query": {
+    "text": "درآن ",
+    "span": [
+     839,
+     844
+    ],
+    "alts": [
+     "در آن "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p26:h100000",
+   "slug": "boof-e-koor",
+   "page": 26,
+   "key": "h100000",
+   "md_sha1": "fa71ea8dd8a1c0a19a00bed68c823943a21021e4",
+   "replay": true,
+   "query": {
+    "text": "بعد قلوه‌سنگ و شن آورم",
+    "span": [
+     1281,
+     1303
+    ],
+    "alts": [
+     "بعد قلوه‌سنگ و شن آورم"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p28:h100000",
+   "slug": "boof-e-koor",
+   "page": 28,
+   "key": "h100000",
+   "md_sha1": "7a112d044248e344a617cd2b60a34224f1a0885e",
+   "replay": true,
+   "query": {
+    "text": "دو قدم راس»",
+    "span": [
+     609,
+     620
+    ],
+    "alts": [
+     "دو قدم راس»"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p30:h100001",
+   "slug": "boof-e-koor",
+   "page": 30,
+   "key": "h100001",
+   "md_sha1": "f49eb84d8e0908755365b91415d562310aac2ad9",
+   "replay": true,
+   "query": {
+    "text": "روح مرموز، یک‌روح غریب غیر",
+    "span": [
+     734,
+     760
+    ],
+    "alts": [
+     "روح مرموز، یک‌روح غریب غیر"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p30:h100002",
+   "slug": "boof-e-koor",
+   "page": 30,
+   "key": "h100002",
+   "md_sha1": "f49eb84d8e0908755365b91415d562310aac2ad9",
+   "replay": true,
+   "query": {
+    "text": "شرارهٔ روح شرروری در ته",
+    "span": [
+     792,
+     815
+    ],
+    "alts": [
+     "شرارهٔ روح شرروری در ته"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p34:h0",
+   "slug": "boof-e-koor",
+   "page": 34,
+   "key": "h0",
+   "md_sha1": "9303b9bda026a353772473c3ca3356e54f7625d4",
+   "replay": true,
+   "query": {
+    "text": "سررف ",
+    "span": [
+     827,
+     832
+    ],
+    "alts": [
+     "سر رف "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p37:h100000",
+   "slug": "boof-e-koor",
+   "page": 37,
+   "key": "h100000",
+   "md_sha1": "dc2e2db0fdde14d3b5fdf6e91aaba3ae020b1e85",
+   "replay": true,
+   "query": {
+    "text": "مثل فصل‌های سال و در",
+    "span": [
+     950,
+     970
+    ],
+    "alts": [
+     "مثل فصل‌های سال و در"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_text",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p37:h100001",
+   "slug": "boof-e-koor",
+   "page": 37,
+   "key": "h100001",
+   "md_sha1": "dc2e2db0fdde14d3b5fdf6e91aaba3ae020b1e85",
+   "replay": true,
+   "query": {
+    "text": "یک‌فصل و یک حالت",
+    "span": [
+     1035,
+     1051
+    ],
+    "alts": [
+     "یک‌فصل و یک حالت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p37:i3",
+   "slug": "boof-e-koor",
+   "page": 37,
+   "key": "i3",
+   "md_sha1": "dc2e2db0fdde14d3b5fdf6e91aaba3ae020b1e85",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p41:h100001",
+   "slug": "boof-e-koor",
+   "page": 41,
+   "key": "h100001",
+   "md_sha1": "87e92732a5c1b523f65c137d108b1ae90b1007a0",
+   "replay": true,
+   "query": {
+    "text": "بهزنی",
+    "span": [
+     165,
+     170
+    ],
+    "alts": [
+     "بهزنی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "zwnj_error",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p45:h0",
+   "slug": "boof-e-koor",
+   "page": 45,
+   "key": "h0",
+   "md_sha1": "bf0987ab56f6c7fe60b81fd54e483936328c2a3c",
+   "replay": true,
+   "query": {
+    "text": "ریک‌زده‌اش ",
+    "span": [
+     1042,
+     1053
+    ],
+    "alts": [
+     "ریگ‌زده‌اش "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p48:h1",
+   "slug": "boof-e-koor",
+   "page": 48,
+   "key": "h1",
+   "md_sha1": "029d4a0c6b80319052939c8b8c248d23fb6dc0f2",
+   "replay": true,
+   "query": {
+    "text": "بودم- ",
+    "span": [
+     1283,
+     1289
+    ],
+    "alts": [
+     "بودم ـ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p50:h0",
+   "slug": "boof-e-koor",
+   "page": 50,
+   "key": "h0",
+   "md_sha1": "61215f0d3c2daecd4254a4aeb67225f26491e9e7",
+   "replay": true,
+   "query": {
+    "text": "جماعها ",
+    "span": [
+     112,
+     119
+    ],
+    "alts": [
+     "جماعتها "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p53:h0",
+   "slug": "boof-e-koor",
+   "page": 53,
+   "key": "h0",
+   "md_sha1": "1ccd7cd439b98881dc427418d3634b5eda3d6bda",
+   "replay": true,
+   "query": {
+    "text": "یکجور ",
+    "span": [
+     1117,
+     1123
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p56:h0",
+   "slug": "boof-e-koor",
+   "page": 56,
+   "key": "h0",
+   "md_sha1": "978f540ef903e9d8b1987a4458f5f0ba98f38906",
+   "replay": true,
+   "query": {
+    "text": "کوه ",
+    "span": [
+     1226,
+     1230
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p59:h0",
+   "slug": "boof-e-koor",
+   "page": 59,
+   "key": "h0",
+   "md_sha1": "02e5ea522240fe072c356aafa7927df2d3b3dfce",
+   "replay": true,
+   "query": {
+    "text": "می‌رغضب می‌کرد ",
+    "span": [
+     1273,
+     1288
+    ],
+    "alts": [
+     "میرغضب "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p61:h0",
+   "slug": "boof-e-koor",
+   "page": 61,
+   "key": "h0",
+   "md_sha1": "bbdb7d3387e510e0c3a0b2e03216ac26ffb74a5f",
+   "replay": true,
+   "query": {
+    "text": "تاریک‌روشنٍ ",
+    "span": [
+     805,
+     817
+    ],
+    "alts": [
+     "تاریک‌روشنْ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p63:h100000",
+   "slug": "boof-e-koor",
+   "page": 63,
+   "key": "h100000",
+   "md_sha1": "fb4a0cd3ae1e7b07ec9a9429bc35c9f986971023",
+   "replay": true,
+   "query": {
+    "text": "در محیط دیگری ورای دنیای",
+    "span": [
+     418,
+     442
+    ],
+    "alts": [
+     "در محیط دیگری ورای دنیای"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p63:h100002",
+   "slug": "boof-e-koor",
+   "page": 63,
+   "key": "h100002",
+   "md_sha1": "fb4a0cd3ae1e7b07ec9a9429bc35c9f986971023",
+   "replay": true,
+   "query": {
+    "text": "دل‌ضعفه شدیم",
+    "span": [
+     890,
+     902
+    ],
+    "alts": [
+     "دل‌ضعفه شدیم"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p65:h100002",
+   "slug": "boof-e-koor",
+   "page": 65,
+   "key": "h100002",
+   "md_sha1": "53f8ad83fd382b7afd67e903ed16d1c57e3ce365",
+   "replay": true,
+   "query": {
+    "text": "پر سیاوشان،",
+    "span": [
+     463,
+     474
+    ],
+    "alts": [
+     "پر سیاوشان،"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_text",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p67:h100001",
+   "slug": "boof-e-koor",
+   "page": 67,
+   "key": "h100001",
+   "md_sha1": "f30ef006a61c4bb59c1f4726f47015728fcaef3e",
+   "replay": true,
+   "query": {
+    "text": "درخشانْ سوارخ سوراخ شده باشد",
+    "span": [
+     159,
+     187
+    ],
+    "alts": [
+     "درخشانْ سوارخ سوراخ شده باشد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p71:h0",
+   "slug": "boof-e-koor",
+   "page": 71,
+   "key": "h0",
+   "md_sha1": "bd6460533e6be42efea73a16806e2cdadf8f51db",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": [
+     48,
+     48
+    ],
+    "alts": [
+     "پول "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p71:h100000",
+   "slug": "boof-e-koor",
+   "page": 71,
+   "key": "h100000",
+   "md_sha1": "bd6460533e6be42efea73a16806e2cdadf8f51db",
+   "replay": true,
+   "query": {
+    "text": "اگر زنش را می‌کشت چقدر",
+    "span": [
+     25,
+     47
+    ],
+    "alts": [
+     "اگر زنش را می‌کشت چقدر"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p72:h0",
+   "slug": "boof-e-koor",
+   "page": 72,
+   "key": "h0",
+   "md_sha1": "3f0b8feeb357f9a2e69ad70aafc9cd122c267409",
+   "replay": true,
+   "query": {
+    "text": "ناگهام ",
+    "span": [
+     1059,
+     1066
+    ],
+    "alts": [
+     "ناگهان "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p74:h1",
+   "slug": "boof-e-koor",
+   "page": 74,
+   "key": "h1",
+   "md_sha1": "f20f945683501b6df5fdab4e4d782562ca2eed85",
+   "replay": true,
+   "query": {
+    "text": "دراین ",
+    "span": [
+     1141,
+     1147
+    ],
+    "alts": [
+     "در این "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p80:h0",
+   "slug": "boof-e-koor",
+   "page": 80,
+   "key": "h0",
+   "md_sha1": "dc7beb62d2b72d08f24d29f8874cba967ad24180",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": [
+     0,
+     0
+    ],
+    "alts": [
+     "۸۰\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p80:h1",
+   "slug": "boof-e-koor",
+   "page": 80,
+   "key": "h1",
+   "md_sha1": "dc7beb62d2b72d08f24d29f8874cba967ad24180",
+   "replay": true,
+   "query": {
+    "text": "آیات ",
+    "span": [
+     239,
+     244
+    ],
+    "alts": [
+     "آیاتِ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p80:h2",
+   "slug": "boof-e-koor",
+   "page": 80,
+   "key": "h2",
+   "md_sha1": "dc7beb62d2b72d08f24d29f8874cba967ad24180",
+   "replay": true,
+   "query": {
+    "text": "خاکسترنشین ",
+    "span": [
+     364,
+     375
+    ],
+    "alts": [
+     "خاکسترنشینِ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p84:h0",
+   "slug": "boof-e-koor",
+   "page": 84,
+   "key": "h0",
+   "md_sha1": "7b16b344b440dd944395365b7cafc6a320fdf6cf",
+   "replay": true,
+   "query": {
+    "text": "پای ",
+    "span": [
+     543,
+     547
+    ],
+    "alts": [
+     "پلک "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p87:h1",
+   "slug": "boof-e-koor",
+   "page": 87,
+   "key": "h1",
+   "md_sha1": "93b7accc96a6f2c0f3a2192d8b719f8e4a932c7a",
+   "replay": true,
+   "query": {
+    "text": "به‌عنون ",
+    "span": [
+     1307,
+     1315
+    ],
+    "alts": [
+     "به‌عنوان "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p88:h0",
+   "slug": "boof-e-koor",
+   "page": 88,
+   "key": "h0",
+   "md_sha1": "1bd719ad46521df41e0e7372fd23fecd59710921",
+   "replay": true,
+   "query": {
+    "text": "دم  دست بدرد بخوره!». من",
+    "span": [
+     972,
+     996
+    ],
+    "alts": [
+     "دم دست بدرد بخوره!». من"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p88:h100002",
+   "slug": "boof-e-koor",
+   "page": 88,
+   "key": "h100002",
+   "md_sha1": "1bd719ad46521df41e0e7372fd23fecd59710921",
+   "replay": true,
+   "query": {
+    "text": "گاس برا دم  دست بدرد",
+    "span": [
+     964,
+     984
+    ],
+    "alts": [
+     "گاس برا دم  دست بدرد"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p89:i0",
+   "slug": "boof-e-koor",
+   "page": 89,
+   "key": "i0",
+   "md_sha1": "e0dab00fbbaee0f97bafd22ae7b5e51a975e9c76",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p91:h0",
+   "slug": "boof-e-koor",
+   "page": 91,
+   "key": "h0",
+   "md_sha1": "2ec07f9141473bed5dcf0e8c00fa9687db3e9530",
+   "replay": true,
+   "query": {
+    "text": "درو ",
+    "span": [
+     415,
+     419
+    ],
+    "alts": [
+     "در و "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p91:h100000",
+   "slug": "boof-e-koor",
+   "page": 91,
+   "key": "h100000",
+   "md_sha1": "2ec07f9141473bed5dcf0e8c00fa9687db3e9530",
+   "replay": true,
+   "query": {
+    "text": "مثل یک‌نفر لال",
+    "span": [
+     738,
+     752
+    ],
+    "alts": [
+     "مثل یک‌نفر لال"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p93:h100001",
+   "slug": "boof-e-koor",
+   "page": 93,
+   "key": "h100001",
+   "md_sha1": "d744647aa97c91ec957515fcbd08c701ab1acae4",
+   "replay": true,
+   "query": {
+    "text": "درمیان این فشار عرقا گوارا",
+    "span": [
+     88,
+     114
+    ],
+    "alts": [
+     "درمیان این فشار عرقا گوارا"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "boof-e-koor:p93:h100004",
+   "slug": "boof-e-koor",
+   "page": 93,
+   "key": "h100004",
+   "md_sha1": "d744647aa97c91ec957515fcbd08c701ab1acae4",
+   "replay": true,
+   "query": {
+    "text": "ازته وجودمان",
+    "span": [
+     420,
+     432
+    ],
+    "alts": [
+     "ازته وجودمان"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "boof-e-koor:p9:h1",
+   "slug": "boof-e-koor",
+   "page": 9,
+   "key": "h1",
+   "md_sha1": "c7d3f824ffbad22979d3768e63d36d03a0b4ffb7",
+   "replay": true,
+   "query": {
+    "text": "در ",
+    "span": [
+     1252,
+     1255
+    ],
+    "alts": [
+     "درِ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p10:h100000",
+   "slug": "haaji-agha",
+   "page": 10,
+   "key": "h100000",
+   "md_sha1": "4211970a04083f74d73b17fcd5e9ce370f62df87",
+   "replay": true,
+   "query": {
+    "text": "شلوار کثیف ماشی از در",
+    "span": [
+     1650,
+     1671
+    ],
+    "alts": [
+     "شلوار کثیف ماشی از در"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p13:h0",
+   "slug": "haaji-agha",
+   "page": 13,
+   "key": "h0",
+   "md_sha1": "604caa1e00a4a167e4be4b77648d1e33911eddf8",
+   "replay": true,
+   "query": {
+    "text": "بخواند ",
+    "span": [
+     128,
+     135
+    ],
+    "alts": [
+     "بخواهند "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "missing_text",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p15:h0",
+   "slug": "haaji-agha",
+   "page": 15,
+   "key": "h0",
+   "md_sha1": "23632cccb54ee80c2300077c6aec7ed8ebb7ec9c",
+   "replay": true,
+   "query": {
+    "text": "چوه ",
+    "span": [
+     2483,
+     2487
+    ],
+    "alts": [
+     "چه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p18:h1",
+   "slug": "haaji-agha",
+   "page": 18,
+   "key": "h1",
+   "md_sha1": "8ae6358fa92360032a9b8951b7337ef25488f098",
+   "replay": true,
+   "query": {
+    "text": "جلذقه ",
+    "span": [
+     643,
+     649
+    ],
+    "alts": [
+     "جلیقه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p19:h0",
+   "slug": "haaji-agha",
+   "page": 19,
+   "key": "h0",
+   "md_sha1": "4f207260e1448201f7852f5a20aacf714aae96b3",
+   "replay": true,
+   "query": {
+    "text": "خیله ",
+    "span": [
+     1289,
+     1294
+    ],
+    "alts": [
+     "خپله "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p19:h2",
+   "slug": "haaji-agha",
+   "page": 19,
+   "key": "h2",
+   "md_sha1": "4f207260e1448201f7852f5a20aacf714aae96b3",
+   "replay": true,
+   "query": {
+    "text": "«مرحوم ",
+    "span": [
+     1694,
+     1701
+    ],
+    "alts": [
+     "\"مرحوم "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p21:h100001",
+   "slug": "haaji-agha",
+   "page": 21,
+   "key": "h100001",
+   "md_sha1": "cd7c6a86c65f13cde0e3c586fd98ab5703ca5968",
+   "replay": true,
+   "query": {
+    "text": "غروغر غلیان می‌کشید",
+    "span": [
+     2450,
+     2469
+    ],
+    "alts": [
+     "غروغر غلیان می‌کشید"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p23:h100000",
+   "slug": "haaji-agha",
+   "page": 23,
+   "key": "h100000",
+   "md_sha1": "27ba38dc2fa82e2c2d8654c99a4d8f0b890ee106",
+   "replay": true,
+   "query": {
+    "text": "سری براه پائی براه",
+    "span": [
+     1701,
+     1719
+    ],
+    "alts": [
+     "سری براه پائی براه"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p24:h100000",
+   "slug": "haaji-agha",
+   "page": 24,
+   "key": "h100000",
+   "md_sha1": "01c6f3bac14297e40d3c6be19060835392e0201b",
+   "replay": true,
+   "query": {
+    "text": "به همین جهت تابستان",
+    "span": [
+     29,
+     48
+    ],
+    "alts": [
+     "به همین جهت تابستان"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p24:h100001",
+   "slug": "haaji-agha",
+   "page": 24,
+   "key": "h100001",
+   "md_sha1": "01c6f3bac14297e40d3c6be19060835392e0201b",
+   "replay": true,
+   "query": {
+    "text": "دندانهایش",
+    "span": [
+     904,
+     913
+    ],
+    "alts": [
+     "دندانهایش"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p28:h100003",
+   "slug": "haaji-agha",
+   "page": 28,
+   "key": "h100003",
+   "md_sha1": "ef1a9114f20f4a5c032cc2f385dd03fc25853ee2",
+   "replay": true,
+   "query": {
+    "text": "«من خودم پیش قراول آزادی",
+    "span": [
+     439,
+     463
+    ],
+    "alts": [
+     "«من خودم پیش قراول آزادی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p28:h4",
+   "slug": "haaji-agha",
+   "page": 28,
+   "key": "h4",
+   "md_sha1": "ef1a9114f20f4a5c032cc2f385dd03fc25853ee2",
+   "replay": true,
+   "query": {
+    "text": "«حاجی آقا نگو، فرشته بگو!» ",
+    "span": [
+     2614,
+     2641
+    ],
+    "alts": [
+     "\"حاجی آقا نگو، فرشته بگو!\" "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "unlinked",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p2:h100002",
+   "slug": "haaji-agha",
+   "page": 2,
+   "key": "h100002",
+   "md_sha1": "968a561329318e68f5ab7a6c7b3be4a91bb2a19d",
+   "replay": true,
+   "query": {
+    "text": "کره دریائی",
+    "span": [
+     1353,
+     1363
+    ],
+    "alts": [
+     "کره دریائی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p30:h0",
+   "slug": "haaji-agha",
+   "page": 30,
+   "key": "h0",
+   "md_sha1": "a2687bf007200ee9b7e04625e5dc1bedfc161a4f",
+   "replay": true,
+   "query": {
+    "text": "گشاد ",
+    "span": [
+     2092,
+     2097
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p32:h1",
+   "slug": "haaji-agha",
+   "page": 32,
+   "key": "h1",
+   "md_sha1": "8a610b7f2f2be886e89efbc2d42b18431013c462",
+   "replay": true,
+   "query": {
+    "text": "بلگ ",
+    "span": [
+     817,
+     821
+    ],
+    "alts": [
+     "برگ "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p33:h1",
+   "slug": "haaji-agha",
+   "page": 33,
+   "key": "h1",
+   "md_sha1": "3c59b26d78e6dd3e7e905fc32f77304976ea95c0",
+   "replay": true,
+   "query": {
+    "text": "خونه‌ی ",
+    "span": [
+     2511,
+     2518
+    ],
+    "alts": [
+     "خونه "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p34:h100001",
+   "slug": "haaji-agha",
+   "page": 34,
+   "key": "h100001",
+   "md_sha1": "50c48ee7a53a28c43a13b1c4dcfd0f09cec9fc3a",
+   "replay": true,
+   "query": {
+    "text": "تیپ بازاری",
+    "span": [
+     2683,
+     2693
+    ],
+    "alts": [
+     "تیپ بازاری"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p35:h0",
+   "slug": "haaji-agha",
+   "page": 35,
+   "key": "h0",
+   "md_sha1": "022173e3bd8d15dbb1fe481ce7161b3bf1697b60",
+   "replay": true,
+   "query": {
+    "text": "بشند... ",
+    "span": [
+     520,
+     528
+    ],
+    "alts": [
+     "باشند... "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p35:h1",
+   "slug": "haaji-agha",
+   "page": 35,
+   "key": "h1",
+   "md_sha1": "022173e3bd8d15dbb1fe481ce7161b3bf1697b60",
+   "replay": true,
+   "query": {
+    "text": "ملهم.\n\n",
+    "span": [
+     984,
+     991
+    ],
+    "alts": [
+     "مرهم.\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p35:h100002",
+   "slug": "haaji-agha",
+   "page": 35,
+   "key": "h100002",
+   "md_sha1": "022173e3bd8d15dbb1fe481ce7161b3bf1697b60",
+   "replay": true,
+   "query": {
+    "text": "هر چه بادا باد! خوب،",
+    "span": [
+     1154,
+     1174
+    ],
+    "alts": [
+     "هر چه بادا باد! خوب،"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p38:h100001",
+   "slug": "haaji-agha",
+   "page": 38,
+   "key": "h100001",
+   "md_sha1": "69add888ea20d622a1db565fc95af45e0a1a42e9",
+   "replay": true,
+   "query": {
+    "text": "از لحاظ منافع میهن بگم",
+    "span": [
+     952,
+     974
+    ],
+    "alts": [
+     "از لحاظ منافع میهن بگم"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p39:h100002",
+   "slug": "haaji-agha",
+   "page": 39,
+   "key": "h100002",
+   "md_sha1": "40b55c1c609a6ccdf7f201b6f48e987132569e87",
+   "replay": true,
+   "query": {
+    "text": "\"پاینده باد ایران! چو ایران",
+    "span": null,
+    "alts": [
+     "\"پاینده باد ایران! چو ایران"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p3:h0",
+   "slug": "haaji-agha",
+   "page": 3,
+   "key": "h0",
+   "md_sha1": "39bac7a05f838a234acd3c038c43fed9d3d7e179",
+   "replay": true,
+   "query": {
+    "text": "داد ",
+    "span": [
+     2244,
+     2248
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p3:h2",
+   "slug": "haaji-agha",
+   "page": 3,
+   "key": "h2",
+   "md_sha1": "39bac7a05f838a234acd3c038c43fed9d3d7e179",
+   "replay": true,
+   "query": {
+    "text": "چنوی ",
+    "span": [
+     2726,
+     2731
+    ],
+    "alts": [
+     "جوری "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p41:h0",
+   "slug": "haaji-agha",
+   "page": 41,
+   "key": "h0",
+   "md_sha1": "08e7fd63c637c446b40501a1cb991afaa767d8f9",
+   "replay": true,
+   "query": {
+    "text": "نمی دادند.\n\n",
+    "span": [
+     94,
+     106
+    ],
+    "alts": [
+     "نمی‌دادند.\n\n"
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p42:h1",
+   "slug": "haaji-agha",
+   "page": 42,
+   "key": "h1",
+   "md_sha1": "6d71b5c91461152fc0df7bb1421a6786d1b45728",
+   "replay": true,
+   "query": {
+    "text": "پیزی ",
+    "span": [
+     2435,
+     2440
+    ],
+    "alts": [
+     "چیزی "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p42:h100003",
+   "slug": "haaji-agha",
+   "page": 42,
+   "key": "h100003",
+   "md_sha1": "6d71b5c91461152fc0df7bb1421a6786d1b45728",
+   "replay": true,
+   "query": {
+    "text": "شاخ حسینی و (بلانسبت شما)",
+    "span": [
+     1909,
+     1934
+    ],
+    "alts": [
+     "شاخ حسینی و (بلانسبت شما)"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p44:h1",
+   "slug": "haaji-agha",
+   "page": 44,
+   "key": "h1",
+   "md_sha1": "ed4e5f9e1a0c7c0751da49f85290763084365397",
+   "replay": true,
+   "query": {
+    "text": "پروپاگان ",
+    "span": [
+     1908,
+     1917
+    ],
+    "alts": [
+     "پروپاگاند "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p46:h100001",
+   "slug": "haaji-agha",
+   "page": 46,
+   "key": "h100001",
+   "md_sha1": "a6c855bc7e500b42dd8e3db9d613923a3566a49c",
+   "replay": true,
+   "query": {
+    "text": "ماقبل تاریخی",
+    "span": [
+     2178,
+     2190
+    ],
+    "alts": [
+     "ماقبل تاریخی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p49:h0",
+   "slug": "haaji-agha",
+   "page": 49,
+   "key": "h0",
+   "md_sha1": "307bc08a026b9b686dbfe9ca1d5220b55a61bff8",
+   "replay": true,
+   "query": {
+    "text": "آکابر ",
+    "span": [
+     1246,
+     1252
+    ],
+    "alts": [
+     "اکابر "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p4:h0",
+   "slug": "haaji-agha",
+   "page": 4,
+   "key": "h0",
+   "md_sha1": "f9228740a23522a31924dae41fa571c978b2e812",
+   "replay": true,
+   "query": {
+    "text": "ورجین ",
+    "span": [
+     510,
+     516
+    ],
+    "alts": [
+     "ورچین "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p4:h100003",
+   "slug": "haaji-agha",
+   "page": 4,
+   "key": "h100003",
+   "md_sha1": "f9228740a23522a31924dae41fa571c978b2e812",
+   "replay": true,
+   "query": {
+    "text": "من سوم استفاده می‌کنند",
+    "span": [
+     842,
+     864
+    ],
+    "alts": [
+     "من سوم استفاده می‌کنند"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p50:h1",
+   "slug": "haaji-agha",
+   "page": 50,
+   "key": "h1",
+   "md_sha1": "83b0a6aeb00b9d2924eea2fb16e14e2b19a538df",
+   "replay": true,
+   "query": {
+    "text": "در ",
+    "span": [
+     1465,
+     1468
+    ],
+    "alts": [
+     "تا "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p51:h100001",
+   "slug": "haaji-agha",
+   "page": 51,
+   "key": "h100001",
+   "md_sha1": "d910d23665a7e70a2942cb4d57d3511d54b5608f",
+   "replay": true,
+   "query": {
+    "text": "بر آن دیار که طوطی",
+    "span": [
+     1648,
+     1666
+    ],
+    "alts": [
+     "بر آن دیار که طوطی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p51:h100002",
+   "slug": "haaji-agha",
+   "page": 51,
+   "key": "h100002",
+   "md_sha1": "d910d23665a7e70a2942cb4d57d3511d54b5608f",
+   "replay": true,
+   "query": {
+    "text": "بایین ملت فحش می‌دهید",
+    "span": [
+     1703,
+     1724
+    ],
+    "alts": [
+     "بایین ملت فحش می‌دهید"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p52:h100002",
+   "slug": "haaji-agha",
+   "page": 52,
+   "key": "h100002",
+   "md_sha1": "6e224144293566ceb3a17e73b36bd3d9e14e3cdc",
+   "replay": true,
+   "query": {
+    "text": "کنهای بی شرف",
+    "span": [
+     2695,
+     2707
+    ],
+    "alts": [
+     "کنهای بی شرف"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "zwnj_error",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p53:h1",
+   "slug": "haaji-agha",
+   "page": 53,
+   "key": "h1",
+   "md_sha1": "1534fa2700b59e8c0a97bea28f579793a6562245",
+   "replay": true,
+   "query": {
+    "text": "صدای ",
+    "span": [
+     2565,
+     2570
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p53:h100000",
+   "slug": "haaji-agha",
+   "page": 53,
+   "key": "h100000",
+   "md_sha1": "1534fa2700b59e8c0a97bea28f579793a6562245",
+   "replay": true,
+   "query": {
+    "text": "تا حالا نبیاد ندارم که",
+    "span": [
+     660,
+     682
+    ],
+    "alts": [
+     "تا حالا نبیاد ندارم که"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p55:h1",
+   "slug": "haaji-agha",
+   "page": 55,
+   "key": "h1",
+   "md_sha1": "0c0e6ec9e96c126f6c06bb89d096d286be2ed073",
+   "replay": true,
+   "query": {
+    "text": "\"کشبافی دیانت\" ",
+    "span": [
+     1386,
+     1401
+    ],
+    "alts": [
+     "«کشبافی دیانت» "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p55:h100002",
+   "slug": "haaji-agha",
+   "page": 55,
+   "key": "h100002",
+   "md_sha1": "0c0e6ec9e96c126f6c06bb89d096d286be2ed073",
+   "replay": true,
+   "query": {
+    "text": "اگر عمله روزی ده ساعت",
+    "span": [
+     1085,
+     1106
+    ],
+    "alts": [
+     "اگر عمله روزی ده ساعت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p56:i3",
+   "slug": "haaji-agha",
+   "page": 56,
+   "key": "i3",
+   "md_sha1": "b3c0772bc34d52ab5589798180a6ae1ba7a630cd",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p58:h100003",
+   "slug": "haaji-agha",
+   "page": 58,
+   "key": "h100003",
+   "md_sha1": "4bec27cb0f437330629cdd0594b18cb1e5e9eacd",
+   "replay": true,
+   "query": {
+    "text": "برو از مش رمضون پنج",
+    "span": [
+     1365,
+     1384
+    ],
+    "alts": [
+     "برو از مش رمضون پنج"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p59:h100001",
+   "slug": "haaji-agha",
+   "page": 59,
+   "key": "h100001",
+   "md_sha1": "99275f43bab108f29f7765831b4b139761f2d1e3",
+   "replay": true,
+   "query": {
+    "text": "روپوش سفید به برداشت",
+    "span": [
+     928,
+     948
+    ],
+    "alts": [
+     "روپوش سفید به برداشت"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p5:h100000",
+   "slug": "haaji-agha",
+   "page": 5,
+   "key": "h100000",
+   "md_sha1": "55b8b4c41a5688945bacf10cc90fcc6df438be64",
+   "replay": true,
+   "query": {
+    "text": "جنس می‌دند",
+    "span": [
+     459,
+     469
+    ],
+    "alts": [
+     "جنس می‌دند"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "haaji-agha:p60:h100002",
+   "slug": "haaji-agha",
+   "page": 60,
+   "key": "h100002",
+   "md_sha1": "41efac538f45ef07c2f9e774d1c2451c108c9e00",
+   "replay": true,
+   "query": {
+    "text": "فورا به یاد مخترع امشی",
+    "span": [
+     1185,
+     1207
+    ],
+    "alts": [
+     "فورا به یاد مخترع امشی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p62:h100000",
+   "slug": "haaji-agha",
+   "page": 62,
+   "key": "h100000",
+   "md_sha1": "5240fcd81df31db774737b055845006f84ecde67",
+   "replay": true,
+   "query": {
+    "text": "می‌گذاشت و می‌داشت و دست",
+    "span": [
+     2141,
+     2165
+    ],
+    "alts": [
+     "می‌گذاشت و می‌داشت و دست"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p62:h100001",
+   "slug": "haaji-agha",
+   "page": 62,
+   "key": "h100001",
+   "md_sha1": "5240fcd81df31db774737b055845006f84ecde67",
+   "replay": true,
+   "query": {
+    "text": "همیشه ازین مهمانی ها سواره",
+    "span": [
+     1531,
+     1557
+    ],
+    "alts": [
+     "همیشه ازین مهمانی ها سواره"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p63:h100000",
+   "slug": "haaji-agha",
+   "page": 63,
+   "key": "h100000",
+   "md_sha1": "e4f106b11333352196518d4bed9d2335bb53f4dc",
+   "replay": true,
+   "query": {
+    "text": "دید روی تختخواب در یکی",
+    "span": [
+     212,
+     234
+    ],
+    "alts": [
+     "دید روی تختخواب در یکی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "missing_text",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": true,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p6:h100002",
+   "slug": "haaji-agha",
+   "page": 6,
+   "key": "h100002",
+   "md_sha1": "09b527092fb43ab10267b4d74d521fc035f69fe4",
+   "replay": true,
+   "query": {
+    "text": "به ضمیمه کاغذ یک چک",
+    "span": [
+     2358,
+     2377
+    ],
+    "alts": [
+     "به ضمیمه کاغذ یک چک"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p7:h100003",
+   "slug": "haaji-agha",
+   "page": 7,
+   "key": "h100003",
+   "md_sha1": "1705aaac5757311fb14dc04b669aeb8bc3ed6b52",
+   "replay": true,
+   "query": {
+    "text": "با چه جا نکندنی اسعار",
+    "span": [
+     1953,
+     1974
+    ],
+    "alts": [
+     "با چه جا نکندنی اسعار"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "haaji-agha:p9:h100000",
+   "slug": "haaji-agha",
+   "page": 9,
+   "key": "h100000",
+   "md_sha1": "4565b808857905a4246f7dae38ad0f1e3062f584",
+   "replay": true,
+   "query": {
+    "text": "سر پیری قاپچی باشی",
+    "span": [
+     262,
+     280
+    ],
+    "alts": [
+     "سر پیری قاپچی باشی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "wrong_word",
+   "source_kind": "identical",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": false
+   }
+  },
+  {
+   "id": "review-test:p40:i1",
+   "slug": "review-test",
+   "page": 40,
+   "key": "i1",
+   "md_sha1": "9c5f47eb2585af81d0a413aa5a96b89c5016d549",
+   "replay": true,
+   "query": {
+    "text": "",
+    "span": null,
+    "alts": []
+   },
+   "kind": "issue",
+   "issue_type": "other",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "review-test:p41:h100001",
+   "slug": "review-test",
+   "page": 41,
+   "key": "h100001",
+   "md_sha1": "87e92732a5c1b523f65c137d108b1ae90b1007a0",
+   "replay": true,
+   "query": {
+    "text": "بهزنی",
+    "span": [
+     165,
+     170
+    ],
+    "alts": [
+     "بهزنی"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "zwnj_error",
+   "source_kind": "no_suggestion",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "review-test:p42:h1",
+   "slug": "review-test",
+   "page": 42,
+   "key": "h1",
+   "md_sha1": "ce4b1103827833d176c9fcc5e29859f2f76c353e",
+   "replay": true,
+   "query": {
+    "text": "مرا ",
+    "span": [
+     887,
+     891
+    ],
+    "alts": [
+     "مادرم "
+    ]
+   },
+   "kind": "hunk",
+   "issue_type": "wrong_word",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "review-test:p53:h0",
+   "slug": "review-test",
+   "page": 53,
+   "key": "h0",
+   "md_sha1": "1ccd7cd439b98881dc427418d3634b5eda3d6bda",
+   "replay": true,
+   "query": {
+    "text": "یکجور ",
+    "span": [
+     1117,
+     1123
+    ],
+    "alts": []
+   },
+   "kind": "hunk",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "review-test:p60:h100001",
+   "slug": "review-test",
+   "page": 60,
+   "key": "h100001",
+   "md_sha1": "8eb0850b9470a20f6b9a10e5fb3043f86ff06397",
+   "replay": true,
+   "query": {
+    "text": "ملتفت  نبودم",
+    "span": null,
+    "alts": [
+     "ملتفت  نبودم"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "other",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  },
+  {
+   "id": "review-test:p61:h100001",
+   "slug": "review-test",
+   "page": 61,
+   "key": "h100001",
+   "md_sha1": "bbdb7d3387e510e0c3a0b2e03216ac26ffb74a5f",
+   "replay": true,
+   "query": {
+    "text": "بود؟",
+    "span": [
+     341,
+     345
+    ],
+    "alts": [
+     "بود؟"
+    ]
+   },
+   "kind": "finding-edit",
+   "issue_type": "punctuation",
+   "source_kind": "hunks",
+   "features": {
+    "page_has_verse": false,
+    "page_has_footnote_def": false,
+    "short_query_le14": true
+   }
+  }
+ ],
+ "frozen_from": "out/score_005_punctfix.json (sample 240, seed 7, stratify book,tier,kind)",
+ "note": "FROZEN SAMPLE. Score this file with NO --sample flag. Stratified sampling keys on tier, and tier is an OUTPUT of the locator, so re-sampling per run lets a change alter its own population."
+}
