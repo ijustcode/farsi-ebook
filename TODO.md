@@ -123,7 +123,7 @@ CLAUDE.md for the commands and the guardrails. Baseline to beat: **acc@1 0.3362*
 (`out/score_000_baseline.json`, crop-era; re-score against page truth before
 quoting it as the baseline for a new iteration).
 
-### 3.1 Persian punctuation is not stripped by the production word fold  ← next
+### 3.1 Persian punctuation is not stripped by the production word fold  ✅ FIXED, but NOT an accuracy win
 
 **Found 2026-07-27 while calibrating the answer key; NOT yet fixed, NOT yet
 measured.** `locate._NONWORD_RE` is `[^؀-ۿ0-9a-zA-Z]`, which preserves the whole

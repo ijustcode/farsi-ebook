@@ -31,6 +31,7 @@ from farsi2epub.locate import (  # noqa: E402
     _countable_span,
     _countable_upto,
     _fold_word,
+    _norm_words,
     _geom_blocks,
     _geom_key,
     _locate_match,
@@ -617,6 +618,22 @@ def main() -> int:
     # Presentation-form glyphs must survive normalization. Previously they
     # folded to an empty string, leaving punctuation as the only line token.
     assert _fold_word("ﺧﻮﺍﻫﺮﺑﺮﺍﺩﺭ") == "خواهربرادر"
+
+    # Persian punctuation must NOT survive the fold. _NONWORD_RE admits the
+    # whole Arabic block, which carries ، ؛ ؟ ٪ ۔ as well as letters, so the
+    # fold used to strip ASCII "." but keep "،" — making `زد،` a different
+    # token from `زد` in every window comparison in locate.py, on
+    # comma-dense Persian prose.
+    assert _fold_word("زد،") == "زد"
+    assert _fold_word("چیست؟") == "چیست"
+    assert _fold_word("واو؛") == "واو"
+    assert _fold_word("متن.") == "متن"
+    # ...while digits stay word content: Arabic-Indic digits share the block.
+    assert _fold_word("۱۴۰۳") == "۱۴۰۳"
+    assert _fold_word("٥٦٧") == "٥٦٧"
+    # A word that is punctuation only must fold empty so _norm_words drops it.
+    assert _fold_word("،") == ""
+    assert _norm_words("زد، بود؛ ۱۴۰۳") == ["زد", "بود", "۱۴۰۳"]
 
     # Pure synthetic checks for the VLM strip-alignment helper.
     _check_align_strip_synthetic()

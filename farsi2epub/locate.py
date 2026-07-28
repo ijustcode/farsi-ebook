@@ -152,10 +152,37 @@ _FOLD = str.maketrans(
 
 _NONWORD_RE = re.compile(r"[^؀-ۿ0-9a-zA-Z]")
 
+# _NONWORD_RE keeps the WHOLE Arabic block, and that block carries Persian
+# PUNCTUATION as well as letters and digits — ، ؛ ؟ ٪ ۔ and friends. So the
+# fold used to be asymmetric in a way nobody intended:
+#
+#     _fold_word("متن.") == "متن"    # ASCII full stop stripped
+#     _fold_word("زد،")  == "زد،"    # Persian comma survives
+#
+# and every window comparison in this module — Tier A's word-multiset match,
+# _best_window / _window_candidates scoring, _align_strip — then treated a
+# comma-terminated word as a different token from the bare word. Persian prose
+# is comma-dense, so any query whose first or last word abuts punctuation was
+# systematically penalized against a page that punctuates it differently (or a
+# reader that spaces the comma off).
+#
+# Only the Arabic block needs filtering: everything else _NONWORD_RE admits is
+# ASCII alphanumeric. Categories P* are punctuation and Cf is invisible format
+# (U+0600-0605 number signs, U+06DD). Arabic-Indic digits (Nd) and the letters
+# are untouched, and so is tatweel U+0640 — kashida is already dropped by
+# _FOLD, and widening this to letter modifiers would be a separate change with
+# its own measurement.
+_ARABIC_PUNCT_TABLE = {
+    cp: None
+    for cp in range(0x0600, 0x0700)
+    if unicodedata.category(chr(cp)) in {"Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Cf"}
+}
+
 
 def _fold_word(w: str) -> str:
     """Normalize a single word: fold letterforms, strip combining diacritics,
-    drop everything that is not an Arabic-block or ASCII alphanumeric char."""
+    drop everything that is not an Arabic-block or ASCII alphanumeric char,
+    and drop Arabic-block punctuation (see _ARABIC_PUNCT_TABLE)."""
     # Older Persian PDFs commonly encode visible glyphs with the Arabic
     # Presentation Forms blocks (for example ``ﺧ`` instead of ``خ``).
     # NFKC converts those compatibility glyphs back to ordinary Arabic
@@ -163,7 +190,7 @@ def _fold_word(w: str) -> str:
     w = unicodedata.normalize("NFKC", w)
     w = w.translate(_FOLD)
     w = "".join(c for c in w if not unicodedata.combining(c))
-    return _NONWORD_RE.sub("", w)
+    return _NONWORD_RE.sub("", w).translate(_ARABIC_PUNCT_TABLE)
 
 
 def _norm_words(text: str) -> list[str]:
