@@ -108,8 +108,14 @@ def _crop_png(page: fitz.Page, box: dict, color_hex: str, key: str) -> bytes:
     rgb = _hex_to_rgb(color_hex)
 
     def _edge(x0: int, y0: int, x1: int, y1: int) -> None:
+        # set_rect works in the pixmap's own device space, and a *clipped*
+        # pixmap starts at (pix.x, pix.y) rather than the origin — without the
+        # offset every call silently returns False and nothing is drawn.
         r = fitz.IRect(
-            max(0, x0), max(0, y0), min(pix.width, x1), min(pix.height, y1)
+            pix.x + max(0, x0),
+            pix.y + max(0, y0),
+            pix.x + min(pix.width, x1),
+            pix.y + min(pix.height, y1),
         )
         if not r.is_empty:
             pix.set_rect(r, rgb)

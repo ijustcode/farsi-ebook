@@ -255,6 +255,20 @@ class _ScanBoxRefiner:
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _entry_box(entry: dict) -> dict:
+        """The cached box, with the entry's alignment diagnostics folded back
+        in. "debug" is stored as an extra key beside "box"/"cost" (rather than
+        bumping _LOCATE_VLM_CACHE_VERSION, which would discard every existing
+        refined entry and re-bill the whole book); entries written before it
+        existed simply have none.
+        """
+        box = dict(entry["box"])
+        debug = entry.get("debug")
+        if debug is not None and "debug" not in box:
+            box["debug"] = debug
+        return box
+
+    @staticmethod
     def _scan_indices(boxes: list[Optional[dict]]) -> list[int]:
         return [
             i for i, b in enumerate(boxes) if b is not None and b.get("source") == "scan"
@@ -281,7 +295,7 @@ class _ScanBoxRefiner:
             for i in scan_idx:
                 entry = cache.get(self._key(page_no, page_md, queries[i]))
                 if entry and entry.get("box"):
-                    out[i] = dict(entry["box"])
+                    out[i] = self._entry_box(entry)
         return out
 
     def pending(
@@ -330,7 +344,7 @@ class _ScanBoxRefiner:
             for i in scan_idx:
                 entry = cache.get(keys[i])
                 if entry and entry.get("box"):
-                    out[i] = dict(entry["box"])
+                    out[i] = self._entry_box(entry)
             # Claim only keys nobody has cached or is currently refining; the
             # claim (not the whole API round-trip) is what the lock protects.
             uncached = {
@@ -369,7 +383,12 @@ class _ScanBoxRefiner:
                 cache = self._load_cache()
                 for i in uncached:
                     box = refined[i] if i < len(refined) else None
-                    cache[keys[i]] = {"box": box, "cost": per_cost}
+                    entry: dict = {"box": box, "cost": per_cost}
+                    # Alignment diagnostics live beside "box" as well, so a
+                    # future reader can find them without a cache-version bump.
+                    if box is not None and box.get("debug") is not None:
+                        entry["debug"] = box["debug"]
+                    cache[keys[i]] = entry
                     if box is not None:
                         out[i] = dict(box)
                 self._save_cache()
@@ -548,8 +567,15 @@ def _attach_boxes(
             "h": (box["y1"] - box["y0"]) * 100.0,
             "source": box["source"],
         }
+        # Alignment diagnostics ("debug", set by refine_scan_boxes) stay on the
+        # 0-1 dicts kept in hunk["box"]/issue["box"]; they are never copied into
+        # the browser payload, which is built key-by-key above.
+        view_box.pop("debug", None)
         segments = box.get("segments")
-        if box.get("source") == "scan_vlm" and isinstance(segments, list):
+        # Any tier may report per-printed-line segments for a wrapped phrase
+        # (refine_scan_boxes for "scan_vlm"; locate.py's Tier A/B coherence
+        # split for "match"/"layout"). A single tall union is never rendered.
+        if isinstance(segments, list):
             view_box["segments"] = [
                 {
                     "x0": segment["x0"] * 100.0,
@@ -1217,6 +1243,15 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
   vector-effect: non-scaling-stroke;
   pointer-events: all;
 }
+.qc-box-multipart.qc-box-match .qc-box-shape {
+  fill: rgba(58,159,240,.12); stroke: #3a9ff0;
+}
+.qc-box-multipart.qc-box-layout .qc-box-shape {
+  fill: rgba(47,182,168,.12); stroke: #2fb6a8;
+}
+.qc-box-multipart.qc-box-scan .qc-box-shape {
+  fill: rgba(122,198,92,.12); stroke: #7ac65c;
+}
 .qc-box-multipart.hot .qc-box-shape {
   filter: drop-shadow(0 0 2px #ffffff);
 }
@@ -1563,8 +1598,7 @@ function setFocusGeometry(el, segment) {
 
 function createBoxElement(page, b) {
   var id = 'box-' + page + '-' + b.key;
-  var segments = b.source === 'scan_vlm' && Array.isArray(b.segments)
-    ? b.segments : [];
+  var segments = Array.isArray(b.segments) ? b.segments : [];
   if (segments.length > 1) {
     var ns = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(ns, 'svg');

@@ -27,6 +27,11 @@ onto the detected word rectangles. Refined results preserve an ordered
 ``segments`` list (one rectangle per printed line) as well as the legacy union
 envelope — locate.py itself never imports an LLM client.
 
+Every tier is vertically coherent: a located run may occupy one printed line or
+wrap onto vertically *adjacent* lines (in which case it too carries an ordered
+``segments`` list plus the union envelope), but a run whose members straddle
+non-consecutive lines is rejected rather than unioned into a tall empty box.
+
 Coordinates are 0-1 fractions of the page (x0,y0,x1,y1) plus a "source" of
 "match", "layout", or "scan"; review.py scales them to CSS percentages.
 """
@@ -74,6 +79,29 @@ _SCAN_MAX_BLANK_ROWS = 1
 _REFINE_ACCEPT = 0.72
 _STRIP_Y_PAD = 0.25  # fraction of median detected line height
 _STRIP_X_PAD = 0.02  # fraction of page width
+
+# Vertical coherence of a located run (Tiers A and B). A phrase may wrap onto
+# the next printed line, but never skips lines: consecutive lines of one hit
+# must sit within this many median line heights of each other (center to
+# center), and their line indices must be consecutive on the page.
+_LINE_GAP_MAX = 2.5
+# y-center clustering tolerance as a fraction of median line height, floored at
+# the +-1.0pt band _line_word_extent already uses.
+_LINE_CLUSTER_FRAC = 0.6
+_LINE_CLUSTER_MIN = 1.0
+
+# A PDF text line whose writing direction is not (approximately) left-to-right
+# horizontal is rotated/vertical decorative text: it is not part of the
+# horizontal reading flow, so it must not consume any of Tier B's cumulative
+# character budget. Fallback shape test for lines with no usable `dir`.
+_DIR_TOL = 0.1
+_VERTICAL_ASPECT = 2.0  # pdf line: height > 2.0 x width => vertical column
+_SCAN_VERTICAL_ASPECT = 3.0  # detected scan line: height/width > 3.0
+
+# Near-tie band used by the refinement window scorer (same value Tier A uses).
+# Exported so scoring harnesses can reason about the candidate pool without
+# reaching for a private name.
+BEST_WINDOW_TIE = _MATCH_TIE
 
 
 @dataclass(frozen=True)
@@ -153,10 +181,89 @@ def _norm_words(text: str) -> list[str]:
 _FOOTNOTE_RE = re.compile(r"\[\^[^\]]{1,10}\]")
 _MD_SYNTAX_RE = re.compile(r"[#>*_`|~\[\]]")
 
+# Whole lines that carry no character into the page's reading flow. Tiers B and
+# C map a Markdown character offset onto page geometry proportionally, so a line
+# counted here but not printed there (or printed somewhere else entirely) skews
+# every box below it on the page.
+#   fence/hr/table-delimiter — markdown-only, never printed at all.
+#
+# Footnote *definition* lines are deliberately NOT excluded. They look like a
+# candidate — out of reading-order position at the page foot — but both
+# geometry sides detect them (they are real printed lines to _pdf_lines and
+# real ink to _scan_page_lines), and they are last in the Markdown as well as
+# last on the page, so the two sequences already correspond. Dropping them from
+# the Markdown side only is a measured regression: on bachehaye_ghali p8 it
+# widened the located box from 0.43 to 0.74 of the page.
+_FENCE_LINE_RE = re.compile(r"^\s*```")
+_HR_LINE_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+_TABLE_DELIM_RE = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
+
+# The ` --- ` hemistich separator inside a verse block (see TRANSCRIBE_SYSTEM):
+# three characters in the Markdown, printed as whitespace between hemistichs.
+_HEMISTICH_RE = re.compile(r"(?<=\s)-{3}(?=\s)")
+
+# Block segmentation (see "zone-anchored offset mapping" below).
+_HEADING_LINE_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+_FOOTNOTE_DEF_RE = re.compile(r"^\s{0,3}\[\^[^\]]{1,10}\]:")
+
+
+def _out_of_flow_line(line: str) -> bool:
+    """True when none of the line's characters belong to the reading flow."""
+    return bool(
+        _FENCE_LINE_RE.match(line)
+        or _HR_LINE_RE.match(line)
+        or _TABLE_DELIM_RE.match(line)
+    )
+
+
+@functools.lru_cache(maxsize=64)
+def _countable_prefix(md: str) -> tuple[int, ...]:
+    """prefix[i] = countable characters in md[:i], line-aware.
+
+    Memoized per page: the callers need many prefix lookups into the same
+    Markdown, and rebuilding the mask per lookup made offset mapping O(n^2).
+    """
+    counts = bytearray(len(md))  # 1 where the character reaches the page
+    pos = 0
+    for line in md.splitlines(keepends=True):
+        end = pos + len(line)
+        if not _out_of_flow_line(line):
+            drop = bytearray(len(line))
+            for rx in (_FOOTNOTE_RE, _MD_SYNTAX_RE, _HEMISTICH_RE):
+                for m in rx.finditer(line):
+                    for i in range(m.start(), m.end()):
+                        drop[i] = 1
+            for i, c in enumerate(line):
+                if not drop[i] and not c.isspace():
+                    counts[pos + i] = 1
+        pos = end
+    prefix = [0] * (len(md) + 1)
+    total = 0
+    for i, v in enumerate(counts):
+        total += v
+        prefix[i + 1] = total
+    return tuple(prefix)
+
+
+def _countable_upto(md: str, i: int) -> int:
+    """Countable characters in md[:i] (line-aware)."""
+    p = _countable_prefix(md)
+    return p[max(0, min(i, len(md)))]
+
+
+def _countable_span(md: str, a: int, b: int) -> int:
+    """Countable characters in md[a:b] (line-aware)."""
+    return _countable_upto(md, b) - _countable_upto(md, a)
+
 
 def _countable(s: str) -> int:
     """Count characters that also appear in the printed page: drop markdown
-    syntax/footnote markers and all whitespace."""
+    syntax/footnote markers and all whitespace.
+
+    Substring-only form, kept for callers that genuinely have no page context.
+    Prefer _countable_span/_countable_upto, which additionally drop whole
+    out-of-flow lines — a decision that cannot be made from a substring.
+    """
     s = _FOOTNOTE_RE.sub("", s)
     s = _MD_SYNTAX_RE.sub("", s)
     return sum(1 for c in s if not c.isspace())
@@ -164,6 +271,286 @@ def _countable(s: str) -> int:
 
 def _has_arabic(w: str) -> bool:
     return any("؀" <= c <= "ۿ" for c in w)
+
+
+# ---------------------------------------------------------------------------
+# zone-anchored offset mapping (shared by Tiers B and C)
+# ---------------------------------------------------------------------------
+#
+# Tiers B and C both turn a Markdown character offset into a position in the
+# page's reading flow. Done as a single cumulative proportion over the whole
+# page, *any* local discrepancy — a dropped word, a heading whose printed size
+# bears no relation to its character count, a footnote block set in smaller
+# type — displaces every box below it on the page. The error accumulates
+# downward, which is exactly the observed signature (boxes land systematically
+# early, and a quarter of them miss the region entirely).
+#
+# So instead: partition both sides into blocks (Markdown paragraphs/headings/
+# footnote definitions; printed paragraphs recovered from line geometry), align
+# the two block sequences monotonically by relative size, and interpolate
+# *within* the aligned pair. Errors then stay inside one paragraph instead of
+# propagating to the foot of the page. When the alignment is low-confidence the
+# map degrades to the previous global proportion.
+#
+# Printed-paragraph recovery is RTL-specific and deliberately geometric: in
+# justified Persian body text a paragraph's first line is indented on the
+# *right* (the reading start) and its last line falls short on the *left*.
+# Neither signal needs a text layer, so the same partitioner serves the PDF
+# line rects of Tier B and the ink rects of Tier C.
+
+# A vertical gap this many median line heights above the median gap starts a
+# new printed block.
+_BLOCK_GAP_H = 0.6
+# Right-indent / left-shortfall tolerance, as a fraction of the body measure.
+_BLOCK_INDENT_FRAC = 0.03
+# Monotone alignment: how many blocks one side may collapse into the other,
+# the per-merge and per-drop preference penalties, and the residual mass above
+# which the alignment is judged untrustworthy and the global map is used.
+_ALIGN_MAX_SPAN = 3
+_ALIGN_MERGE_PENALTY = 0.01
+_ALIGN_DROP_PENALTY = 0.02
+_ALIGN_MAX_RESIDUAL = 0.35
+
+
+@functools.lru_cache(maxsize=64)
+def _md_blocks(md: str) -> tuple[tuple[int, int], ...]:
+    """Markdown blocks as [start, end) char spans, in document order.
+
+    Blank lines separate blocks; headings, fenced verse lines and footnote
+    *definition* lines each form their own block, because each is printed as
+    its own physically separate run of lines. Blocks with no countable
+    character are dropped — they have no counterpart in the page geometry.
+    """
+    blocks: list[tuple[int, int]] = []
+    start: Optional[int] = None
+    end = 0
+    in_fence = False
+
+    def _flush() -> None:
+        nonlocal start
+        if start is not None and _countable_span(md, start, end) > 0:
+            blocks.append((start, end))
+        start = None
+
+    pos = 0
+    for line in md.splitlines(keepends=True):
+        stop = pos + len(line)
+        if _FENCE_LINE_RE.match(line):
+            _flush()
+            in_fence = not in_fence
+        elif not line.strip():
+            _flush()
+        elif (
+            in_fence
+            or _HEADING_LINE_RE.match(line)
+            or _FOOTNOTE_DEF_RE.match(line)
+        ):
+            _flush()
+            start, end = pos, stop
+            _flush()
+        else:
+            if start is None:
+                start = pos
+            end = stop
+        pos = stop
+    _flush()
+    return tuple(blocks)
+
+
+def _geom_blocks(rects: list[fitz.Rect]) -> list[tuple[int, int]]:
+    """Group printed lines into blocks as inclusive [lo, hi] index ranges.
+
+    A new block starts at line i when any of these hold:
+      * the vertical gap before it is materially larger than the page's median
+        line gap (headings, footnote rules, section breaks);
+      * its right edge is indented relative to the body's right margin — in RTL
+        text that is a paragraph's indented first line;
+      * the previous line fell short of the body's left margin — in RTL text
+        that is a paragraph's last line.
+    """
+    n = len(rects)
+    if n <= 1:
+        return [(0, 0)] if n else []
+    widths = np.array([r.width for r in rects], dtype=float)
+    measure = float(np.percentile(widths, 90)) or 1.0
+    right = float(np.percentile([r.x1 for r in rects], 75))
+    left = float(np.percentile([r.x0 for r in rects], 25))
+    med_h = float(np.median([r.height for r in rects])) or 1.0
+    gaps = [max(0.0, rects[i + 1].y0 - rects[i].y1) for i in range(n - 1)]
+    med_gap = float(np.median(gaps))
+    tol = _BLOCK_INDENT_FRAC * measure
+
+    starts = [0]
+    for i in range(1, n):
+        prev, cur = rects[i - 1], rects[i]
+        gap = max(0.0, cur.y0 - prev.y1)
+        if (
+            gap > med_gap + _BLOCK_GAP_H * med_h
+            or cur.x1 < right - tol
+            or prev.x0 > left + tol
+        ):
+            starts.append(i)
+    return [
+        (s, (starts[k + 1] - 1) if k + 1 < len(starts) else n - 1)
+        for k, s in enumerate(starts)
+    ]
+
+
+def _align_blocks(
+    mw: list[float], gw: list[float]
+) -> Optional[list[tuple[int, int, int, int]]]:
+    """Monotonically align two block-weight sequences by relative size.
+
+    Gale-Church-shaped DP over normalized weights: each step consumes 1..N
+    Markdown blocks against 1..N geometry blocks (only one side may exceed 1,
+    so blocks merge and split but never cross), or drops a block on one side.
+    Cost is the absolute weight mismatch of the pairing plus small structural
+    penalties, so a 1:1 pairing wins ties. Returns the groups as
+    (md_lo, md_hi, geom_lo, geom_hi) half-open pairs, or None when the best
+    alignment still misallocates more than _ALIGN_MAX_RESIDUAL of the page.
+    """
+    ni, nj = len(mw), len(gw)
+    if ni == 0 or nj == 0:
+        return None
+    pm = [0.0] * (ni + 1)
+    for i, v in enumerate(mw):
+        pm[i + 1] = pm[i] + v
+    pg = [0.0] * (nj + 1)
+    for j, v in enumerate(gw):
+        pg[j + 1] = pg[j] + v
+
+    inf = float("inf")
+    dp = [[inf] * (nj + 1) for _ in range(ni + 1)]
+    back: list[list[Optional[tuple[int, int]]]] = [
+        [None] * (nj + 1) for _ in range(ni + 1)
+    ]
+    dp[0][0] = 0.0
+    moves = [
+        (a, b)
+        for a in range(0, _ALIGN_MAX_SPAN + 1)
+        for b in range(0, _ALIGN_MAX_SPAN + 1)
+        # Merges and splits, plus the classic 2:2 (both sides segmented the
+        # same run differently). Wider many-to-many steps are excluded so the
+        # DP cannot buy a low cost by blobbing the page into one group.
+        if (a or b) and (min(a, b) <= 1 or a == b == 2)
+    ]
+    for i in range(ni + 1):
+        for j in range(nj + 1):
+            if dp[i][j] == inf:
+                continue
+            base = dp[i][j]
+            for a, b in moves:
+                if i + a > ni or j + b > nj:
+                    continue
+                dm = pm[i + a] - pm[i]
+                dg = pg[j + b] - pg[j]
+                if a == 0 or b == 0:
+                    cost = dm + dg + _ALIGN_DROP_PENALTY
+                else:
+                    cost = abs(dm - dg) + _ALIGN_MERGE_PENALTY * (a + b - 2)
+                if base + cost < dp[i + a][j + b]:
+                    dp[i + a][j + b] = base + cost
+                    back[i + a][j + b] = (a, b)
+    if dp[ni][nj] == inf:
+        return None
+
+    groups: list[tuple[int, int, int, int]] = []
+    i, j = ni, nj
+    residual = 0.0
+    while i or j:
+        step = back[i][j]
+        if step is None:
+            return None
+        a, b = step
+        groups.append((i - a, i, j - b, j))
+        dm = pm[i] - pm[i - a]
+        dg = pg[j] - pg[j - b]
+        residual += (dm + dg) if (a == 0 or b == 0) else abs(dm - dg)
+        i, j = i - a, j - b
+    if residual > _ALIGN_MAX_RESIDUAL:
+        return None
+    groups.reverse()
+    return groups
+
+
+def _geom_key(
+    rects: list[fitz.Rect], weights: list[float]
+) -> tuple[tuple[float, float, float, float, float], ...]:
+    """Hashable, cache-stable signature of a page's line geometry."""
+    return tuple(
+        (
+            round(r.x0, 1),
+            round(r.y0, 1),
+            round(r.x1, 1),
+            round(r.y1, 1),
+            round(float(w), 3),
+        )
+        for r, w in zip(rects, weights)
+    )
+
+
+@functools.lru_cache(maxsize=32)
+def _zone_points(
+    md: str, key: tuple[tuple[float, float, float, float, float], ...]
+) -> tuple[tuple[float, float], ...]:
+    """Control points (md_fraction, geometry_weight_fraction) of the anchored
+    map for one page, or () to mean "use the global proportional map".
+
+    Memoized per (page Markdown, page geometry) — every query on a page shares
+    one map.
+    """
+    if len(key) < 2:
+        return ()
+    rects = [fitz.Rect(k[0], k[1], k[2], k[3]) for k in key]
+    weights = [k[4] for k in key]
+    total_md = _countable_upto(md, len(md))
+    total_g = sum(weights)
+    if total_md <= 0 or total_g <= 0:
+        return ()
+
+    mblocks = _md_blocks(md)
+    gblocks = _geom_blocks(rects)
+    if len(mblocks) < 2 and len(gblocks) < 2:
+        return ()
+
+    cum_g = [0.0] * (len(rects) + 1)
+    for i, w in enumerate(weights):
+        cum_g[i + 1] = cum_g[i] + w
+
+    mw = [_countable_span(md, a, b) / total_md for a, b in mblocks]
+    gw = [(cum_g[hi + 1] - cum_g[lo]) / total_g for lo, hi in gblocks]
+    groups = _align_blocks(mw, gw)
+    if not groups:
+        return ()
+
+    points: list[tuple[float, float]] = [(0.0, 0.0)]
+    for _mi, mj, _gi, gj in groups:
+        if mj == 0 or gj == 0:
+            continue
+        x = _countable_upto(md, mblocks[mj - 1][1]) / total_md
+        y = cum_g[gblocks[gj - 1][1] + 1] / total_g
+        if x > points[-1][0] and y > points[-1][1]:
+            points.append((x, y))
+    points.append((1.0, 1.0))
+    # Fewer than one interior anchor is the global map by another name.
+    if len(points) < 3:
+        return ()
+    return tuple(points)
+
+
+def _apply_zone(points: tuple[tuple[float, float], ...], f: float) -> float:
+    """Piecewise-linear, monotone map of a Markdown fraction onto the page's
+    geometry-weight fraction. Identity when no anchors were established."""
+    if not points:
+        return f
+    if f <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if f <= x1:
+            if x1 <= x0:
+                return y1
+            return y0 + (y1 - y0) * (f - x0) / (x1 - x0)
+    return points[-1][1]
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +579,86 @@ def _union_rects(rects: list[fitz.Rect]) -> fitz.Rect:
     for r in rects[1:]:
         u |= r
     return u
+
+
+def _median_height(rects: list[fitz.Rect]) -> float:
+    if not rects:
+        return 1.0
+    return float(np.median([r.height for r in rects])) or 1.0
+
+
+def _cluster_rect_lines(rects: list[fitz.Rect]) -> list[list[fitz.Rect]]:
+    """Group rects into printed lines by y-center, top to bottom.
+
+    Tolerance is 0.6 x the median rect height, floored at the +-1.0pt band
+    ``_line_word_extent`` uses, so mixed-size glyphs on one baseline still
+    cluster together while separate printed lines stay apart.
+    """
+    if not rects:
+        return []
+    tol = max(_LINE_CLUSTER_MIN, _LINE_CLUSTER_FRAC * _median_height(rects))
+    ordered = sorted(rects, key=lambda r: ((r.y0 + r.y1) / 2, -r.x1))
+    groups: list[list[fitz.Rect]] = [[ordered[0]]]
+    center = (ordered[0].y0 + ordered[0].y1) / 2
+    for r in ordered[1:]:
+        c = (r.y0 + r.y1) / 2
+        if abs(c - center) <= tol:
+            groups[-1].append(r)
+            center = sum((x.y0 + x.y1) / 2 for x in groups[-1]) / len(groups[-1])
+        else:
+            groups.append([r])
+            center = c
+    return groups
+
+
+def _rect_center_y(rects: list[fitz.Rect]) -> float:
+    return sum((r.y0 + r.y1) / 2 for r in rects) / len(rects)
+
+
+def _coherent_segments(
+    rects: list[fitz.Rect],
+    page_line_centers: list[float],
+    median_h: float,
+) -> Optional[list[fitz.Rect]]:
+    """Split a located run into one rect per printed line, or reject it.
+
+    A genuine phrase occupies one line or wraps onto vertically *adjacent*
+    lines. A window whose members straddle non-consecutive printed lines (for
+    example a decorative heading plus a body line two lines below) is spurious:
+    unioning it yields a tall mostly-empty rectangle. Returns the per-line
+    rects in top-to-bottom order, or None when the run is not vertically
+    coherent.
+    """
+    groups = _cluster_rect_lines(rects)
+    if not groups:
+        return None
+    if len(groups) == 1:
+        return [_union_rects(groups[0])]
+
+    centers = [_rect_center_y(g) for g in groups]
+    for prev, cur in zip(centers, centers[1:]):
+        if abs(cur - prev) > _LINE_GAP_MAX * median_h:
+            return None
+    if page_line_centers:
+        idxs = sorted(
+            min(
+                range(len(page_line_centers)),
+                key=lambda i: abs(page_line_centers[i] - c),
+            )
+            for c in centers
+        )
+        if idxs != list(range(idxs[0], idxs[0] + len(idxs))):
+            return None
+    return [_union_rects(g) for g in groups]
+
+
+def _attach_segments(box: dict, rects: list[fitz.Rect], page_rect: fitz.Rect) -> dict:
+    """Add a per-printed-line ``segments`` list (same shape refine_scan_boxes
+    emits) when a located run wrapped across lines. Single-line runs are left
+    as a plain box."""
+    if len(rects) > 1:
+        box["segments"] = [_rect_to_fracs(r, page_rect) for r in rects]
+    return box
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +726,33 @@ def _resolve_span(md: str, q: Query) -> Optional[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 
 
+def _is_horizontal_line(line: dict, rect: fitz.Rect, n_chars: int) -> bool:
+    """True when a PDF text line belongs to the horizontal reading flow.
+
+    Rotated/vertical text (decorative sidebars, spine labels) is real geometry
+    but its position in the reading order is not recoverable, so Tier B must
+    not let it consume any of the cumulative character budget — doing so shifts
+    the offset->line mapping for every line after it. PyMuPDF reports a writing
+    direction on the line (and on its spans); ``(1, 0)`` is normal horizontal
+    text. When no direction is available, fall back to the bounding shape: a
+    tall narrow rect holding several characters is a vertical column.
+    """
+    direction = line.get("dir")
+    if not direction:
+        for span in line.get("spans", []):
+            if span.get("dir"):
+                direction = span["dir"]
+                break
+    if direction and len(direction) >= 2:
+        dx, dy = float(direction[0]), float(direction[1])
+        return abs(dx - 1.0) <= _DIR_TOL and abs(dy) <= _DIR_TOL
+    return not (n_chars >= 3 and rect.height > _VERTICAL_ASPECT * max(rect.width, 1e-6))
+
+
 def _pdf_lines(page: fitz.Page) -> list[tuple[fitz.Rect, int]]:
-    """(rect, non-space-char-count) for every type-0 text line with >= 2
-    non-space characters, in reading order (top-to-bottom, then left)."""
+    """(rect, non-space-char-count) for every horizontal type-0 text line with
+    >= 2 non-space characters, in reading order (top-to-bottom, then left).
+    Rotated/vertical lines are excluded — see _is_horizontal_line."""
     data = page.get_text("dict")
     lines: list[tuple[fitz.Rect, int]] = []
     for block in data.get("blocks", []):
@@ -270,8 +761,12 @@ def _pdf_lines(page: fitz.Page) -> list[tuple[fitz.Rect, int]]:
         for line in block.get("lines", []):
             txt = "".join(s.get("text", "") for s in line.get("spans", []))
             n = len(re.sub(r"\s", "", txt))
-            if n >= 2:
-                lines.append((fitz.Rect(line["bbox"]), n))
+            if n < 2:
+                continue
+            rect = fitz.Rect(line["bbox"])
+            if not _is_horizontal_line(line, rect, n):
+                continue
+            lines.append((rect, n))
     lines.sort(key=lambda t: (round(t[0].y0, 1), t[0].x0))
     return lines
 
@@ -328,7 +823,7 @@ def _locate_layout(
     if not lines:
         return None
     total_pdf = sum(n for _, n in lines)
-    total_md = _countable(md)
+    total_md = _countable_upto(md, len(md))
     if total_pdf == 0 or total_md == 0:
         return None
     ratio = total_pdf / total_md
@@ -336,10 +831,16 @@ def _locate_layout(
         return None
 
     pos, end = span
-    a = _countable(md[:pos])
-    b = a + _countable(md[pos:end])
-    fa = a / total_md
-    fb = b / total_md
+    # Line-aware counting on both sides: the substring form of _countable
+    # cannot drop whole out-of-flow lines, so mixing it with the line-aware
+    # total below made numerator and denominator disagree.
+    a = _countable_upto(md, pos)
+    b = a + _countable_span(md, pos, end)
+    zone = _zone_points(
+        md, _geom_key([r for r, _n in lines], [float(n) for _r, n in lines])
+    )
+    fa = _apply_zone(zone, a / total_md)
+    fb = _apply_zone(zone, b / total_md)
     if fb < fa:
         fa, fb = fb, fa
 
@@ -368,7 +869,7 @@ def _locate_layout(
     # that line, then union — so the box is a zoomable fraction of the line(s)
     # rather than the full line width. (No adjacent-line padding: the word
     # extent already tracks where the span lands.)
-    rects: list[fitz.Rect] = []
+    per_line: list[tuple[fitz.Rect, float]] = []  # (rect, overlap fraction)
     for i in hit_idx:
         rect, ls, le = line_fracs[i]
         width_f = le - ls
@@ -377,11 +878,28 @@ def _locate_layout(
             u0 = (max(fa, ls) - ls) / width_f
             u1 = (min(fb, le) - ls) / width_f
             refined = _line_word_extent(pwords, rect, u0, u1)
-        rects.append(refined if refined is not None else rect)
+        per_line.append(
+            (refined if refined is not None else rect, max(0.0, min(fb, le) - max(fa, ls)))
+        )
+
+    # Same vertical-coherence discipline as Tier A: a span may wrap onto the
+    # next printed line but cannot jump a gap. Keep the longest run of
+    # vertically adjacent hit lines (the one carrying most of the span) and
+    # emit one segment per line instead of a single tall union.
+    median_h = _median_height([r for r, _n in lines])
+    runs: list[list[tuple[fitz.Rect, float]]] = [[per_line[0]]]
+    for prev, cur in zip(per_line, per_line[1:]):
+        gap = abs(_rect_center_y([cur[0]]) - _rect_center_y([prev[0]]))
+        if gap > _LINE_GAP_MAX * median_h:
+            runs.append([cur])
+        else:
+            runs[-1].append(cur)
+    best = max(runs, key=lambda run: sum(o for _r, o in run))
+    rects = [r for r, _o in best]
 
     box = _rect_to_fracs(_union_rects(rects), page.rect)
     box["source"] = "layout"
-    return box
+    return _attach_segments(box, rects, page.rect)
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +985,11 @@ def _scan_page_lines(page: fitz.Page) -> list[_ScanLine]:
         # Rules and border noise are wide but only a pixel or two tall.
         if line_w / max(1, line_h) > 50:
             continue
+        # The inverse shape is a rotated/vertical text column or a vertical
+        # rule: real ink, but not a printed line of the reading flow, so it
+        # must not consume any of the cumulative character budget.
+        if line_h / max(1, line_w) > _SCAN_VERTICAL_ASPECT:
+            continue
 
         rect = fitz.Rect(px0 / scale, y0 / scale, px1 / scale, y1 / scale)
         # Running page numbers are omitted from Markdown; discard isolated,
@@ -538,15 +1061,20 @@ def _scan_hits(
     the span fraction the line carries; [] when the page or span has no
     countable geometry. Shared by _locate_scan and refine_scan_boxes.
     """
-    total_md = _countable(md)
+    total_md = _countable_upto(md, len(md))
     total_layout = sum(line.weight for line in lines)
     if total_md == 0 or total_layout == 0:
         return []
 
     pos, end = span
-    prefix_n = _countable(md[:pos])
-    fa = prefix_n / total_md
-    fb = (prefix_n + _countable(md[pos:end])) / total_md
+    prefix_n = _countable_upto(md, pos)
+    zone = _zone_points(
+        md, _geom_key([ln.rect for ln in lines], [ln.weight for ln in lines])
+    )
+    fa = _apply_zone(zone, prefix_n / total_md)
+    fb = _apply_zone(
+        zone, (prefix_n + _countable_span(md, pos, end)) / total_md
+    )
     if fb < fa:
         fa, fb = fb, fa
 
@@ -580,7 +1108,7 @@ def _locate_scan(
     # A short word cannot genuinely wrap. If proportional offset estimation
     # straddles a line boundary, keep the line carrying most of the estimated
     # span instead of drawing a huge diagonal union across both lines.
-    span_chars = _countable(md[pos:end])
+    span_chars = _countable_span(md, pos, end)
     if span_chars <= 14 and len(hits) > 1:
         hits = [max(hits, key=lambda h: h[3])]
     rects = [_scan_line_extent(lines[i], u0, u1) for i, u0, u1, _overlap in hits]
@@ -695,27 +1223,53 @@ def _locate_match(
     if not candidates:
         return None
     candidates.sort(key=lambda t: -t[0])
-    top_score, top_start, top_L = candidates[0]
+    top_score = candidates[0][0]
     if top_score < _MATCH_ACCEPT:
         return None
 
-    chosen_start, chosen_L = top_start, top_L
-    if expected_y is not None:
-        page_h = page.rect.height or 1.0
+    # A scored window is a contiguous run of extraction tokens, which says
+    # nothing about where those tokens are *printed*: a window can straddle a
+    # decorative heading and the body line below it, whose union is a tall
+    # mostly-empty rectangle. Prefer, inside the near-tie band, a window that
+    # sits on a single printed line — a genuine wrap only ever has half the
+    # query on each line, which scores far below the band — then take the first
+    # vertically coherent candidate; wrapped runs keep one segment per line.
+    page_line_centers = [
+        _rect_center_y(group)
+        for group in _cluster_rect_lines([r for r, _nw in pwords])
+    ]
+    median_h = _median_height([r for r, _nw in pwords])
+    page_h = page.rect.height or 1.0
 
-        def _yfrac(start: int, L: int) -> float:
-            rects = [pwords[start + i][0] for i in range(L)]
-            cy = sum((r.y0 + r.y1) / 2 for r in rects) / L
-            return (cy - page.rect.y0) / page_h
+    def _rects_of(start: int, L: int) -> list[fitz.Rect]:
+        return [pwords[start + i][0] for i in range(L)]
 
-        near = [c for c in candidates if c[0] >= top_score - _MATCH_TIE]
-        best_c = min(near, key=lambda c: abs(_yfrac(c[1], c[2]) - expected_y))
-        chosen_start, chosen_L = best_c[1], best_c[2]
+    def _near_key(c: tuple[float, int, int]) -> tuple:
+        rects = _rects_of(c[1], c[2])
+        multi = len(_cluster_rect_lines(rects)) > 1
+        if expected_y is None:
+            return (multi,)
+        cy = sum((r.y0 + r.y1) / 2 for r in rects) / len(rects)
+        return (multi, abs((cy - page.rect.y0) / page_h - expected_y))
 
-    rects = [pwords[chosen_start + i][0] for i in range(chosen_L)]
-    box = _rect_to_fracs(_union_rects(rects), page.rect)
-    box["source"] = "match"
-    return box
+    near = [c for c in candidates if c[0] >= top_score - _MATCH_TIE]
+    near.sort(key=_near_key)
+    rest = [
+        c
+        for c in candidates
+        if c[0] < top_score - _MATCH_TIE and c[0] >= _MATCH_ACCEPT
+    ]
+
+    for _score, start, L in near + rest:
+        segments = _coherent_segments(
+            _rects_of(start, L), page_line_centers, median_h
+        )
+        if segments is None:
+            continue
+        box = _rect_to_fracs(_union_rects(segments), page.rect)
+        box["source"] = "match"
+        return _attach_segments(box, segments, page.rect)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -803,12 +1357,62 @@ def _render_strip(page: fitz.Page, rect: fitz.Rect) -> Optional[bytes]:
     return pix.tobytes("png")
 
 
+def _window_candidates(
+    variants: list[list[str]], flat_words: list[str]
+) -> list[tuple[float, int, int]]:
+    """Every (score, start, L) candidate window, in generation order.
+
+    Same scoring shape as _locate_match: for each variant of length n and each
+    window length L in [max(1, n-1), n+1], the mean over query words of the best
+    _wsim against the window word at the same index +-1, minus a length-drift
+    penalty. Tier A deliberately uses a wider L range (up to n+2); the two are
+    not unified.
+    """
+    m = len(flat_words)
+    candidates: list[tuple[float, int, int]] = []
+    if m == 0:
+        return candidates
+    for qwords in variants:
+        n = len(qwords)
+        if n == 0:
+            continue
+        for L in range(max(1, n - 1), n + 2):
+            penalty = _DRIFT_PENALTY * abs(L - n)
+            for start in range(0, m - L + 1):
+                total = 0.0
+                for k in range(n):
+                    best = 0.0
+                    for j in (k - 1, k, k + 1):
+                        if 0 <= j < L:
+                            s = _wsim(qwords[k], flat_words[start + j])
+                            if s > best:
+                                best = s
+                    total += best
+                candidates.append((total / n - penalty, start, L))
+    return candidates
+
+
+def _best_window(
+    variants: list[list[str]], flat_words: list[str]
+) -> tuple[float, int, int]:
+    """Best-scoring (score, start_index, length) window over all variants.
+
+    Pure and fitz-free so scoring harnesses can call it directly. Returns
+    (-1.0, -1, 0) when no candidate window exists (empty words or variants).
+    """
+    candidates = _window_candidates(variants, flat_words)
+    if not candidates:
+        return (-1.0, -1, 0)
+    candidates.sort(key=lambda t: -t[0])
+    return candidates[0]
+
+
 def _align_strip(
     query_words_variants: list[list[str]],
     vlm_lines: list[str],
     strip_lines: list[_ScanLine],
     prior_center: Optional[fitz.Point],
-) -> Optional[list[fitz.Rect]]:
+) -> Optional[tuple[list[fitz.Rect], dict]]:
     """Align a query (any of its normalized-word variants) inside a VLM strip
     transcription and map the winning window back onto detected word rects.
 
@@ -816,10 +1420,12 @@ def _align_strip(
     arrive top-to-bottom; VLM words within a line are in reading order and
     `_ScanLine.words` is already RTL reading order (rightmost first), so word
     index i of a VLM line corresponds to `words[i]` whenever counts agree.
-    Returns page-coordinate rectangles in printed reading order, one unioned
-    rectangle per covered line, or None when no window reaches _REFINE_ACCEPT.
-    Keeping line-local geometry here prevents a wrapped RTL phrase from
-    collapsing into a page-width diagonal envelope.
+    Returns (rects, meta) — page-coordinate rectangles in printed reading
+    order, one unioned rectangle per covered line, plus alignment diagnostics
+    {"score", "counts_agree", "n_near_tie", "vlm_lines", "strip_lines"} — or
+    None when no window reaches _REFINE_ACCEPT. Keeping line-local geometry
+    here prevents a wrapped RTL phrase from collapsing into a page-width
+    diagonal envelope.
     """
     vwords = [_norm_words(t) for t in vlm_lines]
     flat: list[tuple[int, int, str]] = []  # (vlm line, in-line index, word)
@@ -832,24 +1438,7 @@ def _align_strip(
 
     # Same scoring shape as _locate_match: mean best _wsim per query word
     # against the window word at the same index +-1, length-drift penalized.
-    candidates: list[tuple[float, int, int]] = []  # (score, start, L)
-    for qwords in query_words_variants:
-        n = len(qwords)
-        if n == 0:
-            continue
-        for L in range(max(1, n - 1), n + 2):
-            penalty = _DRIFT_PENALTY * abs(L - n)
-            for start in range(0, m - L + 1):
-                total = 0.0
-                for k in range(n):
-                    best = 0.0
-                    for j in (k - 1, k, k + 1):
-                        if 0 <= j < L:
-                            s = _wsim(qwords[k], flat[start + j][2])
-                            if s > best:
-                                best = s
-                    total += best
-                candidates.append((total / n - penalty, start, L))
+    candidates = _window_candidates(query_words_variants, [w for _j, _i, w in flat])
     if not candidates:
         return None
     candidates.sort(key=lambda t: -t[0])
@@ -858,6 +1447,13 @@ def _align_strip(
         return None
 
     counts_agree = len(vlm_lines) == len(strip_lines)
+    meta = {
+        "score": float(top_score),
+        "counts_agree": counts_agree,
+        "n_near_tie": sum(1 for c in candidates if c[0] >= top_score - _MATCH_TIE),
+        "vlm_lines": len(vlm_lines),
+        "strip_lines": len(strip_lines),
+    }
 
     def _window_rects(start: int, L: int) -> Optional[list[fitz.Rect]]:
         window = flat[start : start + L]
@@ -940,8 +1536,9 @@ def _align_strip(
                 best_d = d
                 best_rects = rects
         if best_rects is not None:
-            return best_rects
-    return _window_rects(best_start, best_L)
+            return best_rects, meta
+    rects = _window_rects(best_start, best_L)
+    return (rects, meta) if rects is not None else None
 
 
 def refine_scan_boxes(
@@ -962,8 +1559,10 @@ def refine_scan_boxes(
     detected word rectangles: line identification becomes exact, within-line
     placement a word-index lookup. Failures widen to +-2 lines for one more
     batched call. Returns per query a box with source "scan_vlm", an ordered
-    per-line ``segments`` list, and the segments' union as the legacy envelope;
-    or None (non-scan position, or refinement failed — the caller keeps the
+    per-line ``segments`` list, the segments' union as the legacy envelope, and
+    a ``debug`` dict of alignment diagnostics (the _align_strip meta plus the
+    ``radius`` of the pass that succeeded — diagnostics only, never sent to the
+    browser); or None (non-scan position, or refinement failed — the caller keeps the
     plain scan box).
     """
     results: list[Optional[dict]] = [None] * len(queries)
@@ -1029,20 +1628,22 @@ def refine_scan_boxes(
             for i in pending:
                 si = strip_of.get(i)
                 reading = readings[si] if si is not None and si < len(readings) else []
-                rects = None
+                aligned = None
                 if reading:
                     lo, hi = strip_range[si]
-                    rects = _align_strip(
+                    aligned = _align_strip(
                         variants[i], reading, lines[lo : hi + 1], priors[i]
                     )
-                if not rects:
+                if not aligned or not aligned[0]:
                     failed.append(i)
                     continue
+                rects, meta = aligned
                 box = _rect_to_fracs(_union_rects(rects), page.rect)
                 box["source"] = "scan_vlm"
                 box["segments"] = [
                     _rect_to_fracs(rect, page.rect) for rect in rects
                 ]
+                box["debug"] = {**meta, "radius": radius}
                 results[i] = box
             pending = failed
         return results

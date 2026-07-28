@@ -20,6 +20,19 @@ qc_history.json
 # Ignore book working directories but keep the .gitkeep placeholder
 books/*
 !books/.gitkeep
+# Per-book caches (redundant with books/* above, listed so they are never
+# accidentally re-added by a narrower books/ rule)
+books/*/locate_vlm.json
+books/*/locate_score.json
+books/*/locate_read.json
+# The bbox answer key: page readings, acquired once and reused by every
+# iteration. Gitignored with the rest of books/, so it lives ONLY on this
+# machine — re-acquiring it costs 145 subagent page transcriptions.
+books/*/locate_page_read.json
+
+# Score-harness outputs at the project root: reports, HTML contact sheets, and
+# the page PNGs `pages` renders for subagents (63 MB and regenerable).
+/out/
 
 # OS and editor artifacts
 .DS_Store

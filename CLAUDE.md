@@ -37,13 +37,47 @@ farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 
 ### Tests
 
-No pytest/linter is configured. `tests/` holds three standalone scripts (run with `./venv/bin/python`, no API key needed except where noted); they operate on real transcribed books under `books/`, so they need a book already processed:
+No pytest/linter is configured. `tests/` holds four standalone scripts (run with `./venv/bin/python`, no API key needed except where noted); they operate on real transcribed books under `books/`, so they need a book already processed:
 
 ```bash
 ./venv/bin/python tests/locator_regression.py             # locate.py tiers + VLM strip-alignment; one live llm.read_strips check skipped without a key
 ./venv/bin/python tests/headings_regression.py            # golden pages: headings survive md → EPUB XHTML, incl. negative control
 ./venv/bin/python tests/bbox_eval.py <slug> [--no-refine] # renders an HTML contact sheet of review-UI boxes for human miss-counting; uncached refinement bills the API
+./venv/bin/python tests/bbox_score.py score --cases tests/data/bbox_cases.json --sample 240 --seed 7 --stratify book,tier,kind --out out/score.json
 ```
+
+### bbox accuracy loop (`tests/bbox_score.py`)
+
+Automated accuracy measurement for the review UI's boxes. **The VLM transcribes, Python grades** — the model is never asked "is this box right?", only to read what is printed; the verdict (`exact`/`partial`/`shifted`/`wrong_line`/`wrong_region`/`no_box`) and `shift_words` are then computed deterministically. Headline metric `acc@1`; `no_box` stays in the denominator so turning a wrong box into no box cannot score as a win.
+
+**Truth is per PAGE, never per box.** This is the load-bearing invariant. The answer key is a full-page reading frozen in `books/<slug>/locate_page_read.json`, keyed on `(slug, page, render geometry, model)` — it mentions no box, so no locator change can invalidate it and iterations are free and perfectly comparable. Pages with a clean Unicode text layer skip the model entirely (PyMuPDF's word rects rebuild the key for free every run, `truth_source: pdf_words`); cipher/scan pages need one whole-page read (`vlm_page`). The superseded `--judge cached` path keyed readings on the *crop around the box under test*, so a structural change moved every crop and silently dropped half the sample from every denominator — that is what `score` now refuses to do (`_MAX_EXCLUDED_FRACTION`).
+
+Acquisition (once per page, ever) and scoring:
+
+```bash
+# 1. acquire the answer key for any page that lacks one (subagents read the PNGs)
+./venv/bin/python tests/bbox_score.py pages --cases tests/data/bbox_cases.json \
+    --sample 240 --seed 7 --stratify book,tier,kind --out-dir out/pagekey
+#    ... a Claude Code subagent reads each out/pagekey/BATCHES/batch_NN.json ...
+./venv/bin/python tests/bbox_score.py ingest-pages --manifest out/pagekey/manifest.json \
+    --readings out/pagekey/readings/
+# 2. score — fully offline, free, repeatable
+./venv/bin/python tests/bbox_score.py score --cases tests/data/bbox_cases.json \
+    --sample 240 --seed 7 --stratify book,tier,kind --out out/score_NNN.json
+# 3. compare two iterations
+./venv/bin/python tests/bbox_score.py compare --baseline A.json --candidate B.json --gate
+```
+
+Guardrails, each of which exists because it failed in practice:
+
+- `ingest-pages` **verifies the answer key on acquisition**: every reading is scored against that page's own independent transcription (`text/NNNN.md`) by `_page_recall`, and anything below `_PAGE_RECALL_MIN` (0.85) is rejected and reported for re-reading at tile resolution. Measured on `bachehaye_ghali`, whole-page readings land at 0.91–1.00.
+- `score` **refuses to write a report** when more than `_MAX_EXCLUDED_FRACTION` (10%) of the sample has no grade, instead of warning and emitting a number computed on a biased survivor subset. `--allow-thin-denominator` overrides; the result is not a valid baseline.
+- `compare` **refuses to diff reports with different `truth_sha1`** (`--allow-truth-drift` overrides): two runs are only comparable if they graded against the same frozen readings.
+- `compare` reports **McNemar's exact p** over the discordant pairs. Paired case counts are the only evidence a change carries: "3 fixed, 0 broken" is p=0.25, i.e. noise. Detecting a true 3-point acc@1 shift at 80% power needs ~15–25 discordant pairs, so keep ≥150 *scored* cases per comparison.
+- `_align_line_sequences` aligns reading lines to detected ink lines monotonically (Needleman–Wunsch). Requiring equal line counts and otherwise spreading the reading char-proportionally over the page — the crop-era fallback — cost 15 points of acc@1 at page scale, because one undetected line discards the correspondence for all ~900 words.
+- `geom_confident` is reduced over the words the case actually rests on, not the whole image; at page scale the global version measured page size rather than alignment quality.
+
+Note `cmd_golden`/`tests/data/bbox_golden.json` is **not** an answer key — it snapshots the box a previously-`exact` case produced and gates on IoU against it. Do not conflate it with page truth.
 
 Transcription requires `ANTHROPIC_API_KEY`, read from the environment or from `.env` at the project root (see `llm.load_env`).
 

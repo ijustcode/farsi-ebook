@@ -24,9 +24,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from farsi2epub.locate import (  # noqa: E402
     Query,
+    _REFINE_ACCEPT,
+    _align_blocks,
     _align_strip,
+    _apply_zone,
+    _countable_span,
+    _countable_upto,
     _fold_word,
+    _geom_blocks,
+    _geom_key,
     _locate_match,
+    _md_blocks,
     _rect_to_fracs,
     _resolve_span,
     _scan_hits,
@@ -35,6 +43,7 @@ from farsi2epub.locate import (  # noqa: E402
     _strip_rect,
     _render_strip,
     _union_rects,
+    _zone_points,
     locate_queries,
     refine_scan_boxes,
 )
@@ -74,6 +83,24 @@ def _rects_close(a: fitz.Rect, b: fitz.Rect, tol: float = 1e-9) -> bool:
     )
 
 
+_META_KEYS = {"score", "counts_agree", "n_near_tie", "vlm_lines", "strip_lines"}
+
+
+def _align(variants, vlm, strip, prior):
+    """_align_strip returning just its rects (None on failure), with the
+    alignment metadata shape checked on every successful call."""
+    out = _align_strip(variants, vlm, strip, prior)
+    if out is None:
+        return None
+    rects, meta = out
+    assert set(meta) == _META_KEYS, meta
+    assert isinstance(meta["score"], float) and meta["score"] >= _REFINE_ACCEPT
+    assert meta["vlm_lines"] == len(vlm) and meta["strip_lines"] == len(strip)
+    assert meta["counts_agree"] == (len(vlm) == len(strip))
+    assert meta["n_near_tie"] >= 1
+    return rects
+
+
 def _check_align_strip_synthetic() -> None:
     """Pure _align_strip checks on hand-built strips: no PDF, no API."""
     l0_words = ["درخت", "سنگ", "ابر", "ماه", "ستاره"]
@@ -89,14 +116,14 @@ def _check_align_strip_synthetic() -> None:
     # 1. Exact word-index mapping: line counts agree, per-line word counts
     # agree, query = words 2-4 (0-based) of line 1 -> rect must equal the
     # union of exactly those detected word rects.
-    rects = _align_strip([["دفتر", "مدرسه", "معلم"]], vlm, strip, None)
+    rects = _align([["دفتر", "مدرسه", "معلم"]], vlm, strip, None)
     assert rects is not None and len(rects) == 1
     expected = _union_rects(strip[1].words[2:5])
     assert _rects_close(rects[0], expected), f"{rects[0]} != {expected}"
 
     # 2. RTL orientation: the FIRST word of a VLM line (reading order) maps to
     # the RIGHTMOST detected rect of that line.
-    rects = _align_strip([["کتاب"]], vlm, strip, None)
+    rects = _align([["کتاب"]], vlm, strip, None)
     assert rects is not None and len(rects) == 1
     rightmost = max(strip[1].words, key=lambda r: r.x1)
     assert _rects_close(rects[0], strip[1].words[0])
@@ -106,7 +133,7 @@ def _check_align_strip_synthetic() -> None:
     # visual words were detected -> char-proportional placement, box must
     # still land inside that line's rect.
     line = _mk_line(200, 220, ["ا", "ب", "پ"])  # 3 detected word rects
-    rects = _align_strip([["دو", "سه"]], ["یک دو سه چهار"], [line], None)
+    rects = _align([["دو", "سه"]], ["یک دو سه چهار"], [line], None)
     assert rects is not None and len(rects) == 1
     rect = rects[0]
     assert rect.x0 >= line.rect.x0 - 1e-9 and rect.x1 <= line.rect.x1 + 1e-9
@@ -115,14 +142,14 @@ def _check_align_strip_synthetic() -> None:
 
     # 4. Alt rescue: the main query text is garbage (scores below the accept
     # threshold) but an alternate (corrected) text matches -> accepted.
-    assert _align_strip([["قظفغصضچجح"]], vlm, strip, None) is None
-    rects = _align_strip([["قظفغصضچجح"], ["مدرسه", "معلم"]], vlm, strip, None)
+    assert _align([["قظفغصضچجح"]], vlm, strip, None) is None
+    rects = _align([["قظفغصضچجح"], ["مدرسه", "معلم"]], vlm, strip, None)
     assert rects is not None and len(rects) == 1
     assert _rects_close(rects[0], _union_rects(strip[1].words[3:5]))
 
     # 5. Rejection: garbage VLM lines never reach the accept threshold.
     assert (
-        _align_strip([["خورشید", "دریاچه"]], ["تش کج غس", "لم خت وی"], strip, None)
+        _align([["خورشید", "دریاچه"]], ["تش کج غس", "لم خت وی"], strip, None)
         is None
     )
 
@@ -135,16 +162,16 @@ def _check_align_strip_synthetic() -> None:
     ]
     vlm2 = ["گل بلبل باغ", "میز صندلی فرش", "گل بلبل باغ"]
     q = [["گل", "بلبل", "باغ"]]
-    top = _align_strip(q, vlm2, twice, fitz.Point(300, 110))
+    top = _align(q, vlm2, twice, fitz.Point(300, 110))
     assert top is not None and len(top) == 1
     assert _rects_close(top[0], _union_rects(twice[0].words))
-    bottom = _align_strip(q, vlm2, twice, fitz.Point(300, 170))
+    bottom = _align(q, vlm2, twice, fitz.Point(300, 170))
     assert bottom is not None and len(bottom) == 1
     assert _rects_close(bottom[0], _union_rects(twice[2].words))
 
     # 7. Two-line RTL wrap: preserve one tight rectangle per printed line in
     # top-to-bottom reading order instead of returning their page-wide union.
-    wrapped = _align_strip(
+    wrapped = _align(
         [["ماه", "ستاره", "کتاب", "قلم"]], vlm, strip, None
     )
     assert wrapped is not None and len(wrapped) == 2
@@ -152,7 +179,7 @@ def _check_align_strip_synthetic() -> None:
     assert _rects_close(wrapped[1], _union_rects(strip[1].words[0:2]))
 
     # 8. Three-line wrap: intermediate lines remain independent segments.
-    three_lines = _align_strip(
+    three_lines = _align(
         [["ستاره", "کتاب", "قلم", "دفتر", "مدرسه", "معلم", "کلاس", "نان"]],
         vlm,
         strip,
@@ -169,12 +196,142 @@ def _check_align_strip_synthetic() -> None:
         _mk_line(230, 250, ["ا", "ب", "پ"]),
         _mk_line(260, 280, ["ت", "ث", "ج"]),
     ]
-    mismatch = _align_strip(
+    mismatch = _align(
         [["پ", "ت"]], ["ا ب پ ت ث ج"], mismatch_strip, None
     )
     assert mismatch is not None and len(mismatch) == 2
     assert mismatch[0].y0 == mismatch_strip[0].rect.y0
     assert mismatch[1].y0 == mismatch_strip[1].rect.y0
+
+
+def _check_zone_map_synthetic() -> None:
+    """Block segmentation / monotone alignment / anchored map — pure, no PDF."""
+    md = (
+        "# سرفصل\n"
+        "\n"
+        "بند اول اینجاست و ادامه دارد.\n"
+        "\n"
+        "بند دوم اینجاست.\n"
+        "\n"
+        "```\n"
+        "مصرع اول --- مصرع دوم\n"
+        "مصرع سوم --- مصرع چهارم\n"
+        "```\n"
+        "\n"
+        "[^1]: پانویس یک.\n"
+        "[^2]: پانویس دو.\n"
+    )
+    blocks = _md_blocks(md)
+    texts = [md[a:b].strip() for a, b in blocks]
+    # Heading, two paragraphs, one block per verse line, one per footnote def.
+    assert len(blocks) == 7, texts
+    assert texts[0] == "# سرفصل"
+    assert texts[3].startswith("مصرع اول") and texts[4].startswith("مصرع سوم")
+    assert texts[5].startswith("[^1]:") and texts[6].startswith("[^2]:")
+    # The fence lines themselves carry no countable character and never become
+    # blocks; block spans stay ordered and non-overlapping.
+    assert all(a < b for a, b in blocks)
+    assert all(x[1] <= y[0] for x, y in zip(blocks, blocks[1:]))
+
+    # Geometry: an RTL page whose body measure is 400 (x from 100 to 500).
+    # Line 3 is indented on the right (paragraph first line) and line 2 falls
+    # short on the left (paragraph last line) — either signal alone must start
+    # a block, and line 6 is separated by a large vertical gap.
+    def _ln(y0: float, x0: float, x1: float) -> fitz.Rect:
+        return fitz.Rect(x0, y0, x1, y0 + 10.0)
+
+    rects = [
+        _ln(0, 100, 500),
+        _ln(12, 100, 500),
+        _ln(24, 300, 500),  # short on the left -> ends a paragraph
+        _ln(36, 100, 460),  # indented on the right -> starts a paragraph
+        _ln(48, 100, 500),
+        _ln(60, 100, 500),
+        _ln(140, 100, 500),  # large vertical gap -> starts a block
+    ]
+    assert _geom_blocks(rects) == [(0, 2), (3, 5), (6, 6)]
+    assert _geom_blocks([]) == []
+    assert _geom_blocks(rects[:1]) == [(0, 0)]
+
+    # Monotone alignment: three Markdown paragraphs against two printed blocks
+    # must merge (many-to-one) rather than reorder.
+    groups = _align_blocks([0.25, 0.25, 0.5], [0.5, 0.5])
+    assert groups == [(0, 2, 0, 1), (2, 3, 1, 2)], groups
+    # Split the other way round too.
+    assert _align_blocks([0.5, 0.5], [0.25, 0.25, 0.5]) == [
+        (0, 1, 0, 2),
+        (1, 2, 2, 3),
+    ]
+    # Block boundaries that contradict each other cannot be anchored: the DP
+    # must collapse them into one group (no interior anchor) rather than
+    # inventing a crossing alignment, which degrades to the global map.
+    assert _align_blocks([0.9, 0.1], [0.1, 0.9]) == [(0, 2, 0, 2)]
+    assert _align_blocks([], [0.5, 0.5]) is None
+
+    # The anchored map is monotone, pins its control points, and is the
+    # identity when no anchors were established.
+    pts = ((0.0, 0.0), (0.5, 0.2), (1.0, 1.0))
+    assert abs(_apply_zone(pts, 0.5) - 0.2) < 1e-12
+    assert abs(_apply_zone(pts, 0.25) - 0.1) < 1e-12
+    assert abs(_apply_zone(pts, 0.75) - 0.6) < 1e-12
+    assert _apply_zone(pts, -1.0) == 0.0 and _apply_zone(pts, 2.0) == 1.0
+    prev = -1.0
+    for i in range(101):
+        cur = _apply_zone(pts, i / 100)
+        assert cur >= prev - 1e-12
+        prev = cur
+    assert _apply_zone((), 0.37) == 0.37
+
+
+def _check_zone_map_real_page(root: Path) -> None:
+    """Hand-verified block structure of bachehaye_ghali page 8.
+
+    The page is a heading, four body paragraphs and three footnote
+    definitions. Its 22 detected ink lines are: the heading (line 0), the four
+    paragraphs (lines 1-6, 7-11, 12-14, 15-16), the footnotes (17-18, 19, 20)
+    and a stray page-number mark (21). The anchored map exists to reproduce
+    exactly that correspondence; if this pairing ever changes, the offset map
+    is no longer paragraph-local and every Tier C box on the page moves.
+    """
+    md = (root / "text" / "0008.md").read_text(encoding="utf-8")
+    doc = fitz.open(root / "source.pdf")
+    try:
+        page = doc[7]
+        lines = _scan_page_lines(page)
+        assert len(lines) == 22
+        assert _geom_blocks([ln.rect for ln in lines]) == [
+            (0, 0), (1, 6), (7, 11), (12, 14), (15, 16),
+            (17, 18), (19, 19), (20, 20), (21, 21),
+        ]
+        md_blocks = _md_blocks(md)
+        assert len(md_blocks) == 8  # heading + 4 paragraphs + 3 footnote defs
+
+        total_md = _countable_upto(md, len(md))
+        total_g = sum(ln.weight for ln in lines)
+        mw = [_countable_span(md, a, b) / total_md for a, b in md_blocks]
+        gw = [
+            sum(ln.weight for ln in lines[lo : hi + 1]) / total_g
+            for lo, hi in _geom_blocks([ln.rect for ln in lines])
+        ]
+        groups = _align_blocks(mw, gw)
+        assert groups is not None
+        # Every Markdown block pairs 1:1 with its printed block; only the
+        # trailing page-number mark is absorbed into the last group.
+        assert [(g[0], g[1], g[2]) for g in groups] == [
+            (0, 1, 0), (1, 2, 1), (2, 3, 2), (3, 4, 3),
+            (4, 5, 4), (5, 6, 5), (6, 7, 6), (7, 8, 7),
+        ], groups
+        assert groups[-1][3] == 9  # last group swallows the stray mark
+
+        # The resulting map is a real anchored map, not the global fallback,
+        # and it stays monotone.
+        pts = _zone_points(
+            md, _geom_key([ln.rect for ln in lines], [ln.weight for ln in lines])
+        )
+        assert len(pts) >= 3
+        assert all(y >= x for (_a, x), (_b, y) in zip(pts, pts[1:]))
+    finally:
+        doc.close()
 
 
 def _check_review_segment_plumbing() -> None:
@@ -463,6 +620,7 @@ def main() -> int:
 
     # Pure synthetic checks for the VLM strip-alignment helper.
     _check_align_strip_synthetic()
+    _check_zone_map_synthetic()
     _check_review_segment_plumbing()
 
     # This mirrors the problematic PDF's extraction: three visible words are
@@ -504,6 +662,7 @@ def main() -> int:
         assert no_model_box is not None and no_model_box["source"] == "scan"
 
         # Fake-reader plumbing for the scan_vlm refinement path.
+        _check_zone_map_real_page(root)
         _check_refine_plumbing(root)
         _check_wrapped_real_case(root)
 

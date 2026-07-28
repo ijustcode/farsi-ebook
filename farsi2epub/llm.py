@@ -363,6 +363,96 @@ def read_strips(
     return slots, usage, cost_of(response.usage, model)
 
 
+class BoxCropReading(BaseModel):
+    crop_index: int = Field(description="The number from the crop's 'Crop N:' label.")
+    line_text_full: list[str] = Field(
+        description="Every printed text line fully visible in the crop, top to bottom, "
+        "one list entry per printed line, transcribed verbatim and ignoring the magenta rectangle."
+    )
+    boxed_line_index: int = Field(
+        description="0-based index into line_text_full of the printed line the magenta rectangle "
+        "mainly covers; -1 when no line is mainly covered or the choice is ambiguous."
+    )
+    boxed_text: str = Field(
+        description="The words whose glyphs fall inside the magenta rectangle, in reading order, "
+        "verbatim; empty string when no word is mostly inside it."
+    )
+    boxed_spans_lines: int = Field(
+        description="How many printed lines the magenta rectangle touches."
+    )
+    legible: bool = Field(description="False when the crop is too blurry or dark to read.")
+    note: str = Field(
+        description="At most 15 words of English describing anything notable about the crop."
+    )
+
+
+class BoxCropReadings(BaseModel):
+    crops: list[BoxCropReading] = Field(
+        description="One reading per crop, in the order the crops were given."
+    )
+
+
+JUDGE_CROPS_SYSTEM = """You receive several crops taken from a printed or scanned Persian (Farsi) book page, each preceded by a label like "Crop 1:". Each crop has one vivid magenta rectangle drawn onto it by a computer program. That rectangle may be correct, slightly misplaced, or completely wrong — you are not judging it. Your job is to read the page.
+
+- line_text_full: transcribe EVERY printed text line fully visible in the crop, top to bottom, one list entry per printed line, verbatim. Ignore the magenta rectangle for this field entirely: transcribe as if the rectangle were not drawn, including text outside it. Never merge two printed lines into one entry and never split one printed line across entries.
+- boxed_line_index: the 0-based index into line_text_full of the printed line the rectangle mainly covers. Use -1 when it covers no line, or when the choice is genuinely ambiguous.
+- boxed_text: the words whose glyphs fall INSIDE the rectangle, in reading order, verbatim. A word counts as inside only if most of its glyphs are inside the rectangle. Use an empty string when no word qualifies.
+- boxed_spans_lines: how many printed lines the rectangle touches.
+- legible: false when the crop is too blurry or too dark to read.
+- note: at most 15 words, in English, e.g. "rectangle cuts a word in half".
+
+- Plain text only: no Markdown, no heading syntax (#), no corrections, no modernized spelling. Transcribe what is printed.
+- Use standard Persian codepoints: always ی (U+06CC) and ک (U+06A9), never Arabic ي or ك. Keep zero-width non-joiner (U+200C) where the print shows joined-boundary compounds (می‌رود، کتاب‌ها).
+- A crop may clip letters or dots at its edges; transcribe the line anyway as best you can.
+- If a word is hard to read, give your best guess rather than omitting it. Never invent words that are not printed.
+- Echo each crop's label number as crop_index."""
+
+
+def read_box_crops(
+    client: anthropic.Anthropic,
+    png_crops: list[bytes],
+    model: str,
+    page_no: int = 0,
+) -> tuple[list[Optional[BoxCropReading]], dict, float]:
+    """Read box-annotated page crops in a single batched call. Returns
+    (per-crop readings, usage_dict, cost_usd). Slots are filled by the model's
+    crop_index; a crop it skipped or mislabeled yields None rather than
+    raising."""
+    content: list[dict] = []
+    for i, png in enumerate(png_crops):
+        content.append({"type": "text", "text": f"Crop {i + 1}:"})
+        content.append(_image_block(png))
+    content.append(
+        {"type": "text", "text": f"Read each of the {len(png_crops)} crops above per the system instructions."}
+    )
+    kwargs: dict = {}
+    if model.startswith("claude-sonnet-5"):
+        # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
+        kwargs["thinking"] = {"type": "disabled"}
+
+    def _call():
+        response = client.messages.parse(
+            model=model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=JUDGE_CROPS_SYSTEM,
+            messages=[{"role": "user", "content": content}],
+            output_format=BoxCropReadings,
+            **kwargs,
+        )
+        if response.parsed_output is None:
+            raise RuntimeError(f"Model {model} returned unparseable crop readings for page {page_no}")
+        return response
+
+    response = _call_with_retry(_call, page_no=page_no, what="read_box_crops")
+    slots: list[Optional[BoxCropReading]] = [None] * len(png_crops)
+    for reading in response.parsed_output.crops:
+        idx = reading.crop_index - 1  # labels are 1-based
+        if 0 <= idx < len(slots):
+            slots[idx] = reading
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return slots, usage, cost_of(response.usage, model)
+
+
 def propose_metadata(
     client: anthropic.Anthropic, png_pages: list[bytes], model: str
 ) -> tuple[Optional[BookMetadata], float]:

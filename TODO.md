@@ -113,3 +113,54 @@ class QCReport(BaseModel): verdict: str; issues: list[QCIssue]; suggested_text_m
 def qc_verify_page(client, png_bytes, text_md, model, page_no) -> tuple[QCReport, dict, float]
 def transcribe_page(..., extra_hint: Optional[str] = None)   # appended to the user text
 ```
+
+## Phase 3 — bbox locator accuracy (loop rebuilt 2026-07-27)
+
+The measurement loop was rebuilt so that iterations are free and comparable:
+truth is now a frozen PER-PAGE reading (`books/<slug>/locate_page_read.json`),
+never a crop around the box under test. See the "bbox accuracy loop" section of
+CLAUDE.md for the commands and the guardrails. Baseline to beat: **acc@1 0.3362**
+(`out/score_000_baseline.json`, crop-era; re-score against page truth before
+quoting it as the baseline for a new iteration).
+
+### 3.1 Persian punctuation is not stripped by the production word fold  ← next
+
+**Found 2026-07-27 while calibrating the answer key; NOT yet fixed, NOT yet
+measured.** `locate._NONWORD_RE` is `[^؀-ۿ0-9a-zA-Z]`, which preserves the whole
+Arabic block — and that block contains Persian punctuation. So:
+
+```python
+locate._fold_word("زد،")  == "زد،"   # comma survives
+locate._fold_word("زد")   == "زد"    # -> the two words DO NOT MATCH
+locate._fold_word("متن.") == "متن"   # ASCII punctuation IS stripped
+```
+
+Affected codepoints: ، U+060C, ؛ U+061B, ؟ U+061F, ٪ U+066A, ٫ U+066B, ۔ U+06D4,
+﴾ ﴿. Consequence: every window comparison in `locate` — Tier A's word-multiset
+match, `_best_window`/`_window_candidates` scoring, `_align_strip` — treats a
+comma-terminated word as a different token from the bare word. Persian prose is
+comma-dense, so a query whose first or last word abuts a comma is systematically
+penalized. Measured side-effect on the acquisition gate: ~7 points of apparent
+recall loss, which is how it was noticed (`tests/bbox_score.py::_recall_words`
+strips them for measurement only, deliberately leaving production untouched).
+
+Steps:
+1. Re-score the current locator against page truth → this is iteration 3's baseline.
+2. Strip Arabic-block punctuation in `locate._fold_word` (keep digits: Arabic-Indic
+   digits share the block and ARE word content).
+3. Re-score; `compare --gate` against the baseline from step 1, and check McNemar's
+   p — with ~150 scored cases a real effect should clear it.
+4. `tests/locator_regression.py`: add a case pinning `_fold_word("زد،") == "زد"`.
+
+Risk to check in step 3: `normalize.py` and the `review` hunk diff also consume
+folded words; confirm no caller depends on punctuation surviving the fold.
+
+### 3.2 Tier B/C never verify what is printed where they point (from the 2026-07-27 review)
+
+Tier A *searches for* the query text and scores acc@1 0.73; Tiers B (layout) and
+C (scan) *interpolate* a position from character offsets and never check what is
+actually printed there — 0.21–0.28. Block anchoring (iteration 2) removed the
+accumulated drift it was aimed at, but drift was never the dominant defect: the
+remaining `wrong_region` cases need >1.6 line-heights of error to explain. The
+paradigm gap, not a tuning gap: give B/C a content check against the page reading
+they already have access to.
