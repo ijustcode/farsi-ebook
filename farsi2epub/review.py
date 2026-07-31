@@ -1226,7 +1226,13 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-box-single.qc-box-scan_vlm { border: 2px solid #2e8b57; background: rgba(46,139,87,.12); }
 .qc-box-single.qc-box-model { border: 2px dashed #f0a03a; background: rgba(240,160,58,.10); }
 .qc-box-single.hot { outline: 2px solid #ffffff; }
-.qc-box-single.zoom-target { animation: qc-glow 0.6s ease-in-out 2; z-index: 5; }
+/* The box currently zoomed into blinks three times, then settles back to its
+   plain tier appearance. Border and fill are never restyled — the colour is
+   the tier's meaning, so the "which one" signal is motion, not hue. */
+.qc-box-selected { z-index: 5; }
+.qc-box-single.qc-box-selected {
+  animation: qc-blink 1.3s ease-in-out 3;
+}
 .qc-box-multipart {
   inset: 0;
   width: 100%;
@@ -1255,19 +1261,21 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-box-multipart.hot .qc-box-shape {
   filter: drop-shadow(0 0 2px #ffffff);
 }
-.qc-box-multipart.zoom-target { z-index: 5; }
-.qc-box-multipart.zoom-target .qc-box-shape {
-  animation: qc-svg-glow 0.6s ease-in-out 2;
+.qc-box-multipart.qc-box-selected .qc-box-shape {
+  animation: qc-svg-blink 1.3s ease-in-out 3;
 }
-@keyframes qc-glow {
-  0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
-  50%  { box-shadow: 0 0 0 5px rgba(255,255,255,.85); }
-  100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+/* Blink by fading the whole box in and out. A glow/halo was measured invisible:
+   the page underneath is a white scan, so a white halo has nothing to show up
+   against. Opacity keeps the tier hue exactly and reads on any background. */
+@keyframes qc-blink {
+  0%   { opacity: 1; }
+  50%  { opacity: .12; }
+  100% { opacity: 1; }
 }
-@keyframes qc-svg-glow {
-  0%   { filter: drop-shadow(0 0 0 rgba(255,255,255,0)); }
-  50%  { filter: drop-shadow(0 0 5px rgba(255,255,255,.95)); }
-  100% { filter: drop-shadow(0 0 0 rgba(255,255,255,0)); }
+@keyframes qc-svg-blink {
+  0%   { opacity: 1; }
+  50%  { opacity: .12; }
+  100% { opacity: 1; }
 }
 .hunk-item.hot { border-color: #3a9ff0; }
 .hunk-item.active {
@@ -1891,8 +1899,8 @@ function clampNum(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function clearGlow(page) {
   var vp = document.getElementById('viewport-' + page);
   if (!vp) return;
-  var els = vp.querySelectorAll('.zoom-target');
-  for (var i = 0; i < els.length; i++) els[i].classList.remove('zoom-target');
+  var sel = vp.querySelectorAll('.qc-box-selected');
+  for (var i = 0; i < sel.length; i++) sel[i].classList.remove('qc-box-selected');
 }
 
 // Mark the correction box tied to the zoomed finding as active (one per page).
@@ -1963,13 +1971,10 @@ function zoomTo(page, boxId, forceRetarget) {
   wrap.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
   zoomState[page] = boxId;
   zoomXf[page] = {s: s, tx: tx, ty: ty};
-  document.getElementById('viewport-' + page).classList.add('zoomed');
+  vp.classList.add('zoomed');
+  // Blink the target three times, then it settles; tier colour untouched.
+  box.classList.add('qc-box-selected');
   setActiveHunk(page, boxId);
-  // Pulse the target box once the glide has landed.
-  setTimeout(function () {
-    if (zoomState[page] !== boxId) return;
-    box.classList.add('zoom-target');
-  }, 580);
 }
 
 // Delegated click. Never preventDefault, so the hunk buttons' onclick handlers
