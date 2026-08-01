@@ -39,3 +39,4 @@ books/*/locate_page_read.json
 .idea/
 .vscode/
 .python-version
+.build/
