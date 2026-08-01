@@ -2,10 +2,10 @@
 
 Usage: source venv/bin/activate && python tests/locator_regression.py
 
-Includes synthetic unit checks for the VLM strip-alignment helper
-(`_align_strip` — pure geometry, no PDF/API), plumbing checks for
-`refine_scan_boxes` with a fake strip reader on the real scanned book, and
-one API-gated live check of `llm.read_strips` (skipped without a key).
+Includes synthetic unit checks for the VLM strip-alignment helpers (pure
+geometry, no PDF/API), plumbing checks for `refine_scan_boxes` with a fake
+strip reader on the real scanned book, and one explicitly opt-in live check of
+`llm.read_strips` (`RUN_LIVE_LLM_TESTS=1`).
 """
 
 from __future__ import annotations
@@ -24,18 +24,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from farsi2epub.locate import (  # noqa: E402
     Query,
+    REFINE_ALGORITHM_CONTEXT_ANCHOR,
+    REFINE_ALGORITHM_LEGACY,
     _REFINE_ACCEPT,
     _align_blocks,
+    _align_context_strip,
+    _align_refine_strip,
     _align_strip,
     _apply_zone,
     _countable_span,
     _countable_upto,
+    _context_variants,
     _fold_word,
     _norm_words,
     _geom_blocks,
     _geom_key,
     _locate_match,
     _md_blocks,
+    _monotone_word_map,
     _rect_to_fracs,
     _resolve_span,
     _scan_hits,
@@ -203,6 +209,173 @@ def _check_align_strip_synthetic() -> None:
     assert mismatch is not None and len(mismatch) == 2
     assert mismatch[0].y0 == mismatch_strip[0].rect.y0
     assert mismatch[1].y0 == mismatch_strip[1].rect.y0
+
+
+def _check_context_align_synthetic() -> None:
+    """Context identifies an occurrence; only the correction target is boxed."""
+
+    # A one-word OLD transcription is absent from the print. Stable neighbours
+    # still identify its slot, and the box stays one word wide.
+    md = "جلد از سیاوش کرمانی نقاش نام کتاب"
+    pos = md.index("کرمانی")
+    query = Query("کرمانی", (pos, pos + len("کرمانی")))
+    printed = ["جلد", "از", "سیاوش", "کسرایی", "نقاش", "نام", "کتاب"]
+    line = _mk_line(100, 120, printed)
+    status, aligned = _align_context_strip(
+        _context_variants(md, query), [" ".join(printed)], [line]
+    )
+    assert status == "match" and aligned is not None
+    rects, meta = aligned
+    assert len(rects) == 1 and _rects_close(rects[0], line.words[3])
+    assert meta["context"] is True and meta["context_score"] == 1.0
+    assert meta["target_score"] < 1.0  # the wrong target itself did not match
+
+    # A corrected alternate is allowed to supply the target while the same
+    # neighbours supply identity.
+    corrected = Query(
+        "کرمانی", (pos, pos + len("کرمانی")), ("کسرایی",)
+    )
+    status, aligned = _align_context_strip(
+        _context_variants(md, corrected), [" ".join(printed)], [line]
+    )
+    assert status == "match" and aligned is not None
+    rects, meta = aligned
+    assert _rects_close(rects[0], line.words[3])
+    assert meta["target_score"] == 1.0
+
+    # The target word repeats, but its surrounding words select the second
+    # printed occurrence without consulting the coarse scan prior.
+    repeated_md = "میز کنار گل زرد بود دیروز"
+    repeated_pos = repeated_md.index("گل")
+    repeated_q = Query("گل", (repeated_pos, repeated_pos + len("گل")))
+    repeated_words = [
+        ["خانه", "کنار", "گل", "سرخ", "بود", "امروز"],
+        ["میز", "کنار", "گل", "زرد", "بود", "دیروز"],
+    ]
+    repeated_lines = [
+        _mk_line(130, 150, repeated_words[0]),
+        _mk_line(160, 180, repeated_words[1]),
+    ]
+    status, aligned = _align_context_strip(
+        _context_variants(repeated_md, repeated_q),
+        [" ".join(words) for words in repeated_words],
+        repeated_lines,
+    )
+    assert status == "match" and aligned is not None
+    assert _rects_close(aligned[0][0], repeated_lines[1].words[2])
+
+    # Two genuinely identical contextual occurrences are ambiguous. Overlapping
+    # window lengths are collapsed, but the two target locations remain; the
+    # refiner returns no replacement so its caller retains the plain scan box.
+    ambiguous_md = "کنار این گل سرخ است"
+    ambiguous_pos = ambiguous_md.index("گل")
+    ambiguous_q = Query("گل", (ambiguous_pos, ambiguous_pos + len("گل")))
+    duplicate = ["کنار", "این", "گل", "سرخ", "است"]
+    duplicate_lines = [
+        _mk_line(190, 210, duplicate),
+        _mk_line(220, 240, ["واژه", "میانی"]),
+        _mk_line(250, 270, duplicate),
+    ]
+    status, aligned = _align_context_strip(
+        _context_variants(ambiguous_md, ambiguous_q),
+        [" ".join(duplicate), "واژه میانی", " ".join(duplicate)],
+        duplicate_lines,
+    )
+    assert status == "ambiguous" and aligned is None
+    # The integration selector treats ambiguity as terminal even though the
+    # legacy matcher could use this prior to choose the second occurrence.
+    # Returning None is what tells refine_scan_boxes to preserve its raw scan.
+    legacy_variants = [_norm_words(ambiguous_q.text)]
+    prior = fitz.Point(duplicate_lines[2].rect.x1, duplicate_lines[2].rect.y0)
+    assert _align_strip(
+        legacy_variants,
+        [" ".join(duplicate), "واژه میانی", " ".join(duplicate)],
+        duplicate_lines,
+        prior,
+    ) is not None
+    assert _align_refine_strip(
+        _context_variants(ambiguous_md, ambiguous_q),
+        legacy_variants,
+        [" ".join(duplicate), "واژه میانی", " ".join(duplicate)],
+        duplicate_lines,
+        prior,
+    ) is None
+
+    # If context is simply absent from the reader, an informative three-word
+    # target retains the established local matcher as a compatibility fallback.
+    fallback_md = "راهنمای قدیمی ماه ستاره کتاب پایان نوشته"
+    fallback_text = "ماه ستاره کتاب"
+    fallback_pos = fallback_md.index(fallback_text)
+    fallback_q = Query(
+        fallback_text, (fallback_pos, fallback_pos + len(fallback_text))
+    )
+    fallback_printed = ["بیگانه", "دیگر", "ماه", "ستاره", "کتاب", "متن", "تازه"]
+    fallback_line = _mk_line(275, 295, fallback_printed)
+    fallback_context = _context_variants(fallback_md, fallback_q)
+    fallback_legacy = [_norm_words(fallback_q.text)]
+    fallback_reading = [" ".join(fallback_printed)]
+    assert _align_context_strip(
+        fallback_context, fallback_reading, [fallback_line]
+    )[0] == "no_match"
+    fallback = _align_refine_strip(
+        fallback_context,
+        fallback_legacy,
+        fallback_reading,
+        [fallback_line],
+        None,
+    )
+    assert fallback is not None
+    assert _rects_close(fallback[0][0], _union_rects(fallback_line.words[2:5]))
+
+    # The same no-context condition does not relax the gate for a one-word
+    # target, even though the legacy matcher could find that repeated token.
+    short_md = "راهنمای قدیمی ستاره پایان نوشته"
+    short_pos = short_md.index("ستاره")
+    short_q = Query("ستاره", (short_pos, short_pos + len("ستاره")))
+    short_context = _context_variants(short_md, short_q)
+    assert _align_context_strip(
+        short_context, fallback_reading, [fallback_line]
+    )[0] == "no_match"
+    assert _align_strip(
+        [["ستاره"]], fallback_reading, [fallback_line], None
+    ) is not None
+    assert _align_refine_strip(
+        short_context,
+        [["ستاره"]],
+        fallback_reading,
+        [fallback_line],
+        None,
+    ) is None
+
+    # A target may itself wrap. Context finds the occurrence, while target-only
+    # geometry preserves one narrow RTL segment per printed line.
+    wrap_md = "پیش زمینه ماه ستاره کتاب قلم پس زمینه"
+    wrap_text = "ماه ستاره کتاب قلم"
+    wrap_pos = wrap_md.index(wrap_text)
+    wrap_q = Query(wrap_text, (wrap_pos, wrap_pos + len(wrap_text)))
+    wrap_words = [
+        ["پیش", "زمینه", "ماه", "ستاره"],
+        ["کتاب", "قلم", "پس", "زمینه"],
+    ]
+    wrap_lines = [
+        _mk_line(280, 300, wrap_words[0]),
+        _mk_line(310, 330, wrap_words[1]),
+    ]
+    status, aligned = _align_context_strip(
+        _context_variants(wrap_md, wrap_q),
+        [" ".join(words) for words in wrap_words],
+        wrap_lines,
+    )
+    assert status == "match" and aligned is not None
+    rects, _meta = aligned
+    assert len(rects) == 2
+    assert _rects_close(rects[0], _union_rects(wrap_lines[0].words[2:4]))
+    assert _rects_close(rects[1], _union_rects(wrap_lines[1].words[0:2]))
+
+    # The identity aligner is genuinely one-to-one: one reader word cannot
+    # satisfy two adjacent query words.
+    mapping = _monotone_word_map(("گل", "گل"), ["گل"])
+    assert sum(index is not None for index in mapping) == 1, mapping
 
 
 def _check_zone_map_synthetic() -> None:
@@ -384,7 +557,7 @@ def _check_review_segment_plumbing() -> None:
     assert "setFocusGeometry(svg, segments[0])" in _PAGE_TEMPLATE
     assert "data-focus-x0" in _PAGE_TEMPLATE
 
-    # Versioned cache keys make union-only v1 entries miss once. Negative v2
+    # Versioned cache keys make legacy entries miss once. Negative current
     # entries count as resolved; positive segmented geometry round-trips.
     with tempfile.TemporaryDirectory() as tmp:
         refiner = _ScanBoxRefiner(SimpleNamespace(root=Path(tmp)), "test-model")
@@ -396,7 +569,7 @@ def _check_review_segment_plumbing() -> None:
             [1, md_sha, q.text, list(q.alts), list(q.span)], ensure_ascii=False
         )
         legacy_key = hashlib.sha1(legacy_raw.encode("utf-8")).hexdigest()
-        assert _LOCATE_VLM_CACHE_VERSION == 2 and current_key != legacy_key
+        assert _LOCATE_VLM_CACHE_VERSION == 4 and current_key != legacy_key
 
         scan_box = {"x0": 0.1, "y0": 0.2, "x1": 0.2, "y1": 0.3, "source": "scan"}
         refiner.cache_path.write_text(
@@ -488,6 +661,72 @@ def _check_refine_plumbing(root: Path) -> None:
         # Word-level snapping: a fraction of the line, not the whole line.
         assert (box["x1"] - box["x0"]) < 0.8 * (line_frac["x1"] - line_frac["x0"])
 
+        # The established matcher is the explicit default/control. An exact
+        # Query.span alone must not silently activate the context pilot.
+        exact_q = Query(q.text, span)
+        contextual = _context_variants(md, exact_q)
+        assert contextual
+        anchor_words = list(contextual[0].words)
+        anchor_line = next(
+            i for i in range(lo, hi + 1) if len(lines[i].words) >= len(anchor_words)
+        )
+        control_reading: list[str] = []
+        for i in range(lo, hi + 1):
+            line_words = [
+                filler[j % len(filler)] for j in range(len(lines[i].words))
+            ]
+            if i == anchor_line:
+                line_words[: len(anchor_words)] = anchor_words
+            control_reading.append(" ".join(line_words))
+
+        mode_calls: list[tuple[str, int]] = []
+
+        def _mode_reader(strips: list[bytes]) -> list[list[str]]:
+            mode_calls.append(("read", len(strips)))
+            return [list(control_reading) for _ in strips]
+
+        control_box = refine_scan_boxes(
+            root / "source.pdf",
+            8,
+            md,
+            [exact_q],
+            [scan_box],
+            _mode_reader,
+        )[0]
+        assert REFINE_ALGORITHM_LEGACY == "legacy_v1"
+        assert control_box is not None
+        assert "context" not in control_box["debug"]
+        assert mode_calls == [("read", 1)]
+
+        mode_calls.clear()
+        pilot_box = refine_scan_boxes(
+            root / "source.pdf",
+            8,
+            md,
+            [exact_q],
+            [scan_box],
+            _mode_reader,
+            algorithm=REFINE_ALGORITHM_CONTEXT_ANCHOR,
+        )[0]
+        assert REFINE_ALGORITHM_CONTEXT_ANCHOR == "context_anchor_v1"
+        assert pilot_box is not None and pilot_box["debug"]["context"] is True
+        assert mode_calls == [("read", 1)]
+
+        try:
+            refine_scan_boxes(
+                root / "source.pdf",
+                8,
+                md,
+                [exact_q],
+                [scan_box],
+                _mode_reader,
+                algorithm="unknown",
+            )
+        except ValueError as exc:
+            assert "unknown refine algorithm" in str(exc)
+        else:
+            raise AssertionError("unknown refinement algorithm was accepted")
+
         # Garbage reader: alignment fails, widens once (radius 2), then gives
         # up -> exactly two reader invocations and a None result.
         garbage_calls: list[int] = []
@@ -552,11 +791,15 @@ def _check_wrapped_real_case(root: Path) -> None:
 
 def _check_read_strips_live(root: Path) -> None:
     """API-gated live check: one real llm.read_strips call on one real strip
-    from page 8, then refine_scan_boxes reusing that reading. Skips (with a
-    note) when no API key resolves via llm.load_env()."""
+    from page 8, then refine_scan_boxes reusing that reading. This is explicitly
+    opt-in so a routine offline regression can never bill merely because the
+    repository has an API key in .env."""
     from farsi2epub import llm
     from farsi2epub.config import MODEL_STRONG
 
+    if os.environ.get("RUN_LIVE_LLM_TESTS") != "1":
+        print("live read_strips check: SKIPPED (set RUN_LIVE_LLM_TESTS=1)")
+        return
     llm.load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("live read_strips check: SKIPPED (no API key)")
@@ -637,6 +880,7 @@ def main() -> int:
 
     # Pure synthetic checks for the VLM strip-alignment helper.
     _check_align_strip_synthetic()
+    _check_context_align_synthetic()
     _check_zone_map_synthetic()
     _check_review_segment_plumbing()
 

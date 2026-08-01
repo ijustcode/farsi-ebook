@@ -7,16 +7,26 @@ bachehaye_ghali p64 two printed lines fused into ONE 62px row run against a
 27px reference, so the detector returned 28 lines where the page prints 29.
 The aligner balanced the deficit by DROPPING a reading line in the middle of
 the page (L4), which shifted every line between the drop and the merge one
-printed line up. Three correctly-placed boxes were then read out against the
-wrong ink and graded catastrophically wrong — while `geom_confident` reported
-the broken mapping as trustworthy, and was never gated on anyway.
+printed line up. Three boxes on those affected lines (two target-perfect, one
+nearby) were then read out against the wrong ink and graded catastrophically
+wrong — while `geom_confident` reported the broken mapping as trustworthy, and
+was never gated on anyway.
 
 The pixel-verified truth (JUDGE_FIX.md, corroborated from the rendered
-overlay) is that all three boxes sit on their target words. So:
+overlay) is that all three boxes are paired to the right printed line. Under
+score instrument v5's box-independent target identity, the exact saved-v4
+boxes therefore score:
 
   p64:h100001  word_miss_sum == 0
   p64:h100007  word_miss_sum == 0
-  p64:h2       word_miss_sum <= 1
+  p64:h2       word_miss_sum == 3
+
+The h2 value is a SANCTIONED INSTRUMENT CORRECTION, not a locator regression.
+Its Markdown span is ``بواش بواش`` and stable surrounding context maps it to
+the printed ``یواش یواش``. The saved box covers the preceding ``کرد و``, whose
+two target-word distances are 2 + 1. Instrument v4 incorrectly reported 1:
+its non-injective ±1 matcher matched both query words to one printed ``یواش``
+inside ``و یواش``, then let the candidate box choose that false target.
 
 The `geom_confident is True` assertion is LOAD-BEARING: a "fix" that merely
 marks everything unconfident would satisfy the score assertions by exclusion.
@@ -47,16 +57,63 @@ from farsi2epub.workspace import Workspace  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FROZEN = PROJECT_ROOT / "tests" / "data" / "bbox_sample240.json"
+V4_BASELINE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v4.json"
 SLUG = "bachehaye_ghali"
 PAGE = 64
 
 _FAILURES: list[str] = []
+_EXACT_V4_REGRADE: dict | None = None
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"{'OK  ' if ok else 'FAIL'} {name}" + (f"  — {detail}" if detail else ""))
     if not ok:
         _FAILURES.append(name)
+
+
+def exact_v4_regrade() -> dict:
+    """Regrade v4's serialized boxes once, wholly offline.
+
+    This bypasses both the current production locator and every refinement
+    cache, so an instrument or judge regression cannot be hidden by a box that
+    happened to move at the same time.
+    """
+    global _EXACT_V4_REGRADE
+    if _EXACT_V4_REGRADE is not None:
+        return _EXACT_V4_REGRADE
+    with tempfile.TemporaryDirectory(prefix="bbox_judge_regression_") as td:
+        out = Path(td) / "exact_v4_regrade.json"
+        cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "tests" / "bbox_score.py"),
+            "score",
+            "--regrade-report", str(V4_BASELINE),
+            "--offline",
+            "--no-refine",
+            "--out", str(out),
+        ]
+        print("  $ " + " ".join(cmd))
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0 or not out.is_file():
+            check(
+                "exact saved-v4-box regrade ran",
+                False,
+                f"rc={proc.returncode}\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}",
+            )
+            return {}
+        _EXACT_V4_REGRADE = json.loads(out.read_text(encoding="utf-8"))
+    check("exact saved-v4-box regrade ran", True)
+    check(
+        "exact-box regrade cost was $0",
+        float(_EXACT_V4_REGRADE["run"].get("cost_usd") or 0.0) == 0.0,
+        str(_EXACT_V4_REGRADE["run"].get("cost_usd")),
+    )
+    check(
+        "exact-box regrade used score instrument v5",
+        _EXACT_V4_REGRADE["run"].get("score_cache_version") == 5,
+        str(_EXACT_V4_REGRADE["run"].get("score_cache_version")),
+    )
+    return _EXACT_V4_REGRADE
 
 
 # ---------------------------------------------------------------------------
@@ -153,40 +210,17 @@ def section_b() -> None:
 EXPECTED = {
     f"{SLUG}:p{PAGE}:h100001": 0,
     f"{SLUG}:p{PAGE}:h100007": 0,
-    f"{SLUG}:p{PAGE}:h2": 1,
+    f"{SLUG}:p{PAGE}:h2": 3,
 }
 
 
 def section_c() -> None:
     print("\n== (c) the three pixel-verified p64 cases ==")
-    tmp = Path(tempfile.mkdtemp(prefix="bbox_judge_regression_")) / "p64.json"
-    cmd = [
-        sys.executable,
-        str(PROJECT_ROOT / "tests" / "bbox_score.py"),
-        "score",
-        "--cases", str(FROZEN),
-        "--books", SLUG,
-        "--pages", str(PAGE),
-        "--out", str(tmp),
-    ]
-    print("  $ " + " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0 or not tmp.is_file():
-        check(
-            "p64 re-score ran",
-            False,
-            f"rc={proc.returncode}\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}",
-        )
+    report = exact_v4_regrade()
+    if not report:
         return
-    report = json.loads(tmp.read_text(encoding="utf-8"))
-    check("p64 re-score ran", True)
-    check(
-        "cost was $0",
-        float(report["run"].get("cost_usd") or 0.0) == 0.0,
-        str(report["run"].get("cost_usd")),
-    )
     rows = {r["id"]: r for r in report["cases"]}
-    for cid, limit in EXPECTED.items():
+    for cid, expected in EXPECTED.items():
         r = rows.get(cid)
         if r is None:
             check(f"{cid} present", False, "case not in the report")
@@ -198,8 +232,8 @@ def section_c() -> None:
         )
         wms = r.get("word_miss_sum")
         check(
-            f"{cid} word_miss_sum <= {limit}",
-            wms is not None and wms <= limit,
+            f"{cid} word_miss_sum == {expected}",
+            wms == expected,
             str(wms),
         )
         # LOAD-BEARING: a fix by exclusion must not pass.
@@ -256,19 +290,11 @@ def section_f() -> None:
         finally:
             d2.close()
 
+    report = exact_v4_regrade()
+    if not report:
+        return
+    rows = {r["id"]: r for r in report["cases"]}
     for cid, limit in ROUTING_EXPECTED.items():
-        page_no = int(cid.split(":p")[1].split(":")[0])
-        tmp = Path(tempfile.mkdtemp(prefix="bbox_routing_")) / "r.json"
-        cmd = [
-            sys.executable, str(PROJECT_ROOT / "tests" / "bbox_score.py"), "score",
-            "--cases", str(FROZEN), "--books", ROUTING_SLUG,
-            "--pages", str(page_no), "--out", str(tmp),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0 or not tmp.is_file():
-            check(f"{cid} re-score ran", False, f"rc={proc.returncode}")
-            continue
-        rows = {r["id"]: r for r in json.loads(tmp.read_text(encoding="utf-8"))["cases"]}
         r = rows.get(cid)
         if r is None:
             check(f"{cid} present", False, "case not in the report")
@@ -347,13 +373,13 @@ def section_d() -> None:
 # (e) the exclusion bucket must not become a hiding place
 # ---------------------------------------------------------------------------
 
-BASELINE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v4.json"
+BASELINE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v5.json"
 
 
 def section_e() -> None:
     print("\n== (e) geom_unconfident stays a rare, gated bucket ==")
     if not BASELINE.is_file():
-        check("v2 baseline present", False, f"missing {BASELINE}")
+        check("v5 baseline present", False, f"missing {BASELINE}")
         return
     o = json.loads(BASELINE.read_text(encoding="utf-8"))["overall"]
     rate = o.get("geom_unconfident_rate")

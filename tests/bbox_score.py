@@ -80,6 +80,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable, NamedTuple, Optional
 
@@ -148,7 +149,13 @@ _CROP_GEOMETRY_VERSION = 1
 # 3 = monotone within-line alignment + 1-D horizontal box coverage.
 # 4 = added word-miss-distance metric fields to grade output (verdict logic
 #     unchanged).
-_SCORE_CACHE_VERSION = 4
+# 5 = target identity comes from the query's exact Markdown span plus stable
+#     surrounding Markdown context aligned against the frozen PAGE reading.
+#     The candidate box is never allowed to choose among repeated/fuzzy truth
+#     windows. This is an instrument change, not locator progress: regrade v4's
+#     serialized boxes with ``score --regrade-report ...`` and never compare
+#     v4 -> v5 through the locator gate.
+_SCORE_CACHE_VERSION = 5
 # Bump when the cached reading's value shape changes.
 _READ_CACHE_VERSION = 1
 
@@ -787,7 +794,7 @@ def _find_contiguous(
 def _best_truth_window(
     variants: list[list[str]], words: list[str], anchor: Optional[int]
 ) -> tuple[float, int, int, int]:
-    """(score, start, length, near-tie count) for the query's true position.
+    """Legacy v4 box-anchored truth matcher, retained for report archaeology.
 
     A phrase printed twice in the crop produces two windows with identical
     scores, and an arbitrary tie-break would report a correctly-placed box on
@@ -795,7 +802,8 @@ def _best_truth_window(
     ``locate._MATCH_TIE`` of the best, the one nearest the rectangle wins —
     the same tie discipline ``locate._locate_match`` applies via ``expected_y``
     and ``_align_strip`` via ``prior_center``. ``n_near_tie`` records how
-    ambiguous the choice was so the report can surface it.
+    ambiguous the choice was so the report can surface it. Score instrument v5
+    MUST NOT call this helper; `_independent_target_window` owns target identity.
     """
     cands_fn = getattr(locate, "_window_candidates", None)
     if cands_fn is None or anchor is None:
@@ -813,6 +821,419 @@ def _best_truth_window(
     near = [c for c in candidates if c[0] >= top - locate._MATCH_TIE]
     best = min(near, key=lambda c: (abs(c[1] - anchor), c[1]))
     return best[0], best[1], best[2], len(near)
+
+
+# Target identity must not inherit the production locator's permissive ±1
+# matcher. That matcher intentionally lets two query words borrow the same
+# printed word, which is useful recall-wise for locating but invalid for an
+# answer key: a target set must contain every printed word it claims.
+_TARGET_GAP_PENALTY = 0.35
+_TARGET_CHAR_WEIGHT = 0.65
+_TARGET_TIE = 0.05
+_TARGET_MAX_WORD_DRIFT = 3
+_IDENTITY_DIGIT_TABLE = str.maketrans(
+    "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
+    "01234567890123456789",
+)
+
+
+def _identity_text(words: Iterable[str]) -> str:
+    """Concatenated target-identity text with digit shapes unified."""
+    return "".join(words).translate(_IDENTITY_DIGIT_TABLE)
+
+
+def _concat_exact_windows(
+    variants: list[list[str]], words: list[str]
+) -> set[tuple[int, int]]:
+    """Distinct spans whose concatenated folded text is exactly a variant.
+
+    Concatenation deliberately ignores whitespace tokenization. It maps a
+    Markdown token such as ``تاشد`` onto printed ``تا شد`` without dropping
+    either required word, and the reverse for a fused printed token.
+    """
+    hits: set[tuple[int, int]] = set()
+    targets = {_identity_text(v) for v in variants if v}
+    for target in targets:
+        if not target:
+            continue
+        for start in range(len(words)):
+            joined = ""
+            for end in range(start, len(words)):
+                joined += words[end].translate(_IDENTITY_DIGIT_TABLE)
+                if len(joined) > len(target):
+                    break
+                if joined == target:
+                    hits.add((start, end - start + 1))
+                    break
+    return hits
+
+
+def _boundary_substring_windows(
+    variants: list[list[str]], words: list[str]
+) -> set[tuple[int, int]]:
+    """Map literal substrings onto the minimal full printed-word span.
+
+    Frozen page readings sometimes fuse the target to text just outside its
+    Markdown span (``...پاهاشبود`` / ``بادکردهبود``). The golden metric is
+    word-granular, so a literal target that starts or ends inside a fused word
+    owns that whole printed word. Strictly-contained hits are discarded by the
+    caller so a shorter correction alternate cannot truncate the primary span.
+    """
+    if not variants or not words:
+        return set()
+    folded_words = [w.translate(_IDENTITY_DIGIT_TABLE) for w in words]
+    starts: list[int] = []
+    ends: list[int] = []
+    flat = ""
+    for word in folded_words:
+        starts.append(len(flat))
+        flat += word
+        ends.append(len(flat))
+
+    hits: set[tuple[int, int]] = set()
+    for variant in variants:
+        needle = _identity_text(variant)
+        if not needle:
+            continue
+        pos = flat.find(needle)
+        while pos >= 0:
+            stop = pos + len(needle)
+            first = next((i for i, end in enumerate(ends) if end > pos), None)
+            last = next(
+                (i for i in range(len(words) - 1, -1, -1) if starts[i] < stop),
+                None,
+            )
+            if first is not None and last is not None and last >= first:
+                hits.add((first, last - first + 1))
+            pos = flat.find(needle, pos + 1)
+    return hits
+
+
+def _maximal_target_spans(spans: set[tuple[int, int]]) -> set[tuple[int, int]]:
+    """Drop a physical target span strictly contained in another hit."""
+    return {
+        span
+        for span in spans
+        if not any(
+            other != span
+            and other[0] <= span[0]
+            and span[0] + span[1] <= other[0] + other[1]
+            for other in spans
+        )
+    }
+
+
+def _monotone_target_similarity(query: list[str], window: list[str]) -> float:
+    """One-to-one monotone fuzzy similarity for one candidate target span.
+
+    The word alignment is a small Needleman-Wunsch pass: each word may match
+    at most one word, and insertions/deletions pay a real gap cost. A character
+    score over concatenated words makes whitespace split/merge errors degrade
+    smoothly when they are not exact enough for `_concat_exact_windows`.
+    """
+    if not query or not window:
+        return 0.0
+    n, m = len(query), len(window)
+    prev = [-_TARGET_GAP_PENALTY * j for j in range(m + 1)]
+    for i, qword in enumerate(query, 1):
+        cur = [-_TARGET_GAP_PENALTY * i] + [0.0] * m
+        for j, tword in enumerate(window, 1):
+            cur[j] = max(
+                prev[j - 1]
+                + locate._wsim(
+                    qword.translate(_IDENTITY_DIGIT_TABLE),
+                    tword.translate(_IDENTITY_DIGIT_TABLE),
+                ),
+                prev[j] - _TARGET_GAP_PENALTY,
+                cur[j - 1] - _TARGET_GAP_PENALTY,
+            )
+        prev = cur
+    word_score = max(0.0, min(1.0, prev[m] / max(n, m)))
+    char_score = SequenceMatcher(
+        None, _identity_text(query), _identity_text(window), autojunk=False
+    ).ratio()
+    return (
+        _TARGET_CHAR_WEIGHT * char_score
+        + (1.0 - _TARGET_CHAR_WEIGHT) * word_score
+    )
+
+
+def _cluster_target_spans(
+    candidates: list[tuple[float, int, int]]
+) -> list[list[tuple[float, int, int]]]:
+    """Cluster overlapping near-best spans into physical target locations."""
+    clusters: list[list[tuple[float, int, int]]] = []
+    for candidate in sorted(candidates, key=lambda c: (c[1], c[1] + c[2])):
+        start = candidate[1]
+        if not clusters:
+            clusters.append([candidate])
+            continue
+        cluster_end = max(c[1] + c[2] for c in clusters[-1])
+        if start < cluster_end:
+            clusters[-1].append(candidate)
+        else:
+            clusters.append([candidate])
+    return clusters
+
+
+def _independent_target_window(
+    variants: list[list[str]],
+    words: list[str],
+    *,
+    boundary_substrings: bool = False,
+) -> tuple[str, Optional[float], int, int, int]:
+    """Resolve one target span without geometry or many-to-one matching.
+
+    Returns ``(status, score, start, length, distinct_locations)`` where status
+    is ``match``, ``ambiguous``, or ``none``. Exact split/merge matches win
+    before fuzzy scoring. Fuzzy near-ties at disjoint physical locations are
+    ambiguity, never an arbitrary first hit.
+    """
+    if not variants or not words:
+        return "none", None, -1, 0, 0
+
+    def _literal_hits(group: list[list[str]]) -> set[tuple[int, int]]:
+        hits = _concat_exact_windows(group, words)
+        if boundary_substrings:
+            hits |= _boundary_substring_windows(group, words)
+        return _maximal_target_spans(hits)
+
+    # Query.alts is not guaranteed to be a same-size spelling alternative.
+    # Diff hunks can carry appended footnote-definition text there. If the
+    # exact primary span is credibly printed, it is authoritative; allowing a
+    # longer alt to subsume it would silently grow the target onto unrelated
+    # footnote words. Alts participate only when the primary has no literal
+    # counterpart (for example ناشد -> printed تا شد).
+    literal = _literal_hits(variants[:1])
+    if not literal:
+        literal = _literal_hits(variants[1:])
+    if len(literal) == 1:
+        start, length = next(iter(literal))
+        return "match", 1.0, start, length, 1
+    if len(literal) > 1:
+        return "ambiguous", 1.0, -1, 0, len(literal)
+
+    by_span: dict[tuple[int, int], float] = {}
+    m = len(words)
+    for variant in variants:
+        n = len(variant)
+        if not n:
+            continue
+        lo = max(1, n - _TARGET_MAX_WORD_DRIFT)
+        hi = min(m, n + _TARGET_MAX_WORD_DRIFT)
+        for length in range(lo, hi + 1):
+            for start in range(0, m - length + 1):
+                score = _monotone_target_similarity(
+                    variant, words[start : start + length]
+                )
+                key = (start, length)
+                if score > by_span.get(key, -1.0):
+                    by_span[key] = score
+    if not by_span:
+        return "none", None, -1, 0, 0
+
+    candidates = [
+        (score, start, length)
+        for (start, length), score in by_span.items()
+    ]
+    candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+    top_score = candidates[0][0]
+    near = [c for c in candidates if c[0] >= top_score - _TARGET_TIE]
+    clusters = _cluster_target_spans(near)
+    if len(clusters) != 1:
+        return "ambiguous", top_score, -1, 0, len(clusters)
+
+    variant_lengths = {len(v) for v in variants if v}
+    best = min(
+        clusters[0],
+        key=lambda c: (
+            min(abs(c[2] - n) for n in variant_lengths),
+            -c[0],
+            c[1],
+            c[2],
+        ),
+    )
+    return "match", best[0], best[1], best[2], 1
+
+
+# How much exact, folded Markdown context must remain visible around a query
+# span before that context may identify the corresponding run in page truth.
+# Eight words per side is local enough not to cross unrelated paragraphs in
+# normal prose, but long enough to survive the occasional omitted/merged word.
+_TRUTH_CONTEXT_WORDS = 8
+
+
+class _MdWord(NamedTuple):
+    word: str
+    start: int
+    end: int
+
+
+def _md_words_with_spans(md: str) -> list[_MdWord]:
+    """Fold Markdown words while retaining their exact character spans.
+
+    Query.span is a character range in the replay Markdown. Keeping those
+    positions is what distinguishes the first occurrence of a repeated token
+    from a later, textually better match in the page reading.
+    """
+    out: list[_MdWord] = []
+    for match in re.finditer(r"\S+", md):
+        word = locate._fold_word(match.group(0))
+        if word:
+            out.append(_MdWord(word, match.start(), match.end()))
+    return out
+
+
+def _truth_info_empty(source: str = "query") -> dict:
+    return {
+        "t_start": -1,
+        "t_len": 0,
+        "t_set": None,
+        "n_near_tie": None,
+        "align_score": None,
+        "_score": None,
+        "truth_confident": None,
+        "target_word_count": None,
+        "truth_identity_source": source,
+        "truth_context_score": None,
+        "identity_ambiguous": False,
+    }
+
+
+def _span_context_truth_window(
+    words: list[str],
+    variants: list[list[str]],
+    page_md: Optional[str],
+    span: Optional[tuple[int, int]],
+) -> Optional[dict]:
+    """Resolve target identity without consulting the candidate box.
+
+    The exact query span identifies one run in replay Markdown. A global,
+    monotone SequenceMatcher alignment supplies stable equal-word anchors on
+    either side of that run in the frozen page reading. The target is searched
+    only inside those anchors, so a repeated exact token or a visually similar
+    wrong token elsewhere on the page cannot steal identity merely because the
+    candidate box landed there.
+
+    ``None`` means the span/context contract could not be established and the
+    caller should use the box-independent query-only fallback. A returned
+    ``span_context_absent`` result is stronger: stable bilateral anchors prove
+    that the Markdown run has no printed counterpart in the answer key.
+    """
+    if not words or not variants or page_md is None or span is None:
+        return None
+    try:
+        start_char, end_char = int(span[0]), int(span[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if end_char <= start_char:
+        return None
+
+    md_tokens = _md_words_with_spans(page_md)
+    target_indices = [
+        i
+        for i, token in enumerate(md_tokens)
+        if token.start < end_char and token.end > start_char
+    ]
+    if not target_indices:
+        # Punctuation-only and whitespace insertion hunks have no printed word
+        # identity. _grade's insertion/unmeasurable path remains authoritative.
+        return None
+    m0, m1 = min(target_indices), max(target_indices) + 1
+    md_words = [token.word for token in md_tokens]
+
+    matcher = SequenceMatcher(None, md_words, words, autojunk=False)
+    equal_map: dict[int, int] = {}
+    for tag, i0, i1, j0, _j1 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset in range(i1 - i0):
+                equal_map[i0 + offset] = j0 + offset
+
+    left_context = list(range(max(0, m0 - _TRUTH_CONTEXT_WORDS), m0))
+    right_context = list(
+        range(m1, min(len(md_words), m1 + _TRUTH_CONTEXT_WORDS))
+    )
+    left_exact = sum(i in equal_map for i in left_context)
+    right_exact = sum(i in equal_map for i in right_context)
+    available = len(left_context) + len(right_context)
+    exact = left_exact + right_exact
+    context_score = exact / available if available else 1.0
+
+    # Require real support on both available sides. This is deliberately much
+    # stricter than one lucky neighbouring word: on the frozen corpus every
+    # usable span has ample context, while the contract safely declines on an
+    # isolated/noisy fragment.
+    left_stable = not left_context or left_exact >= min(2, len(left_context))
+    right_stable = not right_context or right_exact >= min(2, len(right_context))
+    if (
+        not left_stable
+        or not right_stable
+        or exact < min(4, available)
+        or context_score < 0.5
+    ):
+        return None
+
+    left_md = max((i for i in equal_map if i < m0), default=None)
+    right_md = min((i for i in equal_map if i >= m1), default=None)
+    if left_md is None and m0 != 0:
+        return None
+    if right_md is None and m1 != len(md_words):
+        return None
+    if left_md is not None and m0 - left_md > _TRUTH_CONTEXT_WORDS + 1:
+        return None
+    if right_md is not None and right_md - m1 >= _TRUTH_CONTEXT_WORDS:
+        return None
+
+    region_start = 0 if left_md is None else equal_map[left_md] + 1
+    region_end = len(words) if right_md is None else equal_map[right_md]
+    info = _truth_info_empty("span_context")
+    info["truth_context_score"] = round(context_score, 4)
+    if region_end <= region_start:
+        # The exact surrounding words became adjacent in print: this specific
+        # Markdown run is absent. Do not search the rest of the page for a
+        # duplicate and do not let the candidate rectangle nominate one.
+        info["truth_confident"] = False
+        info["truth_identity_source"] = "span_context_absent"
+        return info
+
+    # A vast bracket means the supposedly local context did not really pin an
+    # occurrence. Decline rather than turning a whole-page fuzzy search into a
+    # context-labelled result.
+    target_md_len = m1 - m0
+    if region_end - region_start > max(12, 4 * target_md_len + 4):
+        return None
+
+    local_words = words[region_start:region_end]
+    status, score, local_start, length, n_tie = _independent_target_window(
+        variants, local_words, boundary_substrings=True
+    )
+    if status == "ambiguous":
+        info["n_near_tie"] = n_tie
+        info["align_score"] = round(score, 4) if score is not None else None
+        info["_score"] = score
+        info["truth_confident"] = False
+        info["truth_identity_source"] = "span_context_ambiguous"
+        info["identity_ambiguous"] = True
+        return info
+    if status != "match" or local_start < 0 or length <= 0:
+        return None
+    t_start = region_start + local_start
+    info.update(
+        {
+            "t_start": t_start,
+            "t_len": length,
+            "t_set": set(range(t_start, t_start + length)),
+            "n_near_tie": n_tie,
+            "align_score": round(score, 4),
+            "_score": score,
+            # Context, not lexical similarity of the known-wrong query, is the
+            # confidence signal. p13's جماته -> چمباتمه is intentionally below
+            # _MATCH_ACCEPT yet unambiguous between its exact neighbours.
+            "truth_confident": True,
+            "target_word_count": length,
+        }
+    )
+    return info
 
 
 # ---------------------------------------------------------------------------
@@ -860,28 +1281,35 @@ def _truth_window(
     """Locate the truth phrase in a reading, INDEPENDENTLY of where the box is.
 
     Factored out of `_grade` so the fabricated `no_box` rows can carry a real
-    `target_word_count` / `truth_confident` even though there is no box to
-    anchor the tie-break on (METRIC.md decision #3: scoring a box that landed
-    nowhere near the truth still requires knowing where the truth is).
+    `target_word_count` / `truth_confident` even though there is no box. The
+    `anchor` argument is retained for source compatibility but deliberately
+    ignored by score instrument v5.
 
     Returns a dict, never raises; `t_set` is None when no window was found.
     """
-    info: dict = {
-        "t_start": -1,
-        "t_len": 0,
-        "t_set": None,
-        "n_near_tie": None,
-        "align_score": None,
-        "_score": None,  # unrounded, for the caller's threshold comparison
-        "truth_confident": None,
-        "target_word_count": None,
-    }
+    info = _truth_info_empty("query")
     if not words or not variants:
         return info
-    score, t_start, t_len, n_tie = _best_truth_window(variants, words, anchor)
+    status, score, t_start, t_len, n_tie = _independent_target_window(
+        variants, words
+    )
     info["n_near_tie"] = n_tie
     info["_score"] = score
     info["align_score"] = round(score, 4) if score is not None else None
+    if status == "ambiguous":
+        # Multiple garbage windows tied below the lexical acceptance floor do
+        # not establish two credible occurrences; that is ordinary
+        # phrase-not-found and remains a locator penalty. Only multiple
+        # plausible query-only locations are a neutral identity limitation.
+        if score is None or score < locate._MATCH_ACCEPT:
+            info["truth_confident"] = False
+            return info
+        info["truth_confident"] = False
+        info["truth_identity_source"] = "query_ambiguous"
+        info["identity_ambiguous"] = True
+        return info
+    if status != "match":
+        return info
     info["t_start"], info["t_len"] = t_start, t_len
     info["truth_confident"] = bool(
         t_start >= 0 and score is not None and score >= locate._MATCH_ACCEPT
@@ -892,10 +1320,31 @@ def _truth_window(
     return info
 
 
+def _resolve_truth_window(
+    words: list[str],
+    variants: list[list[str]],
+    page_md: Optional[str] = None,
+    span: Optional[tuple[int, int]] = None,
+) -> dict:
+    """Box-independent target resolver used by score instrument v5.
+
+    Exact-span context is authoritative when available. Legacy/no-span cases
+    fall back to the query's best page window with no geometric anchor; even in
+    that fallback the box under test never participates in target identity.
+    """
+    contextual = _span_context_truth_window(words, variants, page_md, span)
+    if contextual is not None:
+        return contextual
+    return _truth_window(words, variants, None)
+
+
 def _word_miss_keys(
     reading: Optional[dict],
     variants: Optional[list[list[str]]],
     degenerate: Optional[str],
+    *,
+    page_md: Optional[str] = None,
+    span: Optional[tuple[int, int]] = None,
 ) -> dict:
     """The full new key set for a grade built OUTSIDE `_grade` (the fabricated
     `no_box` and `stale` rows), so every JSON consumer sees a uniform shape."""
@@ -906,6 +1355,8 @@ def _word_miss_keys(
         "word_miss_max": None,
         "target_word_count": None,
         "truth_confident": None,
+        "truth_identity_source": None,
+        "truth_context_score": None,
         "page_word_count": None,
         "degenerate": degenerate,
     }
@@ -913,9 +1364,11 @@ def _word_miss_keys(
         return out
     words, _line_of = _flatten(reading)
     out["page_word_count"] = len(words)
-    info = _truth_window(words, variants, None)
+    info = _resolve_truth_window(words, variants, page_md, span)
     out["target_word_count"] = info["target_word_count"]
     out["truth_confident"] = info["truth_confident"]
+    out["truth_identity_source"] = info.get("truth_identity_source")
+    out["truth_context_score"] = info.get("truth_context_score")
     return out
 
 
@@ -934,6 +1387,8 @@ def _grade(
     flat_rects: Optional[list[fitz.Rect]] = None,
     boxed_start_hint: Optional[int] = None,
     insertion: bool = False,
+    page_md: Optional[str] = None,
+    query_span: Optional[tuple[int, int]] = None,
 ) -> dict:
     """Grade one crop reading. Pure given the reading; PDF arguments are used
     only for the optional IoU."""
@@ -949,14 +1404,17 @@ def _grade(
         "align_score": None,
         "legible": legible,
         "needs_retry": False,
-        # --- word-miss distance (METRIC.md); purely additive, the verdict
-        # branches below are untouched. ---
+        # --- word-miss distance (METRIC.md). Target identity is explicitly
+        # versioned by _SCORE_CACHE_VERSION; v5 intentionally changes verdicts
+        # that v4 derived from a box-selected false target. ---
         "word_miss_distances": None,
         "word_miss_sum": None,
         "word_miss_mean": None,
         "word_miss_max": None,
         "target_word_count": None,
         "truth_confident": None,
+        "truth_identity_source": None,
+        "truth_context_score": None,
         "page_word_count": len(words),
         "degenerate": None,
     }
@@ -973,7 +1431,11 @@ def _grade(
         grade["degenerate"] = "unmeasurable"
         return grade
 
-    # Where the rectangle actually landed, first — it anchors the tie-break.
+    # Locate the rectangle's covered run, but NEVER use it to choose target
+    # identity. Before score instrument v5, b_start anchored fuzzy/repeated
+    # truth ties; a wrong box could therefore nominate the wrong occurrence as
+    # its own answer key. The exact Markdown span + stable page context now
+    # resolve the target independently above the candidate geometry.
     boxed_words = locate._norm_words(reading.get("boxed_text") or "")
     b_start = boxed_start_hint
     if b_start is None and boxed_words:
@@ -981,12 +1443,14 @@ def _grade(
             words, boxed_words, line_of, int(reading.get("boxed_line_index", -1))
         )
 
-    info = _truth_window(words, variants, b_start)
+    info = _resolve_truth_window(words, variants, page_md, query_span)
     score, t_start, t_len, n_tie = (
         info["_score"], info["t_start"], info["t_len"], info["n_near_tie"]
     )
     grade["n_near_tie"] = n_tie
     grade["align_score"] = info["align_score"]
+    grade["truth_identity_source"] = info.get("truth_identity_source")
+    grade["truth_context_score"] = info.get("truth_context_score")
 
     # --- word-miss distance, computed BEFORE any verdict branch so the
     # degenerate returns below still carry what they can. Both index sets are
@@ -1014,7 +1478,15 @@ def _grade(
         # That is the JUDGE failing, not the locator; the `b_start is None`
         # branch below tags it `judge_unusable` so it is not penalised.
 
-    if t_start < 0 or score < locate._MATCH_ACCEPT:
+    if info.get("identity_ambiguous"):
+        # An answer key that cannot distinguish two printed occurrences is a
+        # judge failure, never evidence against the locator. In particular,
+        # do not turn query-only repeated-token ambiguity into `wrong_region`.
+        grade["verdict"] = "judge_unusable"
+        grade["degenerate"] = "judge_unusable"
+        grade["note"] = "target identity is ambiguous without stable context"
+        return grade
+    if t_start < 0 or not info["truth_confident"]:
         # The phrase is not in the crop at all. When the crop is legible that
         # is a locator failure (the box is nowhere near the phrase); when it is
         # illegible we cannot tell, so it stays a judge failure.
@@ -1336,6 +1808,9 @@ def _locate_cases(
     refine: bool,
     model: str,
     warnings: list[str],
+    *,
+    offline: bool = False,
+    refine_algorithm: str = review.DEFAULT_BBOX_REFINE_ALGORITHM,
 ) -> tuple[list[dict], list[dict]]:
     """Rebuild each case's production box. Returns (live, stale).
 
@@ -1353,7 +1828,16 @@ def _locate_cases(
         ws = Workspace.load(slug)
         refiner = None
         if refine:
-            refiner = review._ScanBoxRefiner(ws, model)
+            # Normal scoring consumes only the current refinement/evidence
+            # caches. Offline means cache/evidence replay with zero API calls;
+            # legacy v3 derived boxes are reserved for explicit historical
+            # tooling and are never silently admitted here.
+            refiner = review._ScanBoxRefiner(
+                ws,
+                model,
+                algorithm=refine_algorithm,
+                offline=offline,
+            )
         review._REFINER = refiner
         by_page: dict[int, list[dict]] = {}
         for c in book_cases:
@@ -1428,6 +1912,7 @@ def _grade_case(
     page_lines: list[_Line],
     scan_lines: list,
     prefer_layer: bool = True,
+    page_md: Optional[str] = None,
 ) -> dict:
     """Grade a VLM reading for `case`, deriving the boxed run geometrically.
 
@@ -1453,6 +1938,8 @@ def _grade_case(
         flat_rects=rects or None,
         boxed_start_hint=start,
         insertion=insertion,
+        page_md=page_md,
+        query_span=(tuple(case["query"]["span"]) if case["query"].get("span") else None),
     )
     # An EMPTY claim is "no claim", not "the reader saw nothing boxed": a
     # subagent-supplied reading only ever carries line_text_full (the boxed
@@ -1752,7 +2239,15 @@ class _Judge:
                         # box, so target_word_count / truth_confident are real
                         # here — METRIC.md decision #3.
                         **_word_miss_keys(
-                            reading, _variants_for(case)[0], "no_box"
+                            reading,
+                            _variants_for(case)[0],
+                            "no_box",
+                            page_md=page_md,
+                            span=(
+                                tuple(case["query"]["span"])
+                                if case["query"].get("span")
+                                else None
+                            ),
                         ),
                     },
                     "judge": "page",
@@ -1769,7 +2264,7 @@ class _Judge:
                 continue
             grade = _grade_case(
                 reading, case, page, fitz.Rect(page.rect), page_lines, scan_lines,
-                prefer_layer,
+                prefer_layer, page_md,
             )
             grade["truth_source"] = source
             case["_result"] = {
@@ -1792,7 +2287,7 @@ class _Judge:
         )
         scan_lines = [] if probe else self.scan(n)
         return _grade_case(
-            reading, case, page, crop, page_lines, scan_lines, prefer_layer
+            reading, case, page, crop, page_lines, scan_lines, prefer_layer, page_md
         )
 
     def _store_reading(self, case: dict, key: Optional[str], reading: Optional[dict],
@@ -2134,6 +2629,153 @@ def _feature_keys(row: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _box_set_sha1(cases: Iterable[dict]) -> str:
+    """Canonical digest of case id -> serialized box geometry."""
+    payload = [
+        [case["id"], case.get("box", case.get("_box"))]
+        for case in sorted(cases, key=lambda c: c["id"])
+    ]
+    return _sha1(
+        json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    )
+
+
+def _page_md_matching_sha(ws: Workspace, n: int, expected: str) -> Optional[str]:
+    """Find the replay/current Markdown whose digest a saved report records."""
+    seen: set[str] = set()
+    for replay in ("all", "pending"):
+        try:
+            _sidecar, _issues, _hunks, text, _panel = _page_inputs(ws, n, replay)
+        except Exception:
+            continue
+        digest = _sha1(text)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        if digest == expected:
+            return text
+    return None
+
+
+def _select_saved_report_boxes(
+    args: argparse.Namespace, warnings: list[str]
+) -> tuple[list[dict], list[dict], Optional[str], Optional[str]]:
+    """Load exactly the boxes serialized in a prior score report.
+
+    This is the safe path for an instrument rebase: it never calls the
+    production locator or refinement cache, and refuses to proceed if the
+    replay Markdown no longer matches the report. Consequently a v4 -> v5
+    regrade changes only grading semantics, never the treatment geometry.
+    """
+    if args.cases or args.books or args.pages or args.sample:
+        raise ValueError(
+            "--regrade-report cannot be combined with --cases, --books, "
+            "--pages, or --sample; an instrument baseline must preserve the "
+            "source report's exact population"
+        )
+    source_path = Path(args.regrade_report)
+    source_text = source_path.read_text(encoding="utf-8")
+    source = json.loads(source_text)
+    source_rows = source.get("cases")
+    if not isinstance(source_rows, list) or not source_rows:
+        raise ValueError(f"regrade report has no cases: {source_path}")
+    source_run = source.get("run", {})
+    declared_n = source_run.get("n_cases")
+    if declared_n is not None and int(declared_n) != len(source_rows):
+        raise ValueError(
+            f"regrade report population mismatch: run.n_cases={declared_n}, "
+            f"serialized cases={len(source_rows)}"
+        )
+    source_ids = [row.get("id") for row in source_rows]
+    if len(set(source_ids)) != len(source_ids):
+        raise ValueError("regrade report contains duplicate case ids")
+
+    live: list[dict] = []
+    md_cache: dict[tuple[str, int, str], tuple[Workspace, str]] = {}
+    for row in source_rows:
+        required = ("id", "slug", "page", "md_sha1", "query", "kind")
+        missing = [key for key in required if key not in row]
+        if missing:
+            raise ValueError(
+                f"regrade report case {row.get('id', '?')} lacks "
+                + ", ".join(missing)
+            )
+        cache_key = (row["slug"], int(row["page"]), row["md_sha1"])
+        cached = md_cache.get(cache_key)
+        if cached is None:
+            ws = Workspace.load(row["slug"])
+            page_md = _page_md_matching_sha(ws, int(row["page"]), row["md_sha1"])
+            if page_md is None:
+                raise ValueError(
+                    f"cannot regrade {row['id']}: neither replay nor current "
+                    f"Markdown matches saved md_sha1={row['md_sha1'][:12]}"
+                )
+            cached = (ws, page_md)
+            md_cache[cache_key] = cached
+        ws, page_md = cached
+        query_dict = row["query"]
+        query = locate.Query(
+            query_dict.get("text") or "",
+            tuple(query_dict["span"]) if query_dict.get("span") else None,
+            tuple(query_dict.get("alts") or ()),
+        )
+        live.append(
+            {
+                "id": row["id"],
+                "slug": row["slug"],
+                "page": int(row["page"]),
+                "key": row["id"].rsplit(":", 1)[-1],
+                "md_sha1": row["md_sha1"],
+                "query": query_dict,
+                "kind": row["kind"],
+                "issue_type": row.get("issue_type", "unknown"),
+                "features": row.get("features") or {},
+                "tier": row.get("tier", "none"),
+                "_ws": ws,
+                "_box": row.get("box"),
+                "_query": query,
+                "_page_md": page_md,
+            }
+        )
+
+    source_box_sha1 = _box_set_sha1(source_rows)
+    declared_box_sha1 = source_run.get("box_sha1")
+    if declared_box_sha1 and declared_box_sha1 != source_box_sha1:
+        raise ValueError(
+            "regrade report's declared box_sha1 does not match its serialized "
+            f"boxes ({declared_box_sha1[:12]} != {source_box_sha1[:12]})"
+        )
+    loaded_box_sha1 = _box_set_sha1(live)
+    if loaded_box_sha1 != source_box_sha1:
+        raise ValueError(
+            "saved box geometry changed while loading regrade report "
+            f"({source_box_sha1[:12]} != {loaded_box_sha1[:12]})"
+        )
+    args._regrade_source = str(source_path)
+    args._regrade_source_sha1 = _sha1(source_text)
+    args._regrade_box_sha1 = source_box_sha1
+    args._report_refine = bool(source_run.get("refine"))
+    args._report_refine_algorithm = source_run.get("refine_algorithm")
+    if args._report_refine and args._report_refine_algorithm is None:
+        # Reports predating explicit algorithm provenance used the established
+        # local matcher. This labels their already-serialized treatment; the
+        # regrade still bypasses every refiner and cache.
+        args._report_refine_algorithm = review.DEFAULT_BBOX_REFINE_ALGORITHM
+    args._regrade_truth_sha1 = source_run.get("truth_sha1")
+    warnings.append(
+        f"instrument-only regrade: reused {len(live)} serialized boxes from "
+        f"{source_path}; box_sha1={source_box_sha1[:12]}"
+    )
+    return (
+        live,
+        [],
+        source.get("run", {}).get("cases_sha1"),
+        source.get("run", {}).get("cases_file"),
+    )
+
+
 def _select_and_locate(
     args: argparse.Namespace, warnings: list[str]
 ) -> tuple[list[dict], list[dict], Optional[str], Optional[str]]:
@@ -2143,6 +2785,8 @@ def _select_and_locate(
     Returns (live, stale, cases_sha1, cases_file). Raises ValueError when the
     selection is empty.
     """
+    if getattr(args, "regrade_report", None):
+        return _select_saved_report_boxes(args, warnings)
     if args.cases:
         cases_path = Path(args.cases)
         blob = json.loads(cases_path.read_text(encoding="utf-8"))
@@ -2178,17 +2822,37 @@ def _select_and_locate(
         # the locate pass first. Locating is cheap (memoized) and free.
         if "tier" in dims:
             located, stale_pre = _locate_cases(
-                cases, replay, args.refine, args.model, warnings
+                cases, replay, args.refine, args.model, warnings,
+                offline=getattr(args, "offline", False),
+                refine_algorithm=getattr(
+                    args,
+                    "refine_algorithm",
+                    review.DEFAULT_BBOX_REFINE_ALGORITHM,
+                ),
             )
             cases = _stratified_sample(located, args.sample, args.seed, dims)
             live, stale = cases, stale_pre
         else:
             cases = _stratified_sample(cases, args.sample, args.seed, dims)
             live, stale = _locate_cases(
-                cases, replay, args.refine, args.model, warnings
+                cases, replay, args.refine, args.model, warnings,
+                offline=getattr(args, "offline", False),
+                refine_algorithm=getattr(
+                    args,
+                    "refine_algorithm",
+                    review.DEFAULT_BBOX_REFINE_ALGORITHM,
+                ),
             )
     else:
-        live, stale = _locate_cases(cases, replay, args.refine, args.model, warnings)
+        live, stale = _locate_cases(
+            cases, replay, args.refine, args.model, warnings,
+            offline=getattr(args, "offline", False),
+            refine_algorithm=getattr(
+                args,
+                "refine_algorithm",
+                review.DEFAULT_BBOX_REFINE_ALGORITHM,
+            ),
+        )
 
     if stale:
         warnings.append(
@@ -2200,14 +2864,22 @@ def _select_and_locate(
 
 def cmd_score(args: argparse.Namespace) -> int:
     warnings: list[str] = []
+    if args.regrade_report:
+        if args.judge != "page":
+            print(
+                "--regrade-report requires --judge page: only frozen page "
+                "truth is box-independent and fully offline",
+                file=sys.stderr,
+            )
+            return 1
+        # Serialized boxes already include the source report's refinement.
+        # Never consult any refinement cache (legacy or current) on an
+        # instrument-only regrade.
+        args.offline = True
+        args.refine = False
     if args.judge == "cached":
         # Cache-only grading: no client is ever constructed.
         args.offline = True
-    if args.offline and args.refine:
-        # --offline promises zero network traffic; scan-box refinement is an
-        # API call, so it is switched off rather than silently violating that.
-        args.refine = False
-        warnings.append("--offline implies --no-refine (scan boxes stay unrefined)")
     try:
         live, stale, cases_sha1, cases_file = _select_and_locate(args, warnings)
     except ValueError as exc:
@@ -2351,6 +3023,8 @@ def cmd_score(args: argparse.Namespace) -> int:
             "word_miss_max": grade.get("word_miss_max"),
             "target_word_count": grade.get("target_word_count"),
             "truth_confident": grade.get("truth_confident"),
+            "truth_identity_source": grade.get("truth_identity_source"),
+            "truth_context_score": grade.get("truth_context_score"),
             "page_word_count": grade.get("page_word_count"),
             "degenerate": grade.get("degenerate"),
         }
@@ -2378,7 +3052,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                 "box": None, "acc1": False,
                 "word_miss_sum": None, "word_miss_mean": None,
                 "word_miss_max": None, "target_word_count": None,
-                "truth_confident": None, "page_word_count": None,
+                "truth_confident": None, "truth_identity_source": None,
+                "truth_context_score": None, "page_word_count": None,
                 "degenerate": None, "word_miss_effective": None,
             }
         )
@@ -2461,7 +3136,17 @@ def cmd_score(args: argparse.Namespace) -> int:
             "cost_usd": round(sum(r["cost"] for r in rows), 6),
             "crop_geometry_version": _CROP_GEOMETRY_VERSION,
             "score_cache_version": _SCORE_CACHE_VERSION,
-            "refine": bool(args.refine),
+            "refine": bool(getattr(args, "_report_refine", args.refine)),
+            "refine_algorithm": getattr(
+                args,
+                "_report_refine_algorithm",
+                args.refine_algorithm if args.refine else None,
+            ),
+            "regrade_source": getattr(args, "_regrade_source", None),
+            "regrade_source_sha1": getattr(args, "_regrade_source_sha1", None),
+            "box_sha1": (
+                getattr(args, "_regrade_box_sha1", None) or _box_set_sha1(rows)
+            ),
             "routing": routing,
             "warnings": warnings,
             "sign_convention": (
@@ -2480,6 +3165,31 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     if args.bias_audit and not args.offline:
         report["bias_audit"] = _bias_audit(live, args, guard, warnings)
+
+    if args.regrade_report:
+        # Last-line defence against accidentally mixing an instrument rebase
+        # with a locator treatment: the boxes that will be written must still
+        # be canonically identical to the source report's saved geometry, and
+        # the frozen page answer key must be unchanged too.
+        output_box_sha1 = _box_set_sha1(report["cases"])
+        if output_box_sha1 != args._regrade_box_sha1:
+            print(
+                "ERROR: regrade changed serialized box geometry "
+                f"({args._regrade_box_sha1[:12]} != {output_box_sha1[:12]})",
+                file=sys.stderr,
+            )
+            return 2
+        source_truth_sha1 = getattr(args, "_regrade_truth_sha1", None)
+        output_truth_sha1 = report["run"].get("truth_sha1")
+        if source_truth_sha1 and output_truth_sha1 != source_truth_sha1:
+            print(
+                "ERROR: regrade answer key drifted "
+                f"({source_truth_sha1[:12]} != "
+                f"{str(output_truth_sha1)[:12]}); this is not an "
+                "instrument-only regrade",
+                file=sys.stderr,
+            )
+            return 2
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3509,8 +4219,37 @@ def cmd_compare(args: argparse.Namespace) -> int:
     cand = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
 
     # COMPARABILITY IS CHECKED, NOT ASSUMED. Two reports are only comparable if
-    # they were graded against the same frozen answer key; otherwise a moved
-    # denominator or a re-read page can masquerade as a locator improvement.
+    # they used the same scoring instrument and frozen answer key; otherwise a
+    # grading change, moved denominator, or re-read page can masquerade as a
+    # locator improvement.
+    b_instrument = base["run"].get("score_cache_version")
+    c_instrument = cand["run"].get("score_cache_version")
+    if b_instrument != c_instrument:
+        if not args.allow_instrument_drift:
+            print(
+                "ERROR: these reports use DIFFERENT scoring instruments "
+                f"(baseline score_cache_version={b_instrument}, "
+                f"candidate={c_instrument}). Regrade the same saved boxes "
+                "under one instrument, or pass --allow-instrument-drift for "
+                "a diagnostic diff only.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.gate:
+            print(
+                "ERROR: --allow-instrument-drift is diagnostic only and "
+                "cannot be combined with --gate; an instrument change is not "
+                "locator progress",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            "WARNING: diagnostic comparison across scoring instruments "
+            f"{b_instrument} -> {c_instrument}; do not interpret as locator "
+            "progress",
+            file=sys.stderr,
+        )
+
     b_truth = base["run"].get("truth_sha1")
     c_truth = cand["run"].get("truth_sha1")
     if b_truth != c_truth and not args.allow_truth_drift:
@@ -3793,6 +4532,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     p_score = sub.add_parser("score", help="judge boxes and write a score report")
     p_score.add_argument("--cases", default=None)
+    p_score.add_argument(
+        "--regrade-report",
+        default=None,
+        help="instrument-only offline regrade of the exact serialized boxes "
+             "in a prior score report; bypasses locator/refinement and refuses "
+             "population filters",
+    )
     p_score.add_argument("--books", default=None)
     p_score.add_argument("--pages", default=None)
     p_score.add_argument("--replay", choices=["all", "pending"], default="all")
@@ -3804,8 +4550,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=["auto", "vlm", "deterministic", "cached", "page"],
         default="page",
         help="page (default) = grade against the frozen per-page answer key in "
-             "locate_page_read.json; fully offline, free, and immune to box "
-             "movement. cached = the superseded box-crop cache.",
+             "locate_page_read.json; that JUDGING is offline, free, and immune "
+             "to box movement, but locator refinement may still call the strip "
+             "API unless --offline is passed. cached = the superseded box-crop "
+             "cache.",
     )
     p_score.add_argument(
         "--allow-thin-denominator",
@@ -3817,9 +4565,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_score.add_argument("--batch", type=int, default=_MAX_CROPS_PER_CALL)
     p_score.add_argument("--refine", dest="refine", action="store_true", default=True)
     p_score.add_argument("--no-refine", dest="refine", action="store_false")
+    p_score.add_argument(
+        "--refine-algorithm",
+        choices=review.BBOX_REFINE_ALGORITHMS,
+        default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
+        help="derived scan-box alignment algorithm; raw strip evidence is "
+             "shared across algorithms",
+    )
     p_score.add_argument("--refresh", action="store_true", help="ignore cached reads")
     p_score.add_argument("--no-cache", action="store_true", help="neither read nor write")
-    p_score.add_argument("--offline", action="store_true", help="cache-only; no API")
+    p_score.add_argument(
+        "--offline",
+        action="store_true",
+        help="cache/raw-evidence replay only; no API, including scan refinement",
+    )
     p_score.add_argument("--bias-audit", type=int, default=0)
     p_score.add_argument(
         "--max-cost", type=float, default=2.0, help="abort mid-run above this (USD)"
@@ -3845,6 +4604,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # them; --no-refine keeps that from billing the refinement API.
     p_pages.add_argument("--refine", dest="refine", action="store_true", default=False)
     p_pages.add_argument("--no-refine", dest="refine", action="store_false")
+    p_pages.add_argument(
+        "--refine-algorithm",
+        choices=review.BBOX_REFINE_ALGORITHMS,
+        default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
+    )
     p_pages.add_argument("--model", default=MODEL_STRONG,
                          help="must match the --model `score` will use: it is "
                               "part of the page read cache key")
@@ -3885,6 +4649,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_crops.add_argument("--stratify", default="book,tier,kind")
     p_crops.add_argument("--refine", dest="refine", action="store_true", default=True)
     p_crops.add_argument("--no-refine", dest="refine", action="store_false")
+    p_crops.add_argument(
+        "--refine-algorithm",
+        choices=review.BBOX_REFINE_ALGORITHMS,
+        default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
+    )
     p_crops.add_argument("--model", default=MODEL_STRONG,
                          help="must match the --model `score` will use: it is "
                               "part of the read cache key")
@@ -3921,6 +4690,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--allow-truth-drift", action="store_true",
         help="compare reports graded against different answer keys (refused by "
              "default: the difference may be the truth, not the locator)",
+    )
+    p_cmp.add_argument(
+        "--allow-instrument-drift",
+        action="store_true",
+        help="diagnostically diff reports from different score instruments; "
+             "cannot be combined with --gate",
     )
     p_cmp.set_defaults(func=cmd_compare)
 

@@ -206,10 +206,36 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
 @click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
 @click.option("--stop", "stop_server", is_flag=True, help="Stop a running review server for this workspace.")
-@click.option("--bbox-refine/--no-bbox-refine", "bbox_refine", default=True, help="Refine scan-located finding boxes with a VLM strip reader (results cached per book; needs ANTHROPIC_API_KEY; without a key or with --no-bbox-refine, plain scan boxes are shown).")
+@click.option(
+    "--bbox-refine/--no-bbox-refine",
+    "bbox_refine",
+    default=True,
+    help="Refine scan-located finding boxes with a VLM strip reader (results "
+    "cached per book; without ANTHROPIC_API_KEY, cached evidence is replayed "
+    "and uncached boxes stay plain).",
+)
 @click.option("--bbox-refine-model", "bbox_refine_model", default=MODEL_STRONG, show_default=True, help="Model used for bbox-refinement strip reading.")
+@click.option(
+    "--bbox-refine-algorithm",
+    "bbox_refine_algorithm",
+    type=click.Choice(review.BBOX_REFINE_ALGORITHMS, case_sensitive=True),
+    default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
+    show_default=True,
+    help="Scan-refinement derivation: legacy_v1 is the control; context_anchor_v1 is the opt-in pilot.",
+)
 @click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
-def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status: bool, stop_server: bool, bbox_refine: bool, bbox_refine_model: str, is_child: bool):
+def review_cmd(
+    slug: str,
+    all_pages: bool,
+    reset: bool,
+    background: bool,
+    status: bool,
+    stop_server: bool,
+    bbox_refine: bool,
+    bbox_refine_model: str,
+    bbox_refine_algorithm: str,
+    is_child: bool,
+):
     """Launch the review workflow for workspace SLUG."""
     ws = _load_workspace(slug)
     if reset:
@@ -265,6 +291,7 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
                 budget_all=all_pages,
                 bbox_refine=bbox_refine,
                 bbox_refine_model=bbox_refine_model,
+                bbox_refine_algorithm=bbox_refine_algorithm,
             )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
@@ -290,6 +317,7 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
                 budget_all=all_pages,
                 bbox_refine=bbox_refine,
                 bbox_refine_model=bbox_refine_model,
+                bbox_refine_algorithm=bbox_refine_algorithm,
             )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -305,6 +333,7 @@ def review_cmd(slug: str, all_pages: bool, reset: bool, background: bool, status
             budget_all=all_pages,
             bbox_refine=bbox_refine,
             bbox_refine_model=bbox_refine_model,
+            bbox_refine_algorithm=bbox_refine_algorithm,
         )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")

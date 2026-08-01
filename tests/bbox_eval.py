@@ -9,13 +9,15 @@ A human scrolls once and counts misses per tier — this is how the scan tier's
 historical miss rate gets re-measured after VLM refinement.
 
 Usage:
-    ./venv/bin/python tests/bbox_eval.py <slug> [--pages N-M] [--no-refine] [--out PATH]
+    ./venv/bin/python tests/bbox_eval.py <slug> [--pages N-M] [--no-refine]
+        [--refine-algorithm legacy_v1|context_anchor_v1] [--out PATH]
 
 With refinement on (the default), review._REFINER is pointed at the book's
 existing locate_vlm.json disk cache, so cached (page, query) pairs cost
 nothing; any uncached scan boxes are refined via the API (cost is reported).
 --no-refine produces the plain-tier baseline sheet for before/after
-comparison.
+comparison.  --refine-algorithm selects either the production control or the
+opt-in context-anchor pilot; both replay the same raw strip observations.
 """
 
 from __future__ import annotations
@@ -178,6 +180,12 @@ def main() -> int:
         action="store_true",
         help="skip scan_vlm refinement (plain-tier baseline sheet)",
     )
+    ap.add_argument(
+        "--refine-algorithm",
+        choices=review.BBOX_REFINE_ALGORITHMS,
+        default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
+        help="scan-refinement derivation (default: %(default)s)",
+    )
     ap.add_argument("--out", default=None, help="output HTML path")
     args = ap.parse_args()
 
@@ -196,23 +204,28 @@ def main() -> int:
         print(f"No pages with QC findings for '{args.slug}'.")
         return 1
 
-    # Refinement wiring: same _ScanBoxRefiner review uses, same disk cache
-    # (books/<slug>/locate_vlm.json). Cached entries are free; uncached scan
-    # boxes call the API only when a key resolves (otherwise _build_boxes
-    # degrades to the plain scan boxes, exactly like the review server).
-    cache_path = ws.root / "locate_vlm.json"
+    # Refinement wiring: same _ScanBoxRefiner review uses and the same split
+    # observation/derived caches.  A second algorithm replays the raw strip
+    # readings for free; a genuinely uncached strip calls the API only when a
+    # key resolves (otherwise _build_boxes degrades to the plain scan boxes,
+    # exactly like the review server).
+    observation_cache_path = ws.root / "locate_vlm_readings.json"
 
-    def _load_cache() -> dict:
+    def _load_observations() -> dict:
         try:
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            return json.loads(observation_cache_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
-    cache_before = _load_cache()
+    observations_before = _load_observations()
     if args.no_refine:
         review._REFINER = None
     else:
-        review._REFINER = _ScanBoxRefiner(ws, MODEL_STRONG)
+        review._REFINER = _ScanBoxRefiner(
+            ws,
+            MODEL_STRONG,
+            algorithm=args.refine_algorithm,
+        )
         llm.load_env()
         if not os.environ.get("ANTHROPIC_API_KEY"):
             print(
@@ -276,10 +289,14 @@ def main() -> int:
                 {"page": n, "source": box["source"], "snippet": snippet, "kind": "issue", "box": box, "key": f"i{i}"}
             )
 
-    # Refinement cost actually incurred by this run (new cache entries).
-    cache_after = _load_cache()
-    new_keys = set(cache_after) - set(cache_before)
-    extra_cost = sum((cache_after[k] or {}).get("cost", 0.0) for k in new_keys)
+    # Refinement cost actually incurred by this run.  Derived boxes are cheap
+    # and algorithm-specific, so count only newly acquired raw observations.
+    observations_after = _load_observations()
+    new_observation_keys = set(observations_after) - set(observations_before)
+    extra_cost = sum(
+        (observations_after[k] or {}).get("cost", 0.0)
+        for k in new_observation_keys
+    )
 
     shown = rows[:MAX_ROWS]
     truncated = len(rows) - len(shown)
@@ -294,7 +311,11 @@ def main() -> int:
     finally:
         doc.close()
 
-    mode = "baseline (no refine)" if args.no_refine else "refined"
+    mode = (
+        "baseline (no refine)"
+        if args.no_refine
+        else f"refined ({args.refine_algorithm})"
+    )
     tier_summary = " · ".join(
         f'{t}: {tier_counts.get(t, 0)}' for t in TIER_ORDER if tier_counts.get(t)
     )
@@ -337,10 +358,10 @@ header p {{ margin: 0.15rem 0; font-size: 0.9rem; color: #b8b8c0; }}
             f"<p><strong>Showing the first {MAX_ROWS} of {len(rows)} rows; "
             f"{truncated} row(s) omitted (tier totals above cover all rows).</strong></p>"
         )
-    if not args.no_refine and (new_keys or extra_cost):
+    if not args.no_refine and new_observation_keys:
         parts.append(
             f"<p>Refinement API cost incurred by this run: ${extra_cost:.4f} "
-            f"({len(new_keys)} new cache entries).</p>"
+            f"({len(new_observation_keys)} new raw observations).</p>"
         )
     parts.append("</header>\n")
 
@@ -371,7 +392,7 @@ header p {{ margin: 0.15rem 0; font-size: 0.9rem; color: #b8b8c0; }}
     if not args.no_refine:
         print(
             f"refinement API cost this run: ${extra_cost:.4f} "
-            f"({len(new_keys)} new cache entries)"
+            f"({len(new_observation_keys)} new raw observations)"
         )
     return 0
 

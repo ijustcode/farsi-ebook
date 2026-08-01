@@ -144,9 +144,45 @@ def _json_for_script(obj) -> Markup:
 # of 240 boxes on the frozen sample (8 grades better, 1 worse, perfect_rate
 # 0.783 -> 0.817, p90 1.0 -> 0.0). Before the bump the same sample showed only
 # ONE box moving — the fixed geometry was real but could not reach the boxes,
-# because every refined entry was being served from the pre-fix cache. Entries
-# re-bill lazily: only pages a human actually re-reviews are re-refined, once.
-_LOCATE_VLM_CACHE_VERSION = 3
+# because every refined entry was being served from the pre-fix cache.
+#
+# v4 splits the thing that costs money (an unmarked strip transcription) from
+# the derived box.  Final v3 entries remain explicitly readable through
+# ``apply_legacy_cached`` / ``read_legacy=True`` so old geometry can still be
+# rendered and regraded, but the normal v4 path NEVER falls back to them: a new
+# alignment algorithm must not silently inherit a box encoded by the old one.
+_LOCATE_VLM_LEGACY_CACHE_VERSION = 3
+_LOCATE_VLM_CACHE_VERSION = 4
+
+# Public review-facing identities for the established control and the opt-in
+# context-anchor pilot.  Keep these sourced from locate.py so the CLI, review
+# cache, and offline scorer cannot invent mismatched spellings.
+BBOX_REFINE_ALGORITHMS = (
+    locate_mod.REFINE_ALGORITHM_LEGACY,
+    locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR,
+)
+DEFAULT_BBOX_REFINE_ALGORITHM = locate_mod.REFINE_ALGORITHM_LEGACY
+
+
+def _validate_bbox_refine_algorithm(algorithm: str) -> str:
+    if algorithm not in BBOX_REFINE_ALGORITHMS:
+        choices = ", ".join(BBOX_REFINE_ALGORITHMS)
+        raise ValueError(
+            f"unknown bbox refine algorithm {algorithm!r}; choose {choices}"
+        )
+    return algorithm
+
+
+# The observation key contains both the actual PNG digest and these provenance
+# fields.  The digest is the strongest evidence fingerprint; the explicit
+# versions make a semantically different rendering/schema miss even in the
+# unlikely event that its bytes happen to be identical.
+_LOCATE_STRIP_RENDER_VERSION = 1
+_LOCATE_STRIP_READER_SCHEMA_VERSION = 1
+_LOCATE_RENDER_ENGINE_VERSION = str(getattr(fitz, "VersionBind", "unknown"))
+_LOCATE_STRIP_PROMPT_SHA256 = hashlib.sha256(
+    llm.READ_STRIPS_SYSTEM.encode("utf-8")
+).hexdigest()
 
 
 @functools.lru_cache(maxsize=512)
@@ -202,32 +238,87 @@ def _bbox_to_box(bbox) -> Optional[dict]:
     return {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "source": "model"}
 
 
-class _ScanBoxRefiner:
-    """Upgrades "scan"-sourced boxes to VLM-verified "scan_vlm" boxes via
-    locate.refine_scan_boxes, billing each (page text, query) at most once per
-    book: every outcome — including a None failure — is cached in
-    books/<slug>/locate_vlm.json, keyed on a sha1 of (cache version, page_no,
-    sha1(page_md), query text, alts, span). page_md in the key gives the same invalidation
-    semantics as _locate_queries_cached: an Accept that rewrites the page
-    re-refines fresh boxes on the next GET. Two paths share the cache:
-    apply_cached (pure disk-cache lookup, never touches the API — the render
-    path and /boxes route use it so GET / is instant) and refine (the
-    API-calling warmer, driven by the background pipeline and bbox_eval). The
-    instance lock guards only the cache dict, its atomic file save, and the
-    in-flight key set — the API call itself runs outside it so several pages
-    refine concurrently; keys registered in-flight are skipped by other
-    callers instead of blocking (a later poll picks the results up). The
-    anthropic client is created lazily on the first strip actually sent.
+@dataclass
+class _StripObservationBatch:
+    """Result of resolving a batch of strip PNGs to paid observations.
+
+    Empty/missing model slots stay as ``[]`` in ``lines``. They are evidence
+    failures, never proof that a query is absent; derived negatives are kept
+    session-only for that reason.
     """
 
-    def __init__(self, ws: Workspace, model: str):
+    lines: list[list[str]]
+    keys: tuple[str, ...]
+    api_strips: int
+    cost: float
+
+
+class _ScanBoxRefiner:
+    """Upgrade scan boxes while keeping paid evidence independent of boxes.
+
+    ``locate_vlm_readings.json`` stores only successful, unmarked strip
+    transcriptions.  Its keys depend on the PNG evidence, model, reader prompt
+    and schema, and render version — never on a query, box, or page Markdown.
+    A derivation can therefore be replayed after an alignment change for free.
+
+    ``locate_vlm.json`` stores cheap, successful derived boxes.  Its v4 keys
+    include the model, source-PDF fingerprint, algorithm/geometry version,
+    page text and full Query contract.  A no-match is session-only: the locator
+    currently batches several queries behind one reader callback, so a globally
+    complete batch cannot prove that every individual query had valid evidence.
+    The old v3 key remains available only through an explicit legacy read mode;
+    normal refinement cannot consume it.
+
+    Empty/missing strip slots and API/schema exceptions are transient evidence
+    failures.  They are never written as negative observations or durable
+    no-match results.  They settle the current review session in memory so the
+    browser does not poll forever, while a later process can retry normally.
+    """
+
+    def __init__(
+        self,
+        ws: Workspace,
+        model: str,
+        *,
+        algorithm: str = DEFAULT_BBOX_REFINE_ALGORITHM,
+        offline: bool = False,
+        read_legacy: bool = False,
+    ):
         self.ws = ws
         self.model = model
+        self.algorithm = _validate_bbox_refine_algorithm(algorithm)
+        self.offline = offline
+        self.read_legacy = read_legacy
         self.cache_path = ws.root / "locate_vlm.json"
+        self.observation_cache_path = ws.root / "locate_vlm_readings.json"
         self.lock = threading.Lock()
+        self.observation_lock = threading.Lock()
         self._cache: Optional[dict] = None
+        self._observation_cache: Optional[dict] = None
         self._client = None
+        self._pdf_sha256: Optional[str] = None
         self._inflight: set[str] = set()
+        # Raw observations are shared by derived keys (and algorithms).  Keep
+        # a separate in-process claim per PNG evidence key so two concurrent
+        # derivations cannot both pay to read the same strip.  Waiters hold the
+        # Event even after its dict entry is removed, so every exception path
+        # can wake them without leaving a stale claim or deadlock.
+        self._observation_inflight: dict[str, threading.Event] = {}
+        self._session_failures: set[str] = set()
+        # Resolve once at setup, not on GET /: apply_cached must remain a pure
+        # in-memory/disk-cache lookup even for a large source PDF.
+        self._source_pdf_sha256()
+
+    @classmethod
+    def for_legacy_regrade(cls, ws: Workspace, model: str) -> "_ScanBoxRefiner":
+        """Offline v3 compatibility constructor for frozen-baseline tooling."""
+        return cls(
+            ws,
+            model,
+            algorithm=locate_mod.REFINE_ALGORITHM_LEGACY,
+            offline=True,
+            read_legacy=True,
+        )
 
     def _load_cache(self) -> dict:
         if self._cache is None:
@@ -245,18 +336,52 @@ class _ScanBoxRefiner:
             json.dump(self._cache, f, ensure_ascii=False)
         os.replace(tmp_path, self.cache_path)
 
+    def _load_observation_cache(self) -> dict:
+        if self._observation_cache is None:
+            try:
+                with open(self.observation_cache_path, "r", encoding="utf-8") as f:
+                    self._observation_cache = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                self._observation_cache = {}
+        return self._observation_cache
+
+    def _save_observation_cache(self) -> None:
+        tmp_path = self.observation_cache_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(self._observation_cache, f, ensure_ascii=False)
+        os.replace(tmp_path, self.observation_cache_path)
+
     def _get_client(self):
         with self.lock:
             if self._client is None:
                 self._client = llm.get_client()
             return self._client
 
+    def _source_pdf_sha256(self) -> str:
+        """Content fingerprint for the pixels/geometry behind derived boxes."""
+        if self._pdf_sha256 is not None:
+            return self._pdf_sha256
+        path = Path(getattr(self.ws, "pdf_path", self.ws.root / "source.pdf"))
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            self._pdf_sha256 = h.hexdigest()
+        except OSError:
+            # Test doubles and incomplete workspaces may not have a source PDF.
+            # Include the resolved identity so two such workspaces still do not
+            # accidentally share a derived key.
+            self._pdf_sha256 = "missing:" + str(path.resolve())
+        return self._pdf_sha256
+
     @staticmethod
-    def _key(page_no: int, page_md: str, q: Query) -> str:
+    def _legacy_key(page_no: int, page_md: str, q: Query) -> str:
+        """Exact v3 final-box key, retained only for explicit replay/regrade."""
         md_sha = hashlib.sha1(page_md.encode("utf-8")).hexdigest()
         raw = json.dumps(
             [
-                _LOCATE_VLM_CACHE_VERSION,
+                _LOCATE_VLM_LEGACY_CACHE_VERSION,
                 page_no,
                 md_sha,
                 q.text,
@@ -267,13 +392,178 @@ class _ScanBoxRefiner:
         )
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
+    def _key(self, page_no: int, page_md: str, q: Query) -> str:
+        """v4 key for a cheap derivation, never for paid evidence."""
+        md_sha = hashlib.sha1(page_md.encode("utf-8")).hexdigest()
+        raw = json.dumps(
+            [
+                _LOCATE_VLM_CACHE_VERSION,
+                self.model,
+                self.algorithm,
+                self._source_pdf_sha256(),
+                _LOCATE_STRIP_RENDER_VERSION,
+                _LOCATE_RENDER_ENGINE_VERSION,
+                _LOCATE_STRIP_READER_SCHEMA_VERSION,
+                _LOCATE_STRIP_PROMPT_SHA256,
+                page_no,
+                md_sha,
+                q.text,
+                list(q.alts),
+                list(q.span) if q.span else None,
+            ],
+            ensure_ascii=False,
+        )
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _observation_key(self, png: bytes) -> tuple[str, str]:
+        image_sha = hashlib.sha256(png).hexdigest()
+        raw = json.dumps(
+            [
+                _LOCATE_STRIP_RENDER_VERSION,
+                _LOCATE_RENDER_ENGINE_VERSION,
+                _LOCATE_STRIP_READER_SCHEMA_VERSION,
+                _LOCATE_STRIP_PROMPT_SHA256,
+                self.model,
+                image_sha,
+            ],
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest(), image_sha
+
+    @staticmethod
+    def _valid_observation_lines(lines) -> bool:
+        return (
+            isinstance(lines, list)
+            and bool(lines)
+            and all(isinstance(line, str) for line in lines)
+            and any(line.strip() for line in lines)
+        )
+
+    def _read_observations(
+        self, png_strips: list[bytes], page_no: int, *, allow_api: bool
+    ) -> _StripObservationBatch:
+        """Resolve raw strip evidence from cache, optionally filling misses.
+
+        Only valid non-empty readings are durable.  A missing model slot is
+        returned as ``[]`` to the pure locator but deliberately remains absent
+        from disk so it cannot masquerade as a genuine no-match observation.
+        """
+        keyed = [self._observation_key(png) for png in png_strips]
+        keys = tuple(k for k, _image_sha in keyed)
+        slots: list[list[str]] = [[] for _ in png_strips]
+        indices_by_key: dict[str, list[int]] = {}
+        for i, key in enumerate(keys):
+            indices_by_key.setdefault(key, []).append(i)
+
+        # An owner pays for one representative image per unique missing key.
+        # A waiter consumes the owner's eventual durable observation. Claims
+        # are made for the whole request while holding one lock, which avoids
+        # cycles when two concurrent batches overlap on more than one key.
+        owned: list[tuple[str, int, threading.Event]] = []
+        waiting: list[tuple[str, threading.Event]] = []
+        with self.observation_lock:
+            cache = self._load_observation_cache()
+            for key, indices in indices_by_key.items():
+                entry = cache.get(key)
+                lines = entry.get("lines") if isinstance(entry, dict) else None
+                if self._valid_observation_lines(lines):
+                    for i in indices:
+                        slots[i] = list(lines)
+                elif not allow_api:
+                    continue
+                elif key in self._observation_inflight:
+                    waiting.append((key, self._observation_inflight[key]))
+                else:
+                    event = threading.Event()
+                    self._observation_inflight[key] = event
+                    owned.append((key, indices[0], event))
+
+        total_cost = 0.0
+        api_strips = 0
+        owner_error: Optional[BaseException] = None
+        if owned:
+            api_strips = len(owned)
+            try:
+                fresh_lines, _usage, total_cost = llm.read_strips(
+                    self._get_client(),
+                    [png_strips[i] for _key, i, _event in owned],
+                    self.model,
+                    page_no,
+                )
+                changed = False
+                per_cost = total_cost / len(owned)
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                with self.observation_lock:
+                    cache = self._load_observation_cache()
+                    for fresh_i, (key, slot_i, _event) in enumerate(owned):
+                        lines = (
+                            fresh_lines[fresh_i]
+                            if fresh_i < len(fresh_lines)
+                            else []
+                        )
+                        if not self._valid_observation_lines(lines):
+                            continue
+                        for i in indices_by_key[key]:
+                            slots[i] = list(lines)
+                        _observation_key, image_sha = keyed[slot_i]
+                        cache[key] = {
+                            "status": "ok",
+                            "lines": list(lines),
+                            "model": self.model,
+                            "image_sha256": image_sha,
+                            "reader_prompt_sha256": _LOCATE_STRIP_PROMPT_SHA256,
+                            "reader_schema_version": _LOCATE_STRIP_READER_SCHEMA_VERSION,
+                            "render_version": _LOCATE_STRIP_RENDER_VERSION,
+                            "render_engine_version": _LOCATE_RENDER_ENGINE_VERSION,
+                            "cost": per_cost,
+                            "ts": now,
+                        }
+                        changed = True
+                    if changed:
+                        self._save_observation_cache()
+            except BaseException as exc:
+                # Do not publish an error or empty reading as evidence. The
+                # owning derivation propagates the failure; concurrent waiters
+                # wake and observe a normal cache miss, which their caller
+                # treats as a session-only transient result.
+                owner_error = exc
+            finally:
+                with self.observation_lock:
+                    for key, _slot_i, event in owned:
+                        if self._observation_inflight.get(key) is event:
+                            self._observation_inflight.pop(key, None)
+                        event.set()
+
+        # Never wait while holding observation_lock. On success this reloads
+        # the owner's durable reading; on malformed output/exception the slot
+        # remains empty and therefore cannot become a derived negative.
+        for _key, event in waiting:
+            event.wait()
+        if waiting:
+            with self.observation_lock:
+                cache = self._load_observation_cache()
+                for key, _event in waiting:
+                    entry = cache.get(key)
+                    lines = entry.get("lines") if isinstance(entry, dict) else None
+                    if self._valid_observation_lines(lines):
+                        for i in indices_by_key[key]:
+                            slots[i] = list(lines)
+
+        if owner_error is not None:
+            raise owner_error
+
+        return _StripObservationBatch(
+            lines=slots,
+            keys=keys,
+            api_strips=api_strips,
+            cost=total_cost,
+        )
+
     @staticmethod
     def _entry_box(entry: dict) -> dict:
         """The cached box, with the entry's alignment diagnostics folded back
-        in. "debug" is stored as an extra key beside "box"/"cost" (rather than
-        bumping _LOCATE_VLM_CACHE_VERSION, which would discard every existing
-        refined entry and re-bill the whole book); entries written before it
-        existed simply have none.
+        in. Both legacy v3 entries and v4 derived entries use the same public
+        box shape, so explicit legacy replay remains presentation-compatible.
         """
         box = dict(entry["box"])
         debug = entry.get("debug")
@@ -287,6 +577,63 @@ class _ScanBoxRefiner:
             i for i, b in enumerate(boxes) if b is not None and b.get("source") == "scan"
         ]
 
+    @staticmethod
+    def _entry_resolved(entry) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("status") == "ok":
+            return True
+        # v4 briefly wrote negative derivations using batch-global evidence.
+        # That cannot prove an individual query was actually read (a strip may
+        # have failed to render), so never trust those entries as resolved.
+        if entry.get("status") == "no_match":
+            return False
+        # Shape used by v1-v3: the presence of `box`, including None, meant
+        # the derivation had completed.
+        return "box" in entry
+
+    def _entry_for(
+        self,
+        cache: dict,
+        page_no: int,
+        page_md: str,
+        q: Query,
+        *,
+        legacy_only: bool = False,
+    ) -> Optional[dict]:
+        if not legacy_only:
+            entry = cache.get(self._key(page_no, page_md, q))
+            if self._entry_resolved(entry):
+                return entry
+        if legacy_only or self.read_legacy:
+            entry = cache.get(self._legacy_key(page_no, page_md, q))
+            if self._entry_resolved(entry):
+                return entry
+        return None
+
+    def _apply_cached(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+        *,
+        legacy_only: bool,
+    ) -> list[Optional[dict]]:
+        scan_idx = self._scan_indices(boxes)
+        if not scan_idx:
+            return boxes
+        out = list(boxes)
+        with self.lock:
+            cache = self._load_cache()
+            for i in scan_idx:
+                entry = self._entry_for(
+                    cache, page_no, page_md, queries[i], legacy_only=legacy_only
+                )
+                if entry and entry.get("box"):
+                    out[i] = self._entry_box(entry)
+        return out
+
     def apply_cached(
         self,
         page_no: int,
@@ -299,17 +646,26 @@ class _ScanBoxRefiner:
         a client or calls the API, so it is safe (and fast) on the render
         path; uncached entries pass through as plain scan boxes.
         """
-        scan_idx = self._scan_indices(boxes)
-        if not scan_idx:
-            return boxes
-        out = list(boxes)
-        with self.lock:
-            cache = self._load_cache()
-            for i in scan_idx:
-                entry = cache.get(self._key(page_no, page_md, queries[i]))
-                if entry and entry.get("box"):
-                    out[i] = self._entry_box(entry)
-        return out
+        return self._apply_cached(
+            page_no, page_md, queries, boxes, legacy_only=False
+        )
+
+    def apply_legacy_cached(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+    ) -> list[Optional[dict]]:
+        """Explicitly apply v3 final boxes for baseline rendering/regrading.
+
+        This never consults v4 entries and never calls the reader.  It is kept
+        separate from ``apply_cached`` so a new derivation cannot silently
+        inherit stale v3 geometry.
+        """
+        return self._apply_cached(
+            page_no, page_md, queries, boxes, legacy_only=True
+        )
 
     def pending(
         self,
@@ -320,17 +676,22 @@ class _ScanBoxRefiner:
     ) -> bool:
         """True when any scan-sourced entry in `boxes` (the raw located boxes,
         before apply_cached upgrades) has no cache entry yet — i.e. the
-        background pipeline still owes this page a refinement pass. Negative
-        cache entries count as resolved.
+        background pipeline still owes this page a refinement pass. A
+        session-only no-match/transient failure counts as settled for the
+        current server, but is deliberately retried by a later process.
         """
         scan_idx = self._scan_indices(boxes)
         if not scan_idx:
             return False
         with self.lock:
             cache = self._load_cache()
-            return any(
-                self._key(page_no, page_md, queries[i]) not in cache for i in scan_idx
-            )
+            for i in scan_idx:
+                key = self._key(page_no, page_md, queries[i])
+                if key in self._session_failures:
+                    continue
+                if self._entry_for(cache, page_no, page_md, queries[i]) is None:
+                    return True
+            return False
 
     def refine(
         self,
@@ -339,14 +700,40 @@ class _ScanBoxRefiner:
         queries: list[Query],
         boxes: list[Optional[dict]],
     ) -> list[Optional[dict]]:
-        """Return `boxes` with scan-sourced entries upgraded to their refined
-        scan_vlm box where refinement succeeded (cached or fresh); every other
-        entry — match/layout hits, Nones — passes through untouched. Called by
-        the background pipeline and tests/bbox_eval.py, never by the render
-        path. Logs one stderr line per page that actually called the API;
-        cache-only pages log nothing. Keys another thread is already refining
-        are skipped, not waited on — the caller's next cache read sees them.
+        """Refine with cached observations, filling evidence misses online."""
+        return self._refine(
+            page_no, page_md, queries, boxes, allow_api=not self.offline
+        )
+
+    def replay(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+    ) -> list[Optional[dict]]:
+        """Derive boxes using raw observation cache only; never create a client.
+
+        This is the offline interface for bbox_score and algorithm experiments.
+        Missing evidence remains a miss rather than becoming a durable negative.
         """
+        return self._refine(page_no, page_md, queries, boxes, allow_api=False)
+
+    def retry_session_failures(self) -> None:
+        """Permit explicit same-process retry of transient evidence failures."""
+        with self.lock:
+            self._session_failures.clear()
+
+    def _refine(
+        self,
+        page_no: int,
+        page_md: str,
+        queries: list[Query],
+        boxes: list[Optional[dict]],
+        *,
+        allow_api: bool,
+    ) -> list[Optional[dict]]:
+        """Shared online/replay derivation; paid reads occur only if allowed."""
         scan_idx = self._scan_indices(boxes)
         if not scan_idx:
             return boxes
@@ -355,7 +742,7 @@ class _ScanBoxRefiner:
         with self.lock:
             cache = self._load_cache()
             for i in scan_idx:
-                entry = cache.get(keys[i])
+                entry = self._entry_for(cache, page_no, page_md, queries[i])
                 if entry and entry.get("box"):
                     out[i] = self._entry_box(entry)
             # Claim only keys nobody has cached or is currently refining; the
@@ -363,7 +750,9 @@ class _ScanBoxRefiner:
             uncached = {
                 i
                 for i in scan_idx
-                if keys[i] not in cache and keys[i] not in self._inflight
+                if self._entry_for(cache, page_no, page_md, queries[i]) is None
+                and keys[i] not in self._inflight
+                and keys[i] not in self._session_failures
             }
             if not uncached:
                 return out
@@ -372,15 +761,17 @@ class _ScanBoxRefiner:
         try:
             total_cost = 0.0
             total_strips = 0
+            evidence_keys: set[str] = set()
 
             def _read(strips: list[bytes]) -> list[list[str]]:
                 nonlocal total_cost, total_strips
-                lines, _usage, cost = llm.read_strips(
-                    self._get_client(), strips, self.model, page_no
+                batch = self._read_observations(
+                    strips, page_no, allow_api=allow_api
                 )
-                total_cost += cost
-                total_strips += len(strips)
-                return lines
+                total_cost += batch.cost
+                total_strips += batch.api_strips
+                evidence_keys.update(batch.keys)
+                return batch.lines
 
             # Mask cached/in-flight positions so refine_scan_boxes only works
             # (and the VLM only reads strips for) positions we claimed. The
@@ -389,35 +780,72 @@ class _ScanBoxRefiner:
                 boxes[i] if i in uncached else None for i in range(len(boxes))
             ]
             refined = refine_scan_boxes(
-                str(self.ws.pdf_path), page_no, page_md, queries, masked, _read
+                str(self.ws.pdf_path),
+                page_no,
+                page_md,
+                queries,
+                masked,
+                _read,
+                algorithm=self.algorithm,
             )
             per_cost = total_cost / len(uncached)
+            wrote = False
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             with self.lock:
                 cache = self._load_cache()
                 for i in uncached:
                     box = refined[i] if i < len(refined) else None
-                    entry: dict = {"box": box, "cost": per_cost}
-                    # Alignment diagnostics live beside "box" as well, so a
-                    # future reader can find them without a cache-version bump.
-                    if box is not None and box.get("debug") is not None:
-                        entry["debug"] = box["debug"]
-                    cache[keys[i]] = entry
                     if box is not None:
+                        entry: dict = {
+                            "status": "ok",
+                            "box": box,
+                            "cost": per_cost,
+                            "model": self.model,
+                            "algorithm": self.algorithm,
+                            "pdf_sha256": self._source_pdf_sha256(),
+                            "derivation_version": _LOCATE_VLM_CACHE_VERSION,
+                            "render_engine_version": _LOCATE_RENDER_ENGINE_VERSION,
+                            "reader_prompt_sha256": _LOCATE_STRIP_PROMPT_SHA256,
+                            "reader_schema_version": _LOCATE_STRIP_READER_SCHEMA_VERSION,
+                            "evidence_keys": sorted(evidence_keys),
+                            "ts": now,
+                        }
+                        if box.get("debug") is not None:
+                            entry["debug"] = box["debug"]
+                        cache[keys[i]] = entry
                         out[i] = dict(box)
-                self._save_cache()
+                        wrote = True
+                        self._session_failures.discard(keys[i])
+                    else:
+                        # A batch-global complete reading cannot prove that this
+                        # particular query reached a valid strip: another query
+                        # in the batch may be the only one that rendered/read.
+                        # Keep every negative derivation session-only. Cached
+                        # raw observations make a later replay free, while a
+                        # render/schema/API failure can never harden into a
+                        # durable false no-match.
+                        self._session_failures.add(keys[i])
+                if wrote:
+                    self._save_cache()
             if total_strips:
                 print(
                     f"bbox refine p{page_no}: {total_strips} strips, ${total_cost:.4f}",
                     file=sys.stderr,
                 )
+        except Exception:
+            with self.lock:
+                self._session_failures.update(keys[i] for i in uncached)
+            raise
         finally:
             with self.lock:
                 self._inflight.difference_update(keys[i] for i in uncached)
         return out
 
 
-# Configured by run_review (None = refinement off: disabled by flag, no API
-# key, or review.py used outside the server e.g. in tests).
+# Configured by run_review. None means refinement was disabled by flag or this
+# module is being used outside server setup (for example in tests). A server
+# without an API key still installs a hard-offline refiner so cached raw
+# observations/current boxes can be replayed safely.
 _REFINER: Optional[_ScanBoxRefiner] = None
 
 
@@ -1680,8 +2108,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-note { font-size: 0.85rem; color: #8fce9f; direction: ltr; align-self: center; }
 .status-note.err { color: #f5b5b8; }
 .meta-row span.pill.refine-chip { color: #9a9ba3; border-color: #3a3b42; font-size: 0.75rem; }
-/* Live PLACEMENT chip (farsi2epub/placement.py). Deliberately small and last
-   in the action row: it is a diagnostic, not a control. */
+/* Live PLACEMENT chip (farsi2epub/placement.py). It sits on its own row below
+   the associated correction/finding card content: a diagnostic, not a control. */
 .pm-chip {
   font-size: 0.72rem; line-height: 1; direction: ltr; align-self: center;
   border: 1px solid #3a3b42; border-radius: 999px; padding: 0.22rem 0.5rem;
@@ -1691,7 +2119,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pm-chip.pm-warn { color: #f0c78a; border-color: #7a5a20; }
 .pm-chip.pm-bad  { color: #f2a0a0; border-color: #7a2020; }
 .pm-chip.pm-none { color: #7d7e86; border-color: #3a3b42; }
-.qc-issue-head .pm-chip { margin-inline-start: 0.4rem; }
+.placement-row {
+  display: flex;
+  direction: ltr;
+  justify-content: flex-end;
+  margin-top: 0.45rem;
+}
+.issue-placement-row { margin-top: 0.35rem; }
 </style>
 </head>
 <body>
@@ -1744,9 +2178,19 @@ button:disabled { opacity: 0.5; cursor: default; }
           <ul class="qc-issue-list">
             <li>
               {% if g.issue %}
-              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}><bdi class="qc-issue-type" dir="ltr">{{ g.issue.type }}</bdi><span aria-hidden="true"> &mdash; </span><span class="qc-issue-description" dir="rtl" lang="fa">{{ g.issue.description }}</span>{% if g.idx is not none and not g.hunks %}<span class="pm-chip {{ (g.issue.placement.cls if g.issue.placement else 'pm-none') }}" id="pm-{{ p.page }}-i{{ g.idx }}" title="{{ g.issue.placement.title if g.issue.placement else 'placement: not measured yet' }}">{{ g.issue.placement.label if g.issue.placement else '…' }}</span>{% endif %}</div>
+              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}><bdi class="qc-issue-type" dir="ltr">{{ g.issue.type }}</bdi><span aria-hidden="true"> &mdash; </span><span class="qc-issue-description" dir="rtl" lang="fa">{{ g.issue.description }}</span></div>
               {% if g.issue.snippet %}
               <div class="qc-snippet" dir="rtl">{{ g.issue.snippet }}</div>
+              {% endif %}
+              {% if g.idx is not none and not g.hunks %}
+              <div class="placement-row issue-placement-row">
+                <span class="pm-chip {{ (g.issue.placement.cls if g.issue.placement else 'pm-none') }}"
+                      id="pm-{{ p.page }}-i{{ g.idx }}"
+                      role="status" tabindex="0"
+                      aria-label="{{ g.issue.placement.title if g.issue.placement else 'placement: not measured yet' }}"
+                      title="{{ g.issue.placement.title if g.issue.placement else 'placement: not measured yet' }}"
+                      >{{ g.issue.placement.label if g.issue.placement else '…' }}</span>
+              </div>
               {% endif %}
               {% else %}
               <div class="qc-issue-head">{{ g.other_label }}</div>
@@ -1770,14 +2214,18 @@ button:disabled { opacity: 0.5; cursor: default; }
                 <button onclick="rejectHunk({{ p.page }}, {{ h.id }})"{% if h.edit_only %} disabled title="no suggested fix to reject"{% endif %}>Reject</button>
                 <button id="undo-{{ p.page }}-{{ h.id }}" style="display:none" onclick="undoHunk({{ p.page }}, {{ h.id }})">Undo</button>
                 <span class="status-note" id="hunk-status-{{ p.page }}-{{ h.id }}"></span>
-                <span class="pm-chip {{ (h.placement.cls if h.placement else 'pm-none') }}"
-                      id="pm-{{ p.page }}-h{{ h.id }}"
-                      title="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
-                      >{{ h.placement.label if h.placement else '…' }}</span>
               </div>
               <div class="hunk-edit" id="hunk-edit-{{ p.page }}-{{ h.id }}" style="display:none">
                 <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{% if h.edit_only %}{{ h.old }}{% else %}{{ h.new }}{% endif %}</textarea>
                 <button onclick="applyEditedHunk({{ p.page }}, {{ h.id }})">Apply my text</button>
+              </div>
+              <div class="placement-row hunk-placement-row">
+                <span class="pm-chip {{ (h.placement.cls if h.placement else 'pm-none') }}"
+                      id="pm-{{ p.page }}-h{{ h.id }}"
+                      role="status" tabindex="0"
+                      aria-label="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
+                      title="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
+                      >{{ h.placement.label if h.placement else '…' }}</span>
               </div>
             </li>
             {% endfor %}
@@ -2375,6 +2823,7 @@ function setPlacementChip(id, chip) {
   el.className = 'pm-chip ' + ((chip && chip.cls) || 'pm-none');
   el.textContent = (chip && chip.label) || '\u2014';
   el.title = (chip && chip.title) || 'placement: not measured';
+  el.setAttribute('aria-label', el.title);
 }
 
 function applyPlacementScores(page, data) {
@@ -2988,12 +3437,16 @@ def launch_review_background(
     open_browser: bool = True,
     bbox_refine: bool = True,
     bbox_refine_model: str = MODEL_STRONG,
+    bbox_refine_algorithm: str = DEFAULT_BBOX_REFINE_ALGORITHM,
     lan: bool = False,
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
     doesn't come up within a short timeout.
     """
+    bbox_refine_algorithm = _validate_bbox_refine_algorithm(
+        bbox_refine_algorithm
+    )
     existing = read_server_state(ws)
     if existing is not None:
         return existing["url"]
@@ -3007,6 +3460,7 @@ def launch_review_background(
         args.append("--all")
     args.append("--bbox-refine" if bbox_refine else "--no-bbox-refine")
     args += ["--bbox-refine-model", bbox_refine_model]
+    args += ["--bbox-refine-algorithm", bbox_refine_algorithm]
     if lan:
         args.append("--lan")
 
@@ -3033,6 +3487,36 @@ def launch_review_background(
 # ---------------------------------------------------------------------------
 
 
+def _make_review_refiner(
+    ws: Workspace,
+    model: str,
+    algorithm: str,
+) -> _ScanBoxRefiner:
+    """Create the review refiner in online or hard-offline replay mode.
+
+    Loading a missing key must not disable cached refinement: raw strip
+    observations and current derived boxes are still useful and cost-free.
+    ``offline=True`` makes the no-key guarantee structural rather than relying
+    only on the client's lazy construction.
+    """
+    llm.load_env()
+    offline = not bool(os.environ.get("ANTHROPIC_API_KEY"))
+    refiner = _ScanBoxRefiner(
+        ws,
+        model,
+        algorithm=algorithm,
+        offline=offline,
+    )
+    if offline:
+        print(
+            f"bbox refine algorithm: {algorithm} (no ANTHROPIC_API_KEY; "
+            "replaying cached strip evidence only; uncached scan boxes stay plain)"
+        )
+    else:
+        print(f"bbox refine algorithm: {algorithm}")
+    return refiner
+
+
 def run_review(
     ws: Workspace,
     port: int = DEFAULT_PORT,
@@ -3040,7 +3524,11 @@ def run_review(
     budget_all: bool = False,
     bbox_refine: bool = True,
     bbox_refine_model: str = MODEL_STRONG,
+    bbox_refine_algorithm: str = DEFAULT_BBOX_REFINE_ALGORITHM,
 ) -> None:
+    bbox_refine_algorithm = _validate_bbox_refine_algorithm(
+        bbox_refine_algorithm
+    )
     surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all)
 
     if not surfaced:
@@ -3058,16 +3546,17 @@ def run_review(
             f"despite flags (not shown): {skipped}"
         )
 
-    # Scan-box VLM refinement: on by default, but the server must stay fully
-    # usable offline — no key (or --no-bbox-refine) just means plain scan boxes.
+    # Scan-box VLM refinement: on by default, but the server stays fully
+    # usable offline. With no key it replays cached raw evidence/current boxes;
+    # only uncached strips remain as plain scan boxes.
     global _REFINER
     _REFINER = None
     if bbox_refine:
-        llm.load_env()
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            _REFINER = _ScanBoxRefiner(ws, bbox_refine_model)
-        else:
-            print("bbox refine: no ANTHROPIC_API_KEY, scan boxes will not be refined")
+        _REFINER = _make_review_refiner(
+            ws,
+            bbox_refine_model,
+            bbox_refine_algorithm,
+        )
 
     # Live placement scoring is unconditional: it is pure PyMuPDF arithmetic,
     # costs nothing, and needs no key, so it runs even on a --no-bbox-refine or

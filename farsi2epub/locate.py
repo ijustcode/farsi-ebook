@@ -103,6 +103,27 @@ _SCAN_VERTICAL_ASPECT = 3.0  # detected scan line: height/width > 3.0
 # reaching for a private name.
 BEST_WINDOW_TIE = _MATCH_TIE
 
+# Context-backed scan refinement. Correction hunks often target one wrong word,
+# which is intentionally a narrow box but a terrible search key. Use a few
+# stable Markdown words on either side to identify the occurrence, while still
+# drawing only the target. A contextual hit must beat the next DISTINCT target
+# location by the normal near-tie band; the coarse scan prior is never allowed
+# to break a genuinely ambiguous content match.
+_CONTEXT_WORDS_PER_SIDE = 3
+_CONTEXT_MIN_WORDS = 2
+_CONTEXT_WEIGHT = 0.85
+_CONTEXT_GAP_PENALTY = 0.55
+
+# Public, cache-safe identities for the scan-refinement derivation. Callers
+# must put the selected value in any DERIVED-box cache key; raw strip readings
+# are shared evidence and deliberately do not depend on it.
+REFINE_ALGORITHM_LEGACY = "legacy_v1"
+REFINE_ALGORITHM_CONTEXT_ANCHOR = "context_anchor_v1"
+_REFINE_ALGORITHMS = {
+    REFINE_ALGORITHM_LEGACY,
+    REFINE_ALGORITHM_CONTEXT_ANCHOR,
+}
+
 
 @dataclass(frozen=True)
 class Query:
@@ -127,6 +148,21 @@ class _ScanLine:
     rect: fitz.Rect
     words: list[fitz.Rect]
     weight: float = 0.0
+
+
+@dataclass(frozen=True)
+class _ContextVariant:
+    """A content anchor plus the narrow word range it is allowed to box.
+
+    ``words`` is ``left context + target variant + right context``. The target
+    indices are half-open in that sequence. Keeping the two roles separate is
+    load-bearing: adding context must improve occurrence identity without
+    widening a one-word correction into a line-sized overlay.
+    """
+
+    words: tuple[str, ...]
+    target_lo: int
+    target_hi: int
 
 
 # ---------------------------------------------------------------------------
@@ -1463,6 +1499,343 @@ def _render_strip(page: fitz.Page, rect: fitz.Rect) -> Optional[bytes]:
     return pix.tobytes("png")
 
 
+def _context_variants(md: str, query: Query) -> list[_ContextVariant]:
+    """Build rich occurrence anchors for an exact-span query.
+
+    Review hunks carry an exact Markdown span even when their visible target is
+    only one erroneous word. Pull stable folded words from outside that span;
+    neither side is allowed to overlap the target token. Queries without an
+    exact span (most standalone findings) deliberately stay on the legacy local
+    matcher because a fuzzy span is not a safe source of identity context.
+    """
+    if query.span is None:
+        return []
+    pos, end = query.span
+    if not (0 <= pos <= end <= len(md)):
+        return []
+
+    tokens: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"\S+", md):
+        word = _fold_word(match.group(0))
+        if word:
+            tokens.append((match.start(), match.end(), word))
+    before = [word for a, b, word in tokens if b <= pos][
+        -_CONTEXT_WORDS_PER_SIDE:
+    ]
+    after = [word for a, _b, word in tokens if a >= end][
+        :_CONTEXT_WORDS_PER_SIDE
+    ]
+    if len(before) + len(after) < _CONTEXT_MIN_WORDS:
+        return []
+
+    target_variants = [_norm_words(query.text)]
+    target_variants.extend(_norm_words(alt) for alt in query.alts)
+    out: list[_ContextVariant] = []
+    seen: set[tuple[tuple[str, ...], int, int]] = set()
+    for target in target_variants:
+        if not target:
+            continue
+        words = tuple([*before, *target, *after])
+        key = (words, len(before), len(before) + len(target))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(_ContextVariant(*key))
+    return out
+
+
+def _monotone_word_map(query: tuple[str, ...], reading: list[str]) -> list[Optional[int]]:
+    """Globally align two short word sequences, one-to-one and monotonically.
+
+    The legacy window score lets adjacent query words reuse the same reader
+    token. That is useful fuzz for old text layers but unsafe for occurrence
+    identity. This Needleman-Wunsch-sized helper consumes every token at most
+    once and returns, per query word, its reader index or ``None``.
+    """
+    n, m = len(query), len(reading)
+    neg_inf = float("-inf")
+    score = [[neg_inf] * (m + 1) for _ in range(n + 1)]
+    back: list[list[Optional[str]]] = [[None] * (m + 1) for _ in range(n + 1)]
+    score[0][0] = 0.0
+    for i in range(1, n + 1):
+        score[i][0] = score[i - 1][0] - _CONTEXT_GAP_PENALTY
+        back[i][0] = "up"
+    for j in range(1, m + 1):
+        score[0][j] = score[0][j - 1] - _CONTEXT_GAP_PENALTY
+        back[0][j] = "left"
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            choices = (
+                (score[i - 1][j - 1] + _wsim(query[i - 1], reading[j - 1]), "diag"),
+                (score[i - 1][j] - _CONTEXT_GAP_PENALTY, "up"),
+                (score[i][j - 1] - _CONTEXT_GAP_PENALTY, "left"),
+            )
+            # Tuple order makes a diagonal win an exact tie, preserving the
+            # narrowest, most direct correspondence.
+            best_score = max(choice[0] for choice in choices)
+            best_move = next(move for value, move in choices if value == best_score)
+            score[i][j] = best_score
+            back[i][j] = best_move
+
+    mapping: list[Optional[int]] = [None] * n
+    i, j = n, m
+    while i or j:
+        move = back[i][j]
+        if move == "diag":
+            mapping[i - 1] = j - 1
+            i, j = i - 1, j - 1
+        elif move == "up":
+            i -= 1
+        elif move == "left":
+            j -= 1
+        else:  # only reachable for an empty/empty input
+            break
+    return mapping
+
+
+def _reader_target_rects(
+    target_indices: tuple[int, ...],
+    vwords: list[list[str]],
+    flat: list[tuple[int, int, str]],
+    strip_lines: list[_ScanLine],
+) -> Optional[list[fitz.Rect]]:
+    """Map selected flat reader-word indices onto detected scan geometry."""
+    if not target_indices:
+        return None
+    counts_agree = len(vwords) == len(strip_lines)
+    if not counts_agree:
+        # Preserve _align_strip's established fallback: character position in
+        # the reader maps onto cumulative detected ink width across the strip.
+        lo, hi = min(target_indices), max(target_indices)
+        total_chars = sum(len(word) for _j, _i, word in flat)
+        if total_chars <= 0:
+            return None
+        c0 = sum(len(word) for _j, _i, word in flat[:lo])
+        c1 = sum(len(word) for _j, _i, word in flat[: hi + 1])
+        u0, u1 = c0 / total_chars, c1 / total_chars
+        rects_ro = [
+            (line_idx, rect)
+            for line_idx, line in enumerate(strip_lines)
+            for rect in line.words
+        ]
+        total_width = sum(rect.width for _line_idx, rect in rects_ro)
+        if not rects_ro or total_width <= 0:
+            return None
+        selected: list[tuple[int, fitz.Rect]] = []
+        cumulative = 0.0
+        for line_idx, rect in rects_ro:
+            w0 = cumulative / total_width
+            w1 = (cumulative + rect.width) / total_width
+            if w1 > u0 and w0 < u1:
+                selected.append((line_idx, rect))
+            cumulative += rect.width
+        if not selected:
+            idx = min(int(u0 * len(rects_ro)), len(rects_ro) - 1)
+            selected = [rects_ro[idx]]
+        by_line: dict[int, list[fitz.Rect]] = {}
+        for line_idx, rect in selected:
+            by_line.setdefault(line_idx, []).append(rect)
+        return [_union_rects(by_line[i]) for i in sorted(by_line)]
+
+    by_vlm_line: dict[int, list[int]] = {}
+    for flat_idx in target_indices:
+        if 0 <= flat_idx < len(flat):
+            line_idx, word_idx, _word = flat[flat_idx]
+            by_vlm_line.setdefault(line_idx, []).append(word_idx)
+    rects: list[fitz.Rect] = []
+    for line_idx, indices in sorted(by_vlm_line.items()):
+        line = strip_lines[line_idx]
+        words = vwords[line_idx]
+        if line.words and len(words) == len(line.words):
+            rects.append(_union_rects([line.words[i] for i in indices]))
+            continue
+        total = sum(len(word) for word in words)
+        if total <= 0:
+            continue
+        i0, i1 = min(indices), max(indices)
+        c0 = sum(len(word) for word in words[:i0])
+        c1 = sum(len(word) for word in words[: i1 + 1])
+        rects.append(_scan_line_extent(line, c0 / total, c1 / total))
+    return rects or None
+
+
+def _align_context_strip(
+    variants: list[_ContextVariant],
+    vlm_lines: list[str],
+    strip_lines: list[_ScanLine],
+) -> tuple[str, Optional[tuple[list[fitz.Rect], dict]]]:
+    """Locate a narrow target through its stable neighbouring words.
+
+    Returns ``("match", result)``, ``("no_match", None)``, or
+    ``("ambiguous", None)``. Ambiguity is evaluated over distinct target-word
+    locations after overlapping window-length variants have been collapsed.
+    The caller may widen and retry, but must never let the proportional prior
+    choose between indistinguishable content occurrences.
+    """
+    vwords = [_norm_words(text) for text in vlm_lines]
+    flat: list[tuple[int, int, str]] = []
+    for line_idx, words in enumerate(vwords):
+        for word_idx, word in enumerate(words):
+            flat.append((line_idx, word_idx, word))
+    reader = [word for _line_idx, _word_idx, word in flat]
+    if not reader or not variants:
+        return "no_match", None
+
+    # (score, context_score, target_score, target_lo, target_hi, target_indices)
+    candidates: list[tuple[float, float, float, int, int, tuple[int, ...]]] = []
+    for variant in variants:
+        n = len(variant.words)
+        context_indices = [
+            i for i in range(n) if not (variant.target_lo <= i < variant.target_hi)
+        ]
+        if len(context_indices) < _CONTEXT_MIN_WORDS:
+            continue
+        for length in range(max(1, n - 2), n + 3):
+            if length > len(reader):
+                continue
+            for start in range(0, len(reader) - length + 1):
+                window = reader[start : start + length]
+                mapping = _monotone_word_map(variant.words, window)
+                context_scores = [
+                    _wsim(variant.words[i], window[mapping[i]])
+                    if mapping[i] is not None
+                    else 0.0
+                    for i in context_indices
+                ]
+                context_score = sum(context_scores) / len(context_scores)
+                if context_score < _REFINE_ACCEPT:
+                    continue
+                target_q = list(range(variant.target_lo, variant.target_hi))
+                mapped_target = [
+                    start + mapping[i] for i in target_q if mapping[i] is not None
+                ]
+                if not mapped_target:
+                    continue
+
+                # Stable neighbours define the slot even if the wrong target
+                # changed token count. Include reader words between the nearest
+                # before/after anchors, but cap a pathological alignment.
+                mapped_before = [
+                    start + mapping[i]
+                    for i in range(variant.target_lo)
+                    if mapping[i] is not None
+                ]
+                mapped_after = [
+                    start + mapping[i]
+                    for i in range(variant.target_hi, n)
+                    if mapping[i] is not None
+                ]
+                target_lo, target_hi = min(mapped_target), max(mapped_target)
+                if mapped_before and mapped_after:
+                    slot_lo = max(mapped_before) + 1
+                    slot_hi = min(mapped_after) - 1
+                    if (
+                        slot_lo <= slot_hi
+                        and slot_hi - slot_lo + 1
+                        <= max(1, variant.target_hi - variant.target_lo) + 2
+                    ):
+                        target_lo, target_hi = slot_lo, slot_hi
+                target_indices = tuple(range(target_lo, target_hi + 1))
+                target_scores = [
+                    _wsim(variant.words[i], window[mapping[i]])
+                    if mapping[i] is not None
+                    else 0.0
+                    for i in target_q
+                ]
+                target_score = sum(target_scores) / len(target_scores)
+                score = (
+                    _CONTEXT_WEIGHT * context_score
+                    + (1.0 - _CONTEXT_WEIGHT) * target_score
+                    - _DRIFT_PENALTY * abs(length - n)
+                )
+                candidates.append(
+                    (
+                        score,
+                        context_score,
+                        target_score,
+                        target_lo,
+                        target_hi,
+                        target_indices,
+                    )
+                )
+    if not candidates:
+        return "no_match", None
+
+    candidates.sort(key=lambda c: (-c[0], -c[1], -c[2], c[3], c[4]))
+    # Collapse candidates whose TARGET intervals overlap. Different window
+    # lengths and old/corrected variants at one occurrence are one location.
+    clusters: list[dict] = []
+    for candidate in candidates:
+        _score, _ctx, _target, lo, hi, _indices = candidate
+        cluster = next(
+            (c for c in clusters if lo <= c["hi"] and hi >= c["lo"]), None
+        )
+        if cluster is None:
+            clusters.append({"lo": lo, "hi": hi, "best": candidate})
+        else:
+            cluster["lo"] = min(cluster["lo"], lo)
+            cluster["hi"] = max(cluster["hi"], hi)
+            if candidate[0] > cluster["best"][0]:
+                cluster["best"] = candidate
+    clusters.sort(key=lambda c: -c["best"][0])
+    top = clusters[0]["best"]
+    if top[0] < _REFINE_ACCEPT:
+        return "no_match", None
+    second_score = clusters[1]["best"][0] if len(clusters) > 1 else None
+    if second_score is not None and top[0] - second_score <= _MATCH_TIE:
+        return "ambiguous", None
+
+    rects = _reader_target_rects(top[5], vwords, flat, strip_lines)
+    if not rects:
+        return "no_match", None
+    meta = {
+        "score": float(top[0]),
+        "counts_agree": len(vlm_lines) == len(strip_lines),
+        "n_near_tie": sum(
+            1 for cluster in clusters if cluster["best"][0] >= top[0] - _MATCH_TIE
+        ),
+        "vlm_lines": len(vlm_lines),
+        "strip_lines": len(strip_lines),
+        "context": True,
+        "context_score": float(top[1]),
+        "target_score": float(top[2]),
+        "n_locations": len(clusters),
+        "location_margin": (
+            None if second_score is None else float(top[0] - second_score)
+        ),
+    }
+    return "match", (rects, meta)
+
+
+def _align_refine_strip(
+    contextual: list[_ContextVariant],
+    legacy_variants: list[list[str]],
+    vlm_lines: list[str],
+    strip_lines: list[_ScanLine],
+    prior_center: Optional[fitz.Point],
+) -> Optional[tuple[list[fitz.Rect], dict]]:
+    """Select the strict contextual path or the proven legacy control.
+
+    A genuine context ambiguity is terminal: consulting the proportional prior
+    would merely turn an unknown occurrence into a confident-looking wrong box.
+    A context *no-match* is different. For an informative target of at least
+    three words, the old local content matcher already has enough identity to be
+    useful and remains the fallback. One- and two-word targets stay behind the
+    strict context gate because they dominate the observed false-positive tail.
+    Queries with no safe exact-span context retain legacy behaviour unchanged.
+    """
+    if contextual:
+        status, aligned = _align_context_strip(contextual, vlm_lines, strip_lines)
+        if status == "match":
+            return aligned
+        if status == "ambiguous":
+            return None
+        informative = max((len(words) for words in legacy_variants), default=0) >= 3
+        if not informative:
+            return None
+    return _align_strip(legacy_variants, vlm_lines, strip_lines, prior_center)
+
+
 def _window_candidates(
     variants: list[list[str]], flat_words: list[str]
 ) -> list[tuple[float, int, int]]:
@@ -1654,6 +2027,8 @@ def refine_scan_boxes(
     queries: list[Query],
     boxes: list[Optional[dict]],
     read_strips: Callable[[list[bytes]], list[list[str]]],
+    *,
+    algorithm: str = REFINE_ALGORITHM_LEGACY,
 ) -> list[Optional[dict]]:
     """Refine Tier C boxes using a VLM as a local transcription oracle.
 
@@ -1661,16 +2036,27 @@ def refine_scan_boxes(
     strip crop of the initially-hit detected line(s) +-1, have `read_strips`
     (caller-injected — locate.py never talks to an LLM) transcribe every
     unique strip in ONE batched call, then deterministically re-align the
-    query (and any Query.alts) inside the reading and snap it onto the
-    detected word rectangles: line identification becomes exact, within-line
-    placement a word-index lookup. Failures widen to +-2 lines for one more
-    batched call. Returns per query a box with source "scan_vlm", an ordered
-    per-line ``segments`` list, the segments' union as the legacy envelope, and
-    a ``debug`` dict of alignment diagnostics (the _align_strip meta plus the
-    ``radius`` of the pass that succeeded — diagnostics only, never sent to the
-    browser); or None (non-scan position, or refinement failed — the caller keeps the
-    plain scan box).
+    query inside the reading and snap it onto the detected word rectangles.
+    ``algorithm`` defaults to ``legacy_v1``, the established local matcher.
+    The opt-in ``context_anchor_v1`` pilot makes exact-span queries identify
+    their occurrence with stable neighbouring Markdown words while boxing only
+    the query/alternate target. Pilot ambiguity is rejected; a context
+    no-match may use the legacy matcher only for a target of at least three
+    words. Both modes keep the same single caller-injected reader callback and
+    widen failures to +-2 lines for one more batched call.
+
+    Returns per query a box with source "scan_vlm", an ordered per-line
+    ``segments`` list, the segments' union as the legacy envelope, and a
+    ``debug`` dict of alignment diagnostics (including the ``radius`` of the
+    successful pass — diagnostics only, never sent to the browser); or None
+    (non-scan position, ambiguity, or refinement failure — the caller keeps
+    the plain scan box).
     """
+    if algorithm not in _REFINE_ALGORITHMS:
+        choices = ", ".join(sorted(_REFINE_ALGORITHMS))
+        raise ValueError(f"unknown refine algorithm {algorithm!r}; choose {choices}")
+    use_context_anchor = algorithm == REFINE_ALGORITHM_CONTEXT_ANCHOR
+
     results: list[Optional[dict]] = [None] * len(queries)
     todo = [
         i
@@ -1691,6 +2077,7 @@ def refine_scan_boxes(
         ranges: dict[int, tuple[int, int]] = {}  # hit-line index range
         priors: dict[int, fitz.Point] = {}  # original placement center
         variants: dict[int, list[list[str]]] = {}  # normalized query + alts
+        context_variants: dict[int, list[_ContextVariant]] = {}
         for i in todo:
             span = _resolve_span(page_md, queries[i])
             hits = _scan_hits(page_md, span, lines) if span else []
@@ -1705,6 +2092,14 @@ def refine_scan_boxes(
             qv = [_norm_words(queries[i].text)]
             qv.extend(_norm_words(alt) for alt in queries[i].alts)
             variants[i] = [v for v in qv if v]
+            # Only Query.span (not the fuzzy resolved span above) may provide
+            # identity context. Review hunks carry that exact span; standalone
+            # findings remain on the proven legacy matcher.
+            context_variants[i] = (
+                _context_variants(page_md, queries[i])
+                if use_context_anchor
+                else []
+            )
 
         pending = [i for i in ranges if variants.get(i)]
         for radius in (1, 2):  # first pass +-1 line; failures retry once at +-2
@@ -1737,8 +2132,12 @@ def refine_scan_boxes(
                 aligned = None
                 if reading:
                     lo, hi = strip_range[si]
-                    aligned = _align_strip(
-                        variants[i], reading, lines[lo : hi + 1], priors[i]
+                    aligned = _align_refine_strip(
+                        context_variants.get(i) or [],
+                        variants[i],
+                        reading,
+                        lines[lo : hi + 1],
+                        priors[i],
                     )
                 if not aligned or not aligned[0]:
                     failed.append(i)
