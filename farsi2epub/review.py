@@ -31,10 +31,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import fitz
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import llm, qc
+from . import llm, placement, qc
+from . import locate as locate_mod
 from .config import MODEL_STRONG
 from .locate import Query, locate_queries, refine_scan_boxes
 from .workspace import PROJECT_ROOT, Workspace
@@ -133,7 +135,18 @@ def _json_for_script(obj) -> Markup:
 # model bbox fallback)
 # ---------------------------------------------------------------------------
 
-_LOCATE_VLM_CACHE_VERSION = 2  # v2 preserves ordered per-line segments
+# v2 preserves ordered per-line segments.
+# v3: locate._split_tall_runs changed SCAN LINE GEOMETRY (two printed lines
+# whose ascenders touch used to come back as one fused row run). A refined box
+# is aligned onto those line rects, so entries written before the split encode
+# the pre-fix geometry. The key covers (page_no, page_md, query) but NOT the
+# geometry, so nothing else would invalidate them. MEASURED: bumping moved 45
+# of 240 boxes on the frozen sample (8 grades better, 1 worse, perfect_rate
+# 0.783 -> 0.817, p90 1.0 -> 0.0). Before the bump the same sample showed only
+# ONE box moving — the fixed geometry was real but could not reach the boxes,
+# because every refined entry was being served from the pre-fix cache. Entries
+# re-bill lazily: only pages a human actually re-reviews are re-refined, once.
+_LOCATE_VLM_CACHE_VERSION = 3
 
 
 @functools.lru_cache(maxsize=512)
@@ -408,6 +421,189 @@ class _ScanBoxRefiner:
 _REFINER: Optional[_ScanBoxRefiner] = None
 
 
+# ---------------------------------------------------------------------------
+# live placement scoring (farsi2epub/placement.py on the review hot path)
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=32)
+def _page_geometry_cached(
+    pdf_path: str, page_no: int, page_md: str
+) -> tuple[list, list, bool]:
+    """(text-layer word lines, detected ink lines, prefer_layer) for one page.
+
+    `locate._scan_page_lines` RASTERIZES, so this is the expensive half of
+    scoring and is memoized per page. Small maxsize on purpose: each entry
+    holds a page's worth of rectangles and the reviewer only ever works through
+    a handful of pages at a time.
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[page_no - 1]
+        prefer_layer = placement.layer_geometry_usable(page)
+        page_lines = (
+            placement.page_reader_lines(page, page_md)[0] if prefer_layer else []
+        )
+        scan_lines = locate_mod._scan_page_lines(page)
+        return page_lines, scan_lines, prefer_layer
+    finally:
+        doc.close()
+
+
+def _score_key(page_no: int, page_md: str, query: Query, box: Optional[dict]) -> str:
+    """Cache key for one scored box. Includes the box GEOMETRY, so a refined
+    box that moved can never keep the previous box's score."""
+    geom = (
+        None
+        if box is None
+        else [
+            round(box.get(k, 0.0), 6) for k in ("x0", "y0", "x1", "y1")
+        ] + [box.get("source"), [
+            [round(s.get(k, 0.0), 6) for k in ("x0", "y0", "x1", "y1")]
+            for s in (box.get("segments") or [])
+            if isinstance(s, dict)
+        ]]
+    )
+    payload = json.dumps(
+        [page_no, hashlib.sha1(page_md.encode("utf-8")).hexdigest(),
+         query.text, list(query.span or ()), list(query.alts), geom],
+        ensure_ascii=False, sort_keys=True,
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+class _Pending:
+    """Sentinel: this box has no score YET (the background pipeline owes it),
+    as opposed to "was scored and could not be measured" — the UI shows a
+    placeholder for the first and a settled grey dash for the second."""
+
+    __slots__ = ()
+
+
+_PENDING = _Pending()
+
+
+class _PlacementScorer:
+    """Per-book memo of live placement scores, one entry per (page, page text,
+    query, box geometry).
+
+    Two entry points with deliberately different costs, mirroring
+    `_ScanBoxRefiner`'s discipline:
+
+    * `cached` — pure dict lookup, never rasterizes. The render path (`GET /`)
+      uses only this, so serving a page can never wait on scoring.
+    * `compute` — does the work, memoizing the page geometry. Driven by the
+      background pipeline and by `GET /boxes/<n>`, which the browser already
+      polls; scores arrive with the same swap that delivers refined boxes.
+
+    Everything here is PyMuPDF plus arithmetic: no API call, no key needed.
+    """
+
+    def __init__(self, ws: Workspace):
+        self.ws = ws
+        self.lock = threading.Lock()
+        self._scores: dict[str, Optional[placement.PlacementScore]] = {}
+
+    def cached(
+        self, n: int, page_md: str, queries: list[Query],
+        located: list[Optional[dict]],
+    ) -> list[Optional[placement.PlacementScore]]:
+        with self.lock:
+            return [
+                self._scores.get(_score_key(n, page_md, q, b), _PENDING)
+                for q, b in zip(queries, located)
+            ]
+
+    def pending(
+        self, n: int, page_md: str, queries: list[Query],
+        located: list[Optional[dict]],
+    ) -> bool:
+        with self.lock:
+            return any(
+                b is not None
+                and _score_key(n, page_md, q, b) not in self._scores
+                for q, b in zip(queries, located)
+            )
+
+    def compute(
+        self, n: int, page_md: str, queries: list[Query],
+        located: list[Optional[dict]],
+    ) -> list[Optional[placement.PlacementScore]]:
+        """Score every box, filling the memo. Degrades silently to None."""
+        keys = [_score_key(n, page_md, q, b) for q, b in zip(queries, located)]
+        with self.lock:
+            todo = [
+                i for i, (k, b) in enumerate(zip(keys, located))
+                if b is not None and k not in self._scores
+            ]
+        if todo:
+            try:
+                page_lines, scan_lines, prefer_layer = _page_geometry_cached(
+                    str(self.ws.pdf_path), n, page_md
+                )
+                doc = fitz.open(str(self.ws.pdf_path))
+                try:
+                    page = doc[n - 1]
+                    fresh = {
+                        keys[i]: placement.score_box(
+                            page, located[i], page_md, queries[i],
+                            page_lines=page_lines, scan_lines=scan_lines,
+                            prefer_layer=prefer_layer,
+                        )
+                        for i in todo
+                    }
+                finally:
+                    doc.close()
+            except Exception:
+                fresh = {keys[i]: None for i in todo}
+            with self.lock:
+                self._scores.update(fresh)
+        with self.lock:
+            return [self._scores.get(k) for k in keys]
+
+
+_SCORER: Optional[_PlacementScorer] = None
+
+
+def _placement_chip(ps: Optional[placement.PlacementScore]) -> Optional[dict]:
+    """Template-facing chip for one placement score, or None for no chip.
+
+    Deliberately NOT called accuracy or confidence: the reference is the page's
+    own Markdown, so this says "the box is where the Markdown says this phrase
+    is" and says nothing about whether the Markdown is right (placement.py).
+    """
+    unverified = (
+        "placement could not be verified here — the page's word geometry "
+        "could not be aligned to a reference reading of the page"
+    )
+    if ps is None:
+        return {"label": "—", "cls": "pm-none", "value": None,
+                "title": "placement: " + unverified}
+    if not ps.confident:
+        return {"label": "—", "cls": "pm-none", "value": None,
+                "title": "placement: " + unverified}
+    cls = "pm-good" if ps.score == 0 else ("pm-warn" if ps.score <= 3 else "pm-bad")
+    what = (
+        "word distance from the box to the nearest word it should have "
+        "covered; 0 means every flagged word is inside the box"
+    )
+    lead = "on target" if ps.score == 0 else f"off by {ps.score}"
+    return {
+        "label": f"placement {ps.score}",
+        "cls": cls,
+        "value": ps.score,
+        "title": (
+            f"placement {ps.score} — {lead}. {what}. "
+            f"{ps.target_words} target word(s), {ps.covered_words} covered, "
+            f"geometry from {ps.source}. Reference: "
+            + ("the page's own printed text layer"
+               if ps.reference == "text_layer" else "this page's Markdown")
+            + ". This checks PLACEMENT only — it cannot tell you whether the "
+            "transcription itself is right."
+        ),
+    }
+
+
 def _box_specs(
     issues: list[dict],
     hunks: list[dict],
@@ -540,21 +736,40 @@ def _ripped_segment_path(segment: dict, index: int, count: int, key: str) -> str
 def _attach_boxes(
     specs: list[tuple[str, Query, Optional[list], Optional[dict], Optional[dict]]],
     located: list[Optional[dict]],
+    scores: Optional[list] = None,
 ) -> list[dict]:
     """Set "box" on each spec's hunk/issue from its located box (falling back
     to the model-estimated sidecar bbox) and return the template-facing box
     list (percent values). Shared by _build_boxes and the /boxes route.
+
+    `scores` are the parallel live placement scores (None where unscored); each
+    hunk/issue also gets a "placement" chip dict so the left column can render
+    the diagnostic next to its Approve/Edit/Reject controls.
     """
     boxes: list[dict] = []
-    for (key, _query, fallback, hunk, issue), loc in zip(specs, located):
+    if scores is None:
+        scores = [None] * len(specs)
+    for (key, _query, fallback, hunk, issue), loc, score in zip(specs, located, scores):
+        # A placement score is only meaningful for a box the LOCATOR produced;
+        # the model-bbox fallback below is an estimate in a different space, and
+        # a correction with no box at all has nothing to measure — both settle
+        # immediately on the grey dash rather than waiting forever on "…".
+        if not loc:
+            chip = _placement_chip(None)
+        elif score is _PENDING:
+            chip = None
+        else:
+            chip = _placement_chip(score)
         if loc:
             box = loc
         else:
             box = _bbox_to_box(fallback)
         if hunk is not None:
             hunk["box"] = box
+            hunk["placement"] = chip
         if issue is not None:
             issue["box"] = box
+            issue["placement"] = chip
         if box is None:
             continue
         view_box = {
@@ -636,7 +851,18 @@ def _build_boxes(
         except Exception:
             pass
 
-    return _attach_boxes(specs, located)
+    # CACHE LOOKUP ONLY on the render path: scoring rasterizes the page, and
+    # GET / must never wait for it. The background pipeline warms it and the
+    # browser's existing /boxes/<n> poll swaps the chips in.
+    scores = None
+    scorer = _SCORER
+    if scorer is not None:
+        try:
+            scores = scorer.cached(n, text, [s[1] for s in specs], located)
+        except Exception:
+            scores = None
+
+    return _attach_boxes(specs, located, scores)
 
 
 def _boxes_payload(ws: Workspace, n: int) -> dict:
@@ -652,7 +878,10 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
     for iss in issues:
         iss.setdefault("box", None)
     if not issues and not hunks:
-        return {"pending": False, "boxes": [], "hunk_boxes": {}, "issue_boxes": {}}
+        return {
+            "pending": False, "boxes": [], "hunk_boxes": {}, "issue_boxes": {},
+            "hunk_scores": {}, "issue_scores": {},
+        }
 
     specs = _box_specs(issues, hunks, text)
     queries = [s[1] for s in specs]
@@ -667,12 +896,22 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
         except Exception:
             pass
 
-    boxes = _attach_boxes(specs, located)
+    scores = None
+    scorer = _SCORER
+    if scorer is not None:
+        try:
+            scores = scorer.compute(n, text, queries, located)
+        except Exception:
+            scores = None
+
+    boxes = _attach_boxes(specs, located, scores)
     return {
         "pending": False,
         "boxes": boxes,
         "hunk_boxes": {str(h["id"]): h.get("box") for h in hunks},
         "issue_boxes": {str(i): iss.get("box") for i, iss in enumerate(issues)},
+        "hunk_scores": {str(h["id"]): h.get("placement") for h in hunks},
+        "issue_scores": {str(i): iss.get("placement") for i, iss in enumerate(issues)},
     }
 
 
@@ -1441,6 +1680,18 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-note { font-size: 0.85rem; color: #8fce9f; direction: ltr; align-self: center; }
 .status-note.err { color: #f5b5b8; }
 .meta-row span.pill.refine-chip { color: #9a9ba3; border-color: #3a3b42; font-size: 0.75rem; }
+/* Live PLACEMENT chip (farsi2epub/placement.py). Deliberately small and last
+   in the action row: it is a diagnostic, not a control. */
+.pm-chip {
+  font-size: 0.72rem; line-height: 1; direction: ltr; align-self: center;
+  border: 1px solid #3a3b42; border-radius: 999px; padding: 0.22rem 0.5rem;
+  color: #9a9ba3; white-space: nowrap; cursor: help;
+}
+.pm-chip.pm-good { color: #8fce9f; border-color: #2f6f3f; }
+.pm-chip.pm-warn { color: #f0c78a; border-color: #7a5a20; }
+.pm-chip.pm-bad  { color: #f2a0a0; border-color: #7a2020; }
+.pm-chip.pm-none { color: #7d7e86; border-color: #3a3b42; }
+.qc-issue-head .pm-chip { margin-inline-start: 0.4rem; }
 </style>
 </head>
 <body>
@@ -1493,7 +1744,7 @@ button:disabled { opacity: 0.5; cursor: default; }
           <ul class="qc-issue-list">
             <li>
               {% if g.issue %}
-              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}><bdi class="qc-issue-type" dir="ltr">{{ g.issue.type }}</bdi><span aria-hidden="true"> &mdash; </span><span class="qc-issue-description" dir="rtl" lang="fa">{{ g.issue.description }}</span></div>
+              <div class="qc-issue-head{% if g.idx is not none %} qc-issue{% endif %}"{% if g.idx is not none %} data-page="{{ p.page }}" data-issue="{{ g.idx }}"{% endif %}><bdi class="qc-issue-type" dir="ltr">{{ g.issue.type }}</bdi><span aria-hidden="true"> &mdash; </span><span class="qc-issue-description" dir="rtl" lang="fa">{{ g.issue.description }}</span>{% if g.idx is not none and not g.hunks %}<span class="pm-chip {{ (g.issue.placement.cls if g.issue.placement else 'pm-none') }}" id="pm-{{ p.page }}-i{{ g.idx }}" title="{{ g.issue.placement.title if g.issue.placement else 'placement: not measured yet' }}">{{ g.issue.placement.label if g.issue.placement else '…' }}</span>{% endif %}</div>
               {% if g.issue.snippet %}
               <div class="qc-snippet" dir="rtl">{{ g.issue.snippet }}</div>
               {% endif %}
@@ -1519,6 +1770,10 @@ button:disabled { opacity: 0.5; cursor: default; }
                 <button onclick="rejectHunk({{ p.page }}, {{ h.id }})"{% if h.edit_only %} disabled title="no suggested fix to reject"{% endif %}>Reject</button>
                 <button id="undo-{{ p.page }}-{{ h.id }}" style="display:none" onclick="undoHunk({{ p.page }}, {{ h.id }})">Undo</button>
                 <span class="status-note" id="hunk-status-{{ p.page }}-{{ h.id }}"></span>
+                <span class="pm-chip {{ (h.placement.cls if h.placement else 'pm-none') }}"
+                      id="pm-{{ p.page }}-h{{ h.id }}"
+                      title="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
+                      >{{ h.placement.label if h.placement else '…' }}</span>
               </div>
               <div class="hunk-edit" id="hunk-edit-{{ p.page }}-{{ h.id }}" style="display:none">
                 <textarea dir="rtl" lang="fa" id="hunk-edit-text-{{ p.page }}-{{ h.id }}">{% if h.edit_only %}{{ h.old }}{% else %}{{ h.new }}{% endif %}</textarea>
@@ -2114,6 +2369,32 @@ function stopBoxPolling(page) {
   setRefineChip(page, false);
 }
 
+function setPlacementChip(id, chip) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'pm-chip ' + ((chip && chip.cls) || 'pm-none');
+  el.textContent = (chip && chip.label) || '\u2014';
+  el.title = (chip && chip.title) || 'placement: not measured';
+}
+
+function applyPlacementScores(page, data) {
+  var k;
+  if (data.hunk_scores) {
+    for (k in data.hunk_scores) {
+      if (Object.prototype.hasOwnProperty.call(data.hunk_scores, k)) {
+        setPlacementChip('pm-' + page + '-h' + k, data.hunk_scores[k]);
+      }
+    }
+  }
+  if (data.issue_scores) {
+    for (k in data.issue_scores) {
+      if (Object.prototype.hasOwnProperty.call(data.issue_scores, k)) {
+        setPlacementChip('pm-' + page + '-i' + k, data.issue_scores[k]);
+      }
+    }
+  }
+}
+
 function applyRefinedBoxes(page, data) {
   // Patch the in-memory payload (pagePayload always serves from payloadCache
   // once parsed) so click-to-zoom and hunk apply use the new geometry.
@@ -2150,12 +2431,25 @@ function pollBoxes(page) {
     if (!pollTimers[page]) return;  // stopped (e.g. page accepted) mid-flight
     if (data.pending) return;       // pipeline still working; keep polling
     applyRefinedBoxes(page, data);
+    // Scores travel WITH the boxes, so a refined box that moved never keeps
+    // the score the pre-refinement geometry earned.
+    applyPlacementScores(page, data);
     stopBoxPolling(page);
   }).catch(function () { /* transient error; the next tick retries */ });
 }
 
+function hasPendingChip(page) {
+  // The render path only ever serves ALREADY-CACHED placement scores, so a
+  // chip still showing the placeholder means the background pipeline owes this
+  // page a measurement.
+  var chips = document.querySelectorAll('#block-' + page + ' .pm-chip');
+  for (var i = 0; i < chips.length; i++) {
+    if (chips[i].textContent === '\u2026') return true;
+  }
+  return false;
+}
+
 function startBoxPolling() {
-  if (!BBOX_REFINE) return;
   var blocks = document.querySelectorAll('.page-block');
   var offset = 0;
   for (var i = 0; i < blocks.length; i++) {
@@ -2163,8 +2457,10 @@ function startBoxPolling() {
     if (block.classList.contains('done')) continue;
     var page = block.getAttribute('data-page');
     var p = pagePayload(page);
-    if (!p || !hasScanBox(p)) continue;
-    setRefineChip(page, true);
+    if (!p) continue;
+    var wantRefine = BBOX_REFINE && hasScanBox(p);
+    if (!wantRefine && !hasPendingChip(page)) continue;
+    if (wantRefine) setRefineChip(page, true);
     // Self-rescheduling timeout (not setInterval) with staggered first
     // ticks, so a big book's polls don't all burst at once.
     (function (pg, delay) {
@@ -2383,13 +2679,15 @@ def _start_refine_pipeline(state: _ReviewState) -> None:
     are logged and skipped; the page just keeps its plain scan boxes.
     """
     refiner = _REFINER
-    if refiner is None:
+    scorer = _SCORER
+    if refiner is None and scorer is None:
         return
     todo: queue.Queue[int] = queue.Queue()
     for n in state.surfaced:
         todo.put(n)
+    what = "refine+score" if refiner is not None else "score"
     print(
-        f"bbox refine: background pipeline over {len(state.surfaced)} pages "
+        f"bbox {what}: background pipeline over {len(state.surfaced)} pages "
         f"({_REFINE_WORKERS} workers)",
         file=sys.stderr,
     )
@@ -2411,7 +2709,17 @@ def _start_refine_pipeline(state: _ReviewState) -> None:
                         str(state.ws.pdf_path), n, text, tuple(queries)
                     )
                 )
-                refiner.refine(n, text, queries, located)
+                if refiner is not None:
+                    refiner.refine(n, text, queries, located)
+                    # Score the REFINED geometry: _score_key includes the box,
+                    # so scoring the pre-refinement box would only fill the
+                    # cache with an entry the poll can never hit.
+                    try:
+                        located = refiner.apply_cached(n, text, queries, located)
+                    except Exception:
+                        pass
+                if scorer is not None:
+                    scorer.compute(n, text, queries, located)
             except Exception as exc:
                 print(f"bbox refine p{n}: pipeline error: {exc}", file=sys.stderr)
 
@@ -2761,12 +3069,18 @@ def run_review(
         else:
             print("bbox refine: no ANTHROPIC_API_KEY, scan boxes will not be refined")
 
+    # Live placement scoring is unconditional: it is pure PyMuPDF arithmetic,
+    # costs nothing, and needs no key, so it runs even on a --no-bbox-refine or
+    # offline server.
+    global _SCORER
+    _SCORER = _PlacementScorer(ws)
+
     state = _ReviewState(ws, surfaced, skipped)
 
-    # Warm the VLM box cache in the background so GET / serves instantly with
-    # whatever is cached; the browser polls /boxes/<n> for the rest.
-    if _REFINER is not None:
-        _start_refine_pipeline(state)
+    # Warm the VLM box cache and the placement scores in the background so
+    # GET / serves instantly with whatever is cached; the browser polls
+    # /boxes/<n> for the rest.
+    _start_refine_pipeline(state)
 
     handler_cls = _make_handler(state)
 

@@ -35,11 +35,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # the SANCTIONED exception to "fix the code, never the assertion": the task was
 # to change grading behaviour. The check itself stays — it still proves the
 # scorer reproduces a frozen reference bit-identically.
-REFERENCE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v3.json"
+REFERENCE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v4.json"
 FROZEN = PROJECT_ROOT / "tests" / "data" / "bbox_sample240.json"
 
-REF_ACC1 = 0.8383
-REF_ACC0 = 0.4681
+REF_ACC1 = 0.8638
+REF_ACC0 = 0.4809
 REF_TRUTH_SHA1 = "e38e0ed322edb770c33a40a0680db60c8b146b14"
 
 _FAILURES: list[str] = []

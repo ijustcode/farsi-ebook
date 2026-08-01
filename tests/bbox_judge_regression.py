@@ -347,7 +347,7 @@ def section_d() -> None:
 # (e) the exclusion bucket must not become a hiding place
 # ---------------------------------------------------------------------------
 
-BASELINE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v3.json"
+BASELINE = PROJECT_ROOT / "out" / "score_word_miss_baseline_v4.json"
 
 
 def section_e() -> None:
