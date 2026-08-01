@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import bisect
 import hashlib
 import html as html_mod
 import json
@@ -80,7 +81,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 import fitz
 
@@ -117,7 +118,9 @@ _CROP_GEOMETRY_VERSION = 1
 # costs nothing. It is still recorded in the report for provenance.
 # 2 = boxed run derived geometrically instead of from the model's boxed_text.
 # 3 = monotone within-line alignment + 1-D horizontal box coverage.
-_SCORE_CACHE_VERSION = 3
+# 4 = added word-miss-distance metric fields to grade output (verdict logic
+#     unchanged).
+_SCORE_CACHE_VERSION = 4
 # Bump when the cached reading's value shape changes.
 _READ_CACHE_VERSION = 1
 
@@ -474,6 +477,39 @@ def _layer_usable(
     if raw_recall is None:
         raw_recall = _layer_recall(pwords, page_md)
     return raw_recall >= _LAYER_RAW_RECALL_MIN and recall >= _LAYER_RECALL_MIN
+
+
+def _layer_geometry_usable(page: fitz.Page) -> bool:
+    """True when the PDF's own word rects may stand in for the scan detector.
+
+    This is a WEAKER and genuinely different question from `_layer_usable`,
+    which asks whether PyMuPDF may stand in for the VLM *reader*. That one
+    rightly gates on token recall against the Markdown, because it decides what
+    becomes TRUTH. Geometry needs no such thing: the judge already holds the
+    frozen page reading for text and needs the layer only for WHERE words sit.
+
+    Measured, conflating the two silently mis-graded a whole book. Every
+    sampled `boof-e-koor` page has a clean, correctly-positioned Unicode layer
+    but folds against its Markdown at raw recall 0.115-0.264, far under
+    `_LAYER_RAW_RECALL_MIN` (0.45). All 34 pages were therefore forced onto scan
+    geometry, which found no words inside the box at all, and 10 correctly
+    placed boxes were reported as `no_covered_words` — pixel-verified: the box
+    on `boof-e-koor:p20:h1` sits exactly on میلولیدند, its own target.
+
+    `locate._tier_a_usable` is the whole predicate, and it is sufficient because
+    it already excludes both failure modes the scan fallback exists for:
+      * an image-only scan has no text layer at all (`bachehaye_ghali`: 0/14
+        sampled pages pass);
+      * a GLYPH CIPHER decodes to non-Persian, so its rects tokenize
+        differently from the printed words and would mis-attribute the boxed run
+        (`haaji-agha`: 0/14 pass — it substitutes literal '#'/'&' for Persian
+        glyphs; see `_crop_word_lines`'s docstring for the measured damage).
+    Both keep the scan path. Only a real, decodable Persian layer passes.
+    """
+    try:
+        return bool(locate._tier_a_usable(locate._page_words(page)))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1020,9 +1056,35 @@ def _align_line_sequences(
     return out
 
 
+class _Alignment(NamedTuple):
+    """Result of mapping a reading onto detected word rects.
+
+    Deliberately keeps the three trust signals APART rather than collapsing
+    them into one boolean, because they mean different things and only one of
+    them is evidence of the mis-grading this exists to catch:
+
+    * ``word_conf`` — per word, local. Its line's word count is close AND the
+      word is not downstream of a pairing discontinuity.
+    * ``structural`` — page-wide and genuinely page-wide: the two line
+      sequences could be aligned at all, and few enough reading lines went
+      unpaired. NOT "every line's word count was close": at page scale that
+      global reduction measures page size, not alignment quality (CLAUDE.md).
+    * ``drift_start`` — flat word index of the first drift-tainted word, or
+      None. This is the discriminator for the p64 class of failure, and the
+      only signal `geom_unconfident` gates on.
+    """
+
+    rects: list[Optional[fitz.Rect]]
+    confident: bool
+    word_conf: list[bool]
+    drift_lines: int
+    structural: bool
+    drift_start: Optional[int]
+
+
 def _assign_word_rects(
     vlm_lines: list[str], det_lines: list[list[fitz.Rect]]
-) -> tuple[list[Optional[fitz.Rect]], bool]:
+) -> "_Alignment":
     """Map every word of the VLM reading (in _flatten's exact index order) onto
     a detected word rectangle.
 
@@ -1037,11 +1099,30 @@ def _assign_word_rects(
     `confident` means "this alignment is trustworthy": the line counts agree
     AND every line's word-count delta is small. It does NOT mean the counts
     were exactly equal.
+
+    DRIFT. The pairing is monotone but not necessarily contiguous: when the
+    detector finds fewer ink lines than the reading has (a fused pair — see
+    locate._split_tall_runs), the aligner balances the books by dropping a
+    reading line in the MIDDLE of the page, and every line after the drop is
+    then mapped one printed line off. Measured on bachehaye_ghali p64 that
+    silently graded three correctly-placed boxes as catastrophically wrong,
+    with every per-line word count still "close" so `confident` stayed True.
+    So any discontinuity in the pairing (`dj is None`, or a jump on either
+    side) LATCHES a drift flag, and every word from that point on is marked
+    unconfident. It latches forward only, positionally: a drop on the last line
+    (the page number, routinely absent from the Markdown) must not blank out
+    the words above it — measured, that trailing drop is the COMMON case on
+    bachehaye_ghali (124 of 136 sampled cases), so a page-wide latch would
+    have excluded the whole book. `drift_lines` / `drift_start` are reported so
+    the report can discriminate "was mis-graded, now correct" from a genuine
+    change.
     """
     vwords = [locate._norm_words(t or "") for t in vlm_lines]
     flat_n = sum(len(ws) for ws in vwords)
     if flat_n == 0 or not det_lines:
-        return [None] * flat_n, False, [False] * flat_n
+        return _Alignment(
+            [None] * flat_n, False, [False] * flat_n, 0, False, 0 if flat_n else None
+        )
 
     rects: list[Optional[fitz.Rect]] = []
     # Per-word alignment trust, so a caller can ask about the words it actually
@@ -1057,10 +1138,25 @@ def _assign_word_rects(
     if pairing is not None:
         confident = True
         n_unpaired = 0
+        drifted = False
+        drift_lines = 0
+        drift_start: Optional[int] = None
+        dj_prev: Optional[int] = None
         for li, ws in enumerate(vwords):
+            dj = pairing[li]
+            was_drifted = drifted
+            if dj is not None and dj_prev is not None and dj != dj_prev + 1:
+                drifted = True  # a detected line no reading line claims
+            if dj is None:
+                drifted = True
+            if drifted:
+                drift_lines += 1
+                if not was_drifted:
+                    drift_start = len(word_conf)
+            if dj is not None:
+                dj_prev = dj
             if not ws:
                 continue
-            dj = pairing[li]
             if dj is None:
                 # A line the detector never found: its words get no geometry,
                 # which keeps them out of the boxed run without disturbing the
@@ -1070,9 +1166,13 @@ def _assign_word_rects(
                 word_conf.extend([False] * len(ws))
                 continue
             dl = det_lines[dj]
-            line_ok = _counts_close(len(ws), len(dl))
-            if not line_ok:
+            counts_ok = _counts_close(len(ws), len(dl))
+            # Page-level confidence keeps its old, count-based meaning; drift
+            # is applied POSITIONALLY through word_conf so a discontinuity at
+            # the foot of the page cannot invalidate the lines above it.
+            if not counts_ok:
                 confident = False
+            line_ok = counts_ok and not drifted
             env = locate._union_rects(dl)
             spans = _align_line_spans(ws, dl)
             if len(spans) != len(ws):  # hard fallback: keep index alignment
@@ -1082,9 +1182,12 @@ def _assign_word_rects(
                 continue
             rects.extend(fitz.Rect(x0, env.y0, x1, env.y1) for x0, x1 in spans)
             word_conf.extend([line_ok] * len(ws))
-        if n_unpaired > 0.15 * max(len(vwords), 1):
+        structural = n_unpaired <= 0.15 * max(len(vwords), 1)
+        if not structural:
             confident = False
-        return rects, confident, word_conf
+        return _Alignment(
+            rects, confident, word_conf, drift_lines, structural, drift_start
+        )
 
     # Line counts disagree: no per-line correspondence exists, so spread the
     # reading char-proportionally over every detected rect in reading order,
@@ -1106,7 +1209,10 @@ def _assign_word_rects(
         cum_c += len(w)
         hit = [flat_det[i] for i in range(len(flat_det)) if ends[i] > u0 and starts[i] < u1]
         rects.append(locate._union_rects(hit) if hit else None)
-    return rects, False, [False] * len(rects)
+    # No per-line correspondence at all: the whole page is drift, by definition.
+    return _Alignment(
+        rects, False, [False] * len(rects), len(vwords), False, 0
+    )
 
 
 def _geometric_boxed(
@@ -1117,23 +1223,25 @@ def _geometric_boxed(
     page_lines: list[_Line],
     scan_lines: list,
     prefer_layer: bool = True,
-) -> tuple[dict, list[Optional[fitz.Rect]], Optional[int], bool, str]:
+    _retry: bool = False,
+) -> tuple[dict, list[Optional[fitz.Rect]], Optional[int], bool, str, int, bool]:
     """Recompute the reading's boxed run from geometry.
 
     Returns (reading with a geometric ``boxed_text``/``boxed_line_index``, the
     per-word rects for IoU, the flat start index of the boxed run when it is
-    contiguous, geom_confident, rect source). A word is inside the box when the
+    contiguous, geom_confident, rect source, drift-tainted line count, whether
+    THIS box's words are drift-tainted). A word is inside the box when the
     box covers >=50% of the word's HORIZONTAL span along its own printed line
     (see `_inside`). Segmented scan_vlm boxes union across their segments.
     """
     det_lines, src = _crop_word_lines(page_lines, scan_lines, crop, prefer_layer)
     words, line_of = _flatten(reading)
-    rects, confident, word_conf = _assign_word_rects(
-        reading.get("line_text_full") or [], det_lines
-    )
+    al = _assign_word_rects(reading.get("line_text_full") or [], det_lines)
+    rects, confident, word_conf = al.rects, al.confident, al.word_conf
+    drift_lines = al.drift_lines
     if src == "none" or not any(r is not None for r in rects):
         # No word geometry at all: keep the model's claim, flagged unconfident.
-        return dict(reading), [], None, False, src
+        return dict(reading), [], None, False, src, drift_lines, True
 
     box_rects = _box_rects(page, box)
 
@@ -1182,6 +1290,20 @@ def _geometric_boxed(
         return (covered / span) >= 0.5
 
     inside = [i for i, r in enumerate(rects) if r is not None and _inside(r)]
+    if not inside and not _retry:
+        # A box drawn on printed text covers SOMETHING. An empty covered set is
+        # far more often a geometry-SOURCE error than a real "covers nothing":
+        # measured, all 10 `no_covered_words` cases in the frozen sample were
+        # correctly placed boxes whose page had been routed to the wrong source
+        # (pixel-verified on boof-e-koor p14/p20/p56). Try the other source
+        # before declaring the box empty; keep `no_covered_words` for the case
+        # where BOTH sources come up empty, which is a real failure.
+        alt = _geometric_boxed(
+            page, box, crop, reading, page_lines, scan_lines,
+            not prefer_layer, _retry=True,
+        )
+        if alt[0].get("boxed_text"):
+            return alt
     out = dict(reading)
     if inside:
         out["boxed_text"] = " ".join(words[i] for i in inside if i < len(words))
@@ -1201,9 +1323,24 @@ def _geometric_boxed(
     # page, demanding that all ~31 lines align well reported geom_confident on
     # 7.7% of cases where the crop route reported 66% — measuring page size,
     # not alignment quality. Reduce over the boxed run when there is one.
+    #
+    # AND, never REPLACE — but only with the STRUCTURAL page-level signal. The
+    # local reduction used to overwrite the page verdict outright, so a box
+    # resting on drift-tainted words could report geom_confident=True purely
+    # because its own line's word counts happened to be close, which is exactly
+    # how the p64 mis-grading passed unflagged. Restoring the FULL page-level
+    # AND was measured and rejected: it flags 76.2% of the frozen sample,
+    # because over ~30 lines some line's word count is always off — the page
+    # size effect CLAUDE.md already documents. `al.structural` is the part of
+    # the page verdict that is genuinely page-wide.
     if inside and word_conf:
-        confident = all(word_conf[i] for i in inside if i < len(word_conf))
-    return out, rects, start, confident, src
+        confident = al.structural and all(
+            word_conf[i] for i in inside if i < len(word_conf)
+        )
+    drift_tainted = al.drift_start is not None and any(
+        i >= al.drift_start for i in inside
+    )
+    return out, rects, start, confident, src, drift_lines, drift_tainted
 
 
 def _readout_disagreement(a: str, b: str) -> int:
@@ -1281,6 +1418,133 @@ def _best_truth_window(
     return best[0], best[1], best[2], len(near)
 
 
+# ---------------------------------------------------------------------------
+# word-miss distance (see METRIC.md)
+# ---------------------------------------------------------------------------
+
+# Degenerate classes that count AGAINST the locator: the box failed to cover
+# anything gradable. They are excluded from the word-miss magnitude (their
+# distance is undefined) but counted as not-perfect in `perfect_rate` and
+# surfaced as `word_miss_penalized_rate`, so turning a wrong box into no box
+# can never score as a win (CLAUDE.md invariant).
+_PENALIZED_DEGENERATE = ("no_box", "no_covered_words", "wrong_region", "phrase_absent")
+# Degenerate classes that are the JUDGE's failure, not the locator's. Excluded
+# from every word-miss denominator; their rate is already gated separately.
+_NEUTRAL_DEGENERATE = ("judge_unusable", "unmeasurable", "geom_unconfident")
+# Fixed histogram edges: most mass sits at 0, so linear bins would hide the
+# tail that actually hurts review.
+_WORD_MISS_BUCKETS = (0, 1, 2, 4, 8, 16, 32, 64)
+
+
+def _word_miss_distances(t_set: set[int], b_set: set[int]) -> list[int]:
+    """Per-target-word distance to the nearest covered word, in reading-order
+    index space (crosses line boundaries by design — METRIC.md).
+
+    0 when the target word itself is covered. `b_set` must be non-empty;
+    callers route the empty case through the degenerate-case policy instead,
+    since "distance to the nearest covered word" is undefined with no covered
+    words and must not silently become 0 or infinity here.
+    """
+    bs = sorted(b_set)
+    out: list[int] = []
+    for t in sorted(t_set):
+        if t in b_set:
+            out.append(0)
+            continue
+        i = bisect.bisect_left(bs, t)
+        best = None
+        if i < len(bs):
+            best = bs[i] - t
+        if i > 0:
+            cand = t - bs[i - 1]
+            if best is None or cand < best:
+                best = cand
+        out.append(best)
+    return out
+
+
+def _word_miss_bucket(v: float) -> str:
+    """Label for the histogram bucket `v` falls in."""
+    for i, lo in enumerate(_WORD_MISS_BUCKETS):
+        nxt = (
+            _WORD_MISS_BUCKETS[i + 1]
+            if i + 1 < len(_WORD_MISS_BUCKETS)
+            else None
+        )
+        if nxt is None:
+            return f"{lo}+"
+        if v < nxt:
+            return str(lo) if nxt == lo + 1 else f"{lo}-{nxt - 1}"
+    return f"{_WORD_MISS_BUCKETS[-1]}+"
+
+
+def _truth_window(
+    words: list[str],
+    variants: list[list[str]],
+    anchor: Optional[int],
+) -> dict:
+    """Locate the truth phrase in a reading, INDEPENDENTLY of where the box is.
+
+    Factored out of `_grade` so the fabricated `no_box` rows can carry a real
+    `target_word_count` / `truth_confident` even though there is no box to
+    anchor the tie-break on (METRIC.md decision #3: scoring a box that landed
+    nowhere near the truth still requires knowing where the truth is).
+
+    Returns a dict, never raises; `t_set` is None when no window was found.
+    """
+    info: dict = {
+        "t_start": -1,
+        "t_len": 0,
+        "t_set": None,
+        "n_near_tie": None,
+        "align_score": None,
+        "_score": None,  # unrounded, for the caller's threshold comparison
+        "truth_confident": None,
+        "target_word_count": None,
+    }
+    if not words or not variants:
+        return info
+    score, t_start, t_len, n_tie = _best_truth_window(variants, words, anchor)
+    info["n_near_tie"] = n_tie
+    info["_score"] = score
+    info["align_score"] = round(score, 4) if score is not None else None
+    info["t_start"], info["t_len"] = t_start, t_len
+    info["truth_confident"] = bool(
+        t_start >= 0 and score is not None and score >= locate._MATCH_ACCEPT
+    )
+    if t_start >= 0 and t_len > 0:
+        info["t_set"] = set(range(t_start, t_start + t_len))
+        info["target_word_count"] = t_len
+    return info
+
+
+def _word_miss_keys(
+    reading: Optional[dict],
+    variants: Optional[list[list[str]]],
+    degenerate: Optional[str],
+) -> dict:
+    """The full new key set for a grade built OUTSIDE `_grade` (the fabricated
+    `no_box` and `stale` rows), so every JSON consumer sees a uniform shape."""
+    out = {
+        "word_miss_distances": None,
+        "word_miss_sum": None,
+        "word_miss_mean": None,
+        "word_miss_max": None,
+        "target_word_count": None,
+        "truth_confident": None,
+        "page_word_count": None,
+        "degenerate": degenerate,
+    }
+    if reading is None or not variants:
+        return out
+    words, _line_of = _flatten(reading)
+    out["page_word_count"] = len(words)
+    info = _truth_window(words, variants, None)
+    out["target_word_count"] = info["target_word_count"]
+    out["truth_confident"] = info["truth_confident"]
+    return out
+
+
 def _iou(a: fitz.Rect, b: fitz.Rect) -> float:
     inter = fitz.Rect(a) & b
     ia = 0.0 if inter.is_empty else inter.width * inter.height
@@ -1311,9 +1575,20 @@ def _grade(
         "align_score": None,
         "legible": legible,
         "needs_retry": False,
+        # --- word-miss distance (METRIC.md); purely additive, the verdict
+        # branches below are untouched. ---
+        "word_miss_distances": None,
+        "word_miss_sum": None,
+        "word_miss_mean": None,
+        "word_miss_max": None,
+        "target_word_count": None,
+        "truth_confident": None,
+        "page_word_count": len(words),
+        "degenerate": None,
     }
     if not words:
         grade["note"] = "reader returned no words"
+        grade["degenerate"] = "judge_unusable"
         return grade
     if not variants or insertion:
         # A pure-insertion / whitespace-only hunk has no printed phrase to
@@ -1321,6 +1596,7 @@ def _grade(
         # Unmeasurable, not wrong.
         grade["verdict"] = "unmeasurable"
         grade["note"] = "insertion hunk — no printed truth to place a box on"
+        grade["degenerate"] = "unmeasurable"
         return grade
 
     # Where the rectangle actually landed, first — it anchors the tie-break.
@@ -1331,32 +1607,69 @@ def _grade(
             words, boxed_words, line_of, int(reading.get("boxed_line_index", -1))
         )
 
-    score, t_start, t_len, n_tie = _best_truth_window(variants, words, b_start)
+    info = _truth_window(words, variants, b_start)
+    score, t_start, t_len, n_tie = (
+        info["_score"], info["t_start"], info["t_len"], info["n_near_tie"]
+    )
     grade["n_near_tie"] = n_tie
-    grade["align_score"] = round(score, 4) if score is not None else None
+    grade["align_score"] = info["align_score"]
+
+    # --- word-miss distance, computed BEFORE any verdict branch so the
+    # degenerate returns below still carry what they can. Both index sets are
+    # already available here; the original code simply discarded them on the
+    # early returns. ---
+    grade["truth_confident"] = info["truth_confident"]
+    t_set = info["t_set"]
+    b_set = (
+        set(range(b_start, b_start + len(boxed_words)))
+        if boxed_words and b_start is not None
+        else None
+    )
+    if t_set is not None:
+        grade["target_word_count"] = len(t_set)
+        if b_set:
+            distances = _word_miss_distances(t_set, b_set)
+            grade["word_miss_distances"] = distances
+            grade["word_miss_sum"] = sum(distances)
+            grade["word_miss_mean"] = round(sum(distances) / len(distances), 4)
+            grade["word_miss_max"] = max(distances)
+        elif not boxed_words:
+            # No covered words at all — a locator failure, penalised.
+            grade["degenerate"] = "no_covered_words"
+        # else: boxed_words exist but are not a contiguous run of the reading.
+        # That is the JUDGE failing, not the locator; the `b_start is None`
+        # branch below tags it `judge_unusable` so it is not penalised.
+
     if t_start < 0 or score < locate._MATCH_ACCEPT:
         # The phrase is not in the crop at all. When the crop is legible that
         # is a locator failure (the box is nowhere near the phrase); when it is
         # illegible we cannot tell, so it stays a judge failure.
         grade["verdict"] = "wrong_region" if legible else "phrase_absent"
+        if grade["degenerate"] is None:
+            grade["degenerate"] = grade["verdict"]
         return grade
     grade["truth_text"] = " ".join(words[t_start : t_start + t_len])
 
     if not boxed_words:
         grade["verdict"] = "wrong_region" if legible else "phrase_absent"
         grade["note"] = "reader found no words inside the rectangle"
+        if grade["degenerate"] is None:
+            grade["degenerate"] = grade["verdict"]
         return grade
     if b_start is None:
         grade["needs_retry"] = True
         grade["note"] = "boxed words are not a contiguous run of the reading"
+        if grade["degenerate"] is None:
+            grade["degenerate"] = "judge_unusable"
         return grade
     b_len = len(boxed_words)
 
     grade["shift_words"] = b_start - t_start
     grade["line_delta"] = line_of[b_start] - line_of[t_start]
 
-    t_set = set(range(t_start, t_start + t_len))
-    b_set = set(range(b_start, b_start + b_len))
+    # t_set / b_set were built above from the identical conditions; reused
+    # here so the verdict math is provably the same sets it always used.
+    assert t_set is not None and b_set is not None
     if t_set == b_set:
         verdict = "exact"
     elif t_set & b_set:
@@ -1753,7 +2066,9 @@ def _grade_case(
     variants, insertion = _variants_for(case)
     box = case["_box"]
     vlm_claim = reading.get("boxed_text") or ""
-    geom_reading, rects, start, confident, src = _geometric_boxed(
+    (
+        geom_reading, rects, start, confident, src, drift_lines, drift_tainted
+    ) = _geometric_boxed(
         page, box, crop, reading, page_lines, scan_lines, prefer_layer
     )
     grade = _grade(
@@ -1775,6 +2090,21 @@ def _grade_case(
     grade["boxed_text_vlm"] = vlm_claim or None
     grade["geom_confident"] = bool(confident)
     grade["geom_source"] = src
+    grade["geom_drift_lines"] = drift_lines
+    grade["geom_drift_tainted"] = bool(drift_tainted)
+    # Confidence now GATES — it used to be recorded and ignored, so a grade the
+    # judge itself could tell was untrustworthy still landed in the metrics as
+    # a locator verdict. The gate is DRIFT, not `geom_confident`: drift is the
+    # measured cause of a wrong readout from a correct box, whereas a per-line
+    # word-count delta is a routine segmentation difference (CLAUDE.md:
+    # demanding exact counts flagged 100% of cases). MEASURED on the frozen
+    # sample: gating on `geom_confident` excludes 33.6% and cannot meet the 3%
+    # cap; gating on drift excludes 1.7%.
+    #
+    # `geom_unconfident` is NEUTRAL (a judge failure, not a locator failure)
+    # but stays in `perfect_rate`'s denominator, so it can never read as a win.
+    if drift_tainted and src != "none":
+        grade["degenerate"] = "geom_unconfident"
     grade["boxed_disagreement"] = (
         _readout_disagreement(grade.get("boxed_text") or "", vlm_claim)
         if vlm_claim
@@ -1823,6 +2153,8 @@ class _Judge:
         self._scan_lock = threading.Lock()
         self._layer_usable: dict[int, bool] = {}
         self._layer_lock = threading.Lock()
+        self._layer_geom: dict[int, bool] = {}
+        self._layer_geom_lock = threading.Lock()
 
     def close(self) -> None:
         self.cache.flush()
@@ -1860,13 +2192,11 @@ class _Judge:
             return self._scan[n]
 
     def layer_usable(self, n: int, page_md: str) -> bool:
-        """Memoized `_layer_usable` for page `n` — the SINGLE probe behind two
-        decisions that must agree: whether PyMuPDF may stand in for the VLM
-        reader (judge routing) and whether its word rects may stand in for the
-        scan detector (`_crop_word_lines`). A layer too corrupt to read is
-        equally too corrupt to measure geometry with, so they share this. The
-        probe re-derives the page's reader lines and folds every word, so it is
-        cached: it is consulted once per case otherwise.
+        """Memoized `_layer_usable` for page `n`: may PyMuPDF stand in for the
+        VLM READER, i.e. may its text become truth. Gates on token recall.
+
+        This used to be the single probe behind two decisions. It is not one
+        decision: see `layer_geometry_usable` and `_layer_geometry_usable`.
         """
         with self._layer_lock:
             if n not in self._layer_usable:
@@ -1877,6 +2207,19 @@ class _Judge:
                     usable = False
                 self._layer_usable[n] = usable
             return self._layer_usable[n]
+
+    def layer_geometry_usable(self, n: int) -> bool:
+        """Memoized `_layer_geometry_usable` for page `n`: may its word RECTS
+        stand in for the scan detector. Weaker than `layer_usable`, and
+        deliberately independent of it — a layer can be too unreliable to read
+        while still being perfectly positioned."""
+        with self._layer_geom_lock:
+            if n not in self._layer_geom:
+                try:
+                    self._layer_geom[n] = _layer_geometry_usable(self.doc[n - 1])
+                except Exception:
+                    self._layer_geom[n] = False
+            return self._layer_geom[n]
 
     # -- page-level truth ----------------------------------------------
 
@@ -1942,6 +2285,10 @@ class _Judge:
                         "truth_text": "",
                         "boxed_text": "",
                         "align_score": None,
+                        # No crop reading exists on this route (there is no
+                        # box to crop around), so truth cannot be located
+                        # here; the keys are present for shape uniformity.
+                        **_word_miss_keys(None, None, "no_box"),
                     },
                     "judge": route,
                     "cached": False,
@@ -2004,15 +2351,18 @@ class _Judge:
         the whole page instead of a box-shaped window around the answer.
         """
         reading, source = self.page_reading(n, page_md)
-        prefer_layer = self.layer_usable(n, page_md)
+        # GEOMETRY, not truth: a layer too unreliable to read can still be
+        # perfectly positioned (see _layer_geometry_usable).
+        prefer_layer = self.layer_geometry_usable(n)
         page_lines, _ratio, _recall = self.reader(n, page_md)
         scan_lines: list = []
         if reading is not None:
             self.truth_used[n] = _sha1(
                 json.dumps(reading.get("line_text_full") or [], ensure_ascii=False)
             )
-            if not prefer_layer:
-                scan_lines = self.scan(n)
+            # Always keep scan geometry available: _geometric_boxed falls back
+            # to it when the preferred source covers nothing.
+            scan_lines = self.scan(n)
         for case in cases:
             if case["_box"] is None:
                 case["_result"] = {
@@ -2024,6 +2374,12 @@ class _Judge:
                         "truth_text": "",
                         "boxed_text": "",
                         "align_score": None,
+                        # Page truth exists independently of the (missing)
+                        # box, so target_word_count / truth_confident are real
+                        # here — METRIC.md decision #3.
+                        **_word_miss_keys(
+                            reading, _variants_for(case)[0], "no_box"
+                        ),
                     },
                     "judge": "page",
                     "cached": True,
@@ -2282,6 +2638,62 @@ def _metrics(rows: list[dict]) -> dict:
     fallbacks = [r for r in graded if r.get("align_fallback")]
     out["align_fallback_rate"] = round(len(fallbacks) / d, 4)
 
+    # --- word-miss distance (METRIC.md / AMENDMENT.md) -------------------
+    # MEASURED cases only for the magnitude: a degenerate has no defined
+    # distance and inventing one would make the mean depend on page length,
+    # which varies by book and would wreck cross-book comparison.
+    measured = [
+        r for r in graded
+        if r.get("degenerate") is None and r.get("word_miss_sum") is not None
+    ]
+    sums = [float(r["word_miss_sum"]) for r in measured]
+    per_word = [
+        float(r["word_miss_mean"]) for r in measured
+        if r.get("word_miss_mean") is not None
+    ]
+    out["word_miss_n"] = len(measured)
+    out["word_miss_mean"] = round(_mean(sums), 4) if sums else None
+    out["word_miss_sum"] = round(sum(sums), 4) if sums else None
+    out["word_miss_median"] = (
+        round(statistics.median(sums), 4) if sums else None
+    )
+    out["word_miss_p90"] = round(_p90(sums), 4) if sums else None
+    # METRIC.md §1 asks for both aggregations; the per-target-word mean is
+    # length-comparable across corrections, the sum is the headline.
+    out["word_miss_per_word_mean"] = (
+        round(_mean(per_word), 4) if per_word else None
+    )
+    out["word_miss_max"] = round(max(sums), 4) if sums else None
+    if sums:
+        hist = Counter(_word_miss_bucket(s) for s in sums)
+        labels = [_word_miss_bucket(float(b)) for b in _WORD_MISS_BUCKETS]
+        out["word_miss_histogram"] = {
+            lb: hist.get(lb, 0) for lb in labels
+        }
+    else:
+        out["word_miss_histogram"] = None
+    # HEADLINE. Over the FULL graded denominator, with every penalised
+    # degenerate counted as not-perfect: this is what makes "turn a wrong box
+    # into no box" impossible to score as a win (CLAUDE.md invariant).
+    out["perfect_rate"] = round(
+        sum(1 for r in measured if r["word_miss_sum"] == 0) / d, 4
+    )
+    out["word_miss_penalized_rate"] = round(
+        sum(1 for r in graded if r.get("degenerate") in _PENALIZED_DEGENERATE) / d,
+        4,
+    )
+    # Cases the judge itself could not align trustworthily. Neutral, but gated:
+    # if it climbs into double digits the alignment is broken and the headline
+    # is being computed on a shrinking, self-selected survivor set.
+    out["geom_unconfident_rate"] = round(
+        sum(1 for r in graded if r.get("degenerate") == "geom_unconfident") / d, 4
+    )
+    out["word_miss_degenerates"] = dict(
+        Counter(
+            r["degenerate"] for r in graded if r.get("degenerate") is not None
+        )
+    ) or None
+
     # Judge-health metrics for the geometric boxed readout.
     #  * boxed_readout_disagreement: how often Python's geometric boxed run and
     #    the model's own boxed_text claim differ by MORE than one word. A ±1
@@ -2539,6 +2951,11 @@ def cmd_score(args: argparse.Namespace) -> int:
             "boxed_text_vlm": grade.get("boxed_text_vlm"),
             "geom_confident": grade.get("geom_confident"),
             "geom_source": grade.get("geom_source"),
+            # How many reading lines sat at or after the first pairing
+            # discontinuity: the discriminator for "was this case mis-graded
+            # by a drifted alignment before the fix?".
+            "geom_drift_lines": grade.get("geom_drift_lines"),
+            "geom_drift_tainted": grade.get("geom_drift_tainted"),
             "boxed_disagreement": grade.get("boxed_disagreement"),
             "truth_text": grade.get("truth_text", ""),
             "truth_source": grade.get("truth_source"),
@@ -2552,7 +2969,23 @@ def cmd_score(args: argparse.Namespace) -> int:
             "align_fallback": debug.get("counts_agree") is False,
             "debug": debug or None,
             "box": box,
+            # --- word-miss distance (METRIC.md). `word_miss_distances` (the
+            # per-word list) is deliberately NOT carried into the row: it is
+            # redundant with sum/mean/max and would roughly double the report.
+            "word_miss_sum": grade.get("word_miss_sum"),
+            "word_miss_mean": grade.get("word_miss_mean"),
+            "word_miss_max": grade.get("word_miss_max"),
+            "target_word_count": grade.get("target_word_count"),
+            "truth_confident": grade.get("truth_confident"),
+            "page_word_count": grade.get("page_word_count"),
+            "degenerate": grade.get("degenerate"),
         }
+        # The per-case score used for pairing in `compare`: the per-correction
+        # SUM, and None whenever the case is not measurable (degenerate of any
+        # class). AMENDMENT.md §4 — no synthetic penalty value.
+        row["word_miss_effective"] = (
+            row["word_miss_sum"] if row["degenerate"] is None else None
+        )
         row["acc1"] = _acc1(grade) if verdict not in _EXCLUDED_VERDICTS else False
         rows.append(row)
     for c in stale:
@@ -2569,6 +3002,10 @@ def cmd_score(args: argparse.Namespace) -> int:
                 "query": c["query"], "features": c.get("features", {}),
                 "y_bucket": "unknown", "align_fallback": False, "debug": None,
                 "box": None, "acc1": False,
+                "word_miss_sum": None, "word_miss_mean": None,
+                "word_miss_max": None, "target_word_count": None,
+                "truth_confident": None, "page_word_count": None,
+                "degenerate": None, "word_miss_effective": None,
             }
         )
 
@@ -2703,6 +3140,16 @@ def _print_summary(report: dict) -> None:
         f"judge_unusable={overall.get('judge_unusable_rate')} "
         f"mean_iou={overall.get('mean_iou')}"
     )
+    print(
+        f"perfect_rate={overall.get('perfect_rate')} "
+        f"word_miss_mean={overall.get('word_miss_mean')} "
+        f"median={overall.get('word_miss_median')} "
+        f"p90={overall.get('word_miss_p90')} "
+        f"penalized={overall.get('word_miss_penalized_rate')} "
+        f"geom_unconfident={overall.get('geom_unconfident_rate')} "
+        f"(measured n={overall.get('word_miss_n')})"
+    )
+    print("word_miss_histogram: " + json.dumps(overall.get("word_miss_histogram")))
     print("verdicts: " + json.dumps(overall.get("verdicts", {})))
     print(
         f"judge health: boxed_readout_disagreement="
@@ -3635,6 +4082,54 @@ def _mcnemar_exact_p(n_fixed: int, n_broken: int) -> Optional[float]:
     return min(1.0, 2.0 * tail)
 
 
+def _ranked(xs: list[float]) -> list[float]:
+    """Average ranks (1-based) of `xs`, ties sharing their mean rank."""
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    ranks = [0.0] * len(xs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _wilcoxon_signed_rank_p(deltas: list[float]) -> tuple[Optional[float], int]:
+    """Two-sided Wilcoxon signed-rank p over paired deltas, dependency-free.
+
+    McNemar's test is for binary outcomes; word-miss distance is continuous, so
+    the paired test for it is the signed-rank test (METRIC.md decision #4).
+    scipy is deliberately not a dependency of this repo, so this is the normal
+    approximation with a continuity correction and the standard tie correction
+    in the variance; `math.erf` supplies the normal CDF.
+
+    Zero deltas are dropped before ranking (Wilcoxon's own convention).
+    Returns (p, n_nonzero); p is None below 10 non-zero deltas, where the
+    normal approximation is not trustworthy and the test carries no power.
+    """
+    nz = [d for d in deltas if d != 0]
+    n = len(nz)
+    if n < 10:
+        return None, n
+    ranks = _ranked([abs(d) for d in nz])
+    w_plus = sum(r for d, r in zip(nz, ranks) if d > 0)
+    w_minus = sum(r for d, r in zip(nz, ranks) if d < 0)
+    w = min(w_plus, w_minus)
+    mean_w = n * (n + 1) / 4.0
+    tie_counts = Counter(abs(d) for d in nz)
+    tie_term = sum(t ** 3 - t for t in tie_counts.values())
+    var_w = (n * (n + 1) * (2 * n + 1) - tie_term / 2.0) / 24.0
+    if var_w <= 0:
+        return None, n
+    z = (w - mean_w + 0.5) / math.sqrt(var_w)
+    cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    return min(1.0, 2.0 * cdf), n
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     base = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
     cand = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
@@ -3683,6 +4178,54 @@ def cmd_compare(args: argparse.Namespace) -> int:
             f"McNemar exact p={p:.4f} on {len(fixed) + len(broken)} discordant "
             f"pair(s)" + ("" if p < 0.05 else "  ← NOT significant")
         )
+    # --- word-miss distance, paired (METRIC.md decision #4) --------------
+    # Only cases MEASURED in BOTH reports are paired evidence. There is no
+    # synthetic penalty to fall back on (AMENDMENT.md §4), so the drop count
+    # is printed rather than hidden.
+    wm_paired = [
+        i for i in scored
+        if b_cases[i].get("word_miss_effective") is not None
+        and c_cases[i].get("word_miss_effective") is not None
+    ]
+    wm_dropped = len(scored) - len(wm_paired)
+    deltas = [
+        float(c_cases[i]["word_miss_effective"])
+        - float(b_cases[i]["word_miss_effective"])
+        for i in wm_paired
+    ]
+    b_perf = base["overall"].get("perfect_rate")
+    c_perf = cand["overall"].get("perfect_rate")
+    b_wm = base["overall"].get("word_miss_mean")
+    c_wm = cand["overall"].get("word_miss_mean")
+    # A pre-metric baseline has no penalised rate at all; treating a missing
+    # key as 0.0 would report every candidate as a regression.
+    b_pen = base["overall"].get("word_miss_penalized_rate")
+    c_pen = cand["overall"].get("word_miss_penalized_rate")
+    print(
+        f"perfect_rate: {b_perf} -> {c_perf}   "
+        f"word_miss_mean: {b_wm} -> {c_wm}   "
+        f"penalized_rate: {b_pen} -> {c_pen}"
+    )
+    print(
+        f"word-miss pairs: {len(wm_paired)} of {len(scored)} scored "
+        f"({wm_dropped} dropped — degenerate or unmeasured in at least one run)"
+    )
+    wp, n_nz = _wilcoxon_signed_rank_p(deltas)
+    mean_delta = round(_mean(deltas), 4) if deltas else None
+    if wp is None:
+        print(
+            f"Wilcoxon: UNDERPOWERED — only {n_nz} non-zero delta(s) "
+            f"(mean delta {mean_delta}); no conclusion"
+        )
+    else:
+        note = "" if wp < 0.05 else "  ← NOT significant"
+        if n_nz < 25:
+            note += "  [advisory only: <25 non-zero deltas]"
+        print(
+            f"Wilcoxon signed-rank p={wp:.4f} on {n_nz} non-zero delta(s), "
+            f"mean delta {mean_delta} (negative = improvement){note}"
+        )
+
     for tier in sorted(set(base["by_tier"]) | set(cand["by_tier"])):
         ba = base["by_tier"].get(tier, {}).get("acc@1")
         ca = cand["by_tier"].get(tier, {}).get("acc@1")
@@ -3692,8 +4235,29 @@ def cmd_compare(args: argparse.Namespace) -> int:
         return 0
 
     failures: list[str] = []
-    if c_acc is None or b_acc is None or c_acc <= b_acc:
-        failures.append(f"overall acc@1 did not improve ({b_acc} -> {c_acc})")
+    # PRIMARY is now perfect_rate + Wilcoxon (METRIC.md): acc@1 forgives a
+    # 1-word displacement, which is exactly the defect being optimised away.
+    # acc@1 is demoted to a GUARDRAIL — it catches a locator that "wins" on
+    # word-miss by drawing wrong-line boxes.
+    if c_perf is None or b_perf is None or c_perf <= b_perf:
+        failures.append(f"perfect_rate did not improve ({b_perf} -> {c_perf})")
+    if wp is None:
+        failures.append(
+            f"Wilcoxon underpowered ({n_nz} non-zero paired delta(s), need 10) "
+            f"— cannot conclude the word-miss change is real"
+        )
+    elif wp >= 0.05:
+        failures.append(f"Wilcoxon signed-rank p={wp:.4f} is not significant")
+    if b_pen is not None and c_pen is not None and c_pen > b_pen:
+        failures.append(
+            f"word_miss_penalized_rate increased {b_pen} -> {c_pen}"
+        )
+    if c_acc is None or b_acc is None:
+        failures.append(f"overall acc@1 missing ({b_acc} -> {c_acc})")
+    elif (b_acc - c_acc) * 100.0 > 2.0:
+        failures.append(
+            f"overall acc@1 regressed {b_acc} -> {c_acc} (>2.0 points)"
+        )
     for tier in sorted(set(base["by_tier"]) & set(cand["by_tier"])):
         ba = base["by_tier"][tier].get("acc@1")
         ca = cand["by_tier"][tier].get("acc@1")
@@ -3706,6 +4270,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
     ju = cand["overall"].get("judge_unusable_rate") or 0.0
     if ju > 0.03:
         failures.append(f"judge_unusable rate {ju} exceeds 3%")
+    gu = cand["overall"].get("geom_unconfident_rate") or 0.0
+    if gu > 0.03:
+        failures.append(f"geom_unconfident rate {gu} exceeds 3%")
     golden_path = PROJECT_ROOT / "tests" / "data" / "bbox_golden.json"
     if golden_path.is_file():
         golden_ids = {

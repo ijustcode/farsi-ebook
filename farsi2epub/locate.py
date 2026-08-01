@@ -975,6 +975,58 @@ def _merge_nearby_runs(
     return merged
 
 
+def _split_tall_runs(
+    runs: list[tuple[int, int]],
+    row_ink: np.ndarray,
+    h0: float,
+    depth: int = 3,
+) -> list[tuple[int, int]]:
+    """Split row runs that are tall enough to be two printed lines fused.
+
+    MEASURED (bachehaye_ghali p64): two adjacent printed lines whose ascenders
+    and descenders touch produce ONE 62px row run against a 27px reference, so
+    the detector returns 28 lines where the page prints 29. The judge's
+    Needleman-Wunsch line alignment reconciles that deficit by DROPPING a line
+    in the middle of the page, which shifts every reading line between the drop
+    and the merge one printed line up — the box is then read out against the
+    wrong ink and a perfectly-placed box grades as catastrophically wrong.
+
+    `h0` must come from the UNMERGED runs so a merge cannot inflate the
+    reference it is being measured against. A run is split at the minimum-ink
+    row of its middle third, but only when that row is a genuine VALLEY (at
+    most half the run's median ink) and both halves are still plausible lines
+    (>= 0.5 * h0). A heading, a drop cap or a rule is legitimately tall and has
+    no valley, so it is left alone.
+    """
+    if h0 <= 0 or depth <= 0:
+        return list(runs)
+    out: list[tuple[int, int]] = []
+    for y0, y1 in runs:
+        h = y1 - y0
+        if h <= 1.6 * h0:
+            out.append((y0, y1))
+            continue
+        band0 = y0 + h // 3
+        band1 = y0 + (2 * h) // 3
+        if band1 <= band0:
+            out.append((y0, y1))
+            continue
+        band = row_ink[band0:band1]
+        cut = band0 + int(np.argmin(band))
+        median_ink = float(np.median(row_ink[y0:y1]))
+        if (
+            float(row_ink[cut]) > 0.5 * median_ink
+            or cut - y0 < 0.5 * h0
+            or y1 - cut < 0.5 * h0
+        ):
+            out.append((y0, y1))
+            continue
+        out.extend(
+            _split_tall_runs([(y0, cut), (cut, y1)], row_ink, h0, depth - 1)
+        )
+    return out
+
+
 def _scan_page_lines(page: fitz.Page) -> list[_ScanLine]:
     """Detect text-line and visual-word rectangles directly from page pixels.
 
@@ -992,9 +1044,16 @@ def _scan_page_lines(page: fitz.Page) -> list[_ScanLine]:
     xlo = int(w * _SCAN_X_MARGIN)
     xhi = int(w * (1.0 - _SCAN_X_MARGIN))
     min_row_ink = max(3, int(w * 0.003))
-    active_rows = ink[:, xlo:xhi].sum(axis=1) >= min_row_ink
-    row_runs = _merge_nearby_runs(
-        _true_runs(active_rows), max_gap=_SCAN_MAX_BLANK_ROWS
+    row_ink = ink[:, xlo:xhi].sum(axis=1)
+    active_rows = row_ink >= min_row_ink
+    raw_runs = _true_runs(active_rows)
+    # Reference line height from the RAW runs: a fused pair is one run here
+    # too, but it is a single outlier among ~30, so the median is unaffected.
+    h0 = (
+        float(np.median([e - s for s, e in raw_runs])) if raw_runs else 0.0
+    )
+    row_runs = _split_tall_runs(
+        _merge_nearby_runs(raw_runs, max_gap=_SCAN_MAX_BLANK_ROWS), row_ink, h0
     )
 
     detected: list[_ScanLine] = []
