@@ -2761,8 +2761,10 @@ def _select_saved_report_boxes(
     if args._report_refine and args._report_refine_algorithm is None:
         # Reports predating explicit algorithm provenance used the established
         # local matcher. This labels their already-serialized treatment; the
-        # regrade still bypasses every refiner and cache.
-        args._report_refine_algorithm = review.DEFAULT_BBOX_REFINE_ALGORITHM
+        # regrade still bypasses every refiner and cache. Pinned to legacy_v1
+        # rather than the current default: these reports are historical fact,
+        # so moving the default must never retro-label how they were produced.
+        args._report_refine_algorithm = locate.REFINE_ALGORITHM_LEGACY
     args._regrade_truth_sha1 = source_run.get("truth_sha1")
     warnings.append(
         f"instrument-only regrade: reused {len(live)} serialized boxes from "

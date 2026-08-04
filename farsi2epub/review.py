@@ -154,14 +154,14 @@ def _json_for_script(obj) -> Markup:
 _LOCATE_VLM_LEGACY_CACHE_VERSION = 3
 _LOCATE_VLM_CACHE_VERSION = 4
 
-# Public review-facing identities for the established control and the opt-in
-# context-anchor pilot.  Keep these sourced from locate.py so the CLI, review
-# cache, and offline scorer cannot invent mismatched spellings.
+# Public review-facing identities for the production context-anchor derivation
+# and the superseded legacy control.  Keep these sourced from locate.py so the
+# CLI, review cache, and offline scorer cannot invent mismatched spellings.
 BBOX_REFINE_ALGORITHMS = (
     locate_mod.REFINE_ALGORITHM_LEGACY,
     locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR,
 )
-DEFAULT_BBOX_REFINE_ALGORITHM = locate_mod.REFINE_ALGORITHM_LEGACY
+DEFAULT_BBOX_REFINE_ALGORITHM = locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR
 
 
 def _validate_bbox_refine_algorithm(algorithm: str) -> str:

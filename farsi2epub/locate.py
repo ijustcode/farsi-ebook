@@ -2028,7 +2028,7 @@ def refine_scan_boxes(
     boxes: list[Optional[dict]],
     read_strips: Callable[[list[bytes]], list[list[str]]],
     *,
-    algorithm: str = REFINE_ALGORITHM_LEGACY,
+    algorithm: str = REFINE_ALGORITHM_CONTEXT_ANCHOR,
 ) -> list[Optional[dict]]:
     """Refine Tier C boxes using a VLM as a local transcription oracle.
 
@@ -2037,12 +2037,12 @@ def refine_scan_boxes(
     (caller-injected — locate.py never talks to an LLM) transcribe every
     unique strip in ONE batched call, then deterministically re-align the
     query inside the reading and snap it onto the detected word rectangles.
-    ``algorithm`` defaults to ``legacy_v1``, the established local matcher.
-    The opt-in ``context_anchor_v1`` pilot makes exact-span queries identify
+    ``algorithm`` defaults to ``context_anchor_v1``: exact-span queries identify
     their occurrence with stable neighbouring Markdown words while boxing only
-    the query/alternate target. Pilot ambiguity is rejected; a context
+    the query/alternate target. Ambiguity is rejected; a context
     no-match may use the legacy matcher only for a target of at least three
-    words. Both modes keep the same single caller-injected reader callback and
+    words. ``legacy_v1`` remains selectable as the superseded control. Both
+    modes keep the same single caller-injected reader callback and
     widen failures to +-2 lines for one more batched call.
 
     Returns per query a box with source "scan_vlm", an ordered per-line

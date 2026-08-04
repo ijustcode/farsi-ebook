@@ -10,6 +10,7 @@ making a network call.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import tempfile
@@ -106,31 +107,34 @@ def _check_cache_split() -> None:
 
             # Changing the derivation algorithm invalidates only the cheap
             # final box. The paid strip observation key remains identical and
-            # the pilot can replay it without creating a client.
-            pilot = review._ScanBoxRefiner(
+            # the other algorithm can replay it without creating a client.
+            # `online` above is the default (context_anchor_v1), so the
+            # contrast case is the superseded legacy control.
+            alt = review._ScanBoxRefiner(
                 ws,
                 "model-a",
-                algorithm=review.locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR,
+                algorithm=review.locate_mod.REFINE_ALGORITHM_LEGACY,
                 offline=True,
             )
-            assert online._key(1, "الف ب", q1) != pilot._key(1, "الف ب", q1)
+            assert alt.algorithm != review.DEFAULT_BBOX_REFINE_ALGORITHM
+            assert online._key(1, "الف ب", q1) != alt._key(1, "الف ب", q1)
             assert online._observation_key(b"stable-strip-pixels") == (
-                pilot._observation_key(b"stable-strip-pixels")
+                alt._observation_key(b"stable-strip-pixels")
             )
-            pilot._get_client = lambda: (_ for _ in ()).throw(
-                AssertionError("pilot replay created a client")
+            alt._get_client = lambda: (_ for _ in ()).throw(
+                AssertionError("legacy replay created a client")
             )
-            got = pilot.replay(1, "الف ب", [q1], [dict(SCAN)])
+            got = alt.replay(1, "الف ب", [q1], [dict(SCAN)])
             assert got[0] and got[0]["source"] == "scan_vlm"
             assert calls == [(1, "model-a")]
-            pilot_entry = pilot._load_cache()[pilot._key(1, "الف ب", q1)]
+            alt_entry = alt._load_cache()[alt._key(1, "الف ب", q1)]
             assert (
-                pilot_entry["algorithm"]
-                == review.locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR
+                alt_entry["algorithm"]
+                == review.locate_mod.REFINE_ALGORITHM_LEGACY
             )
             assert (
                 REFINE_ALGORITHMS_SEEN[-1]
-                == review.locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR
+                == review.locate_mod.REFINE_ALGORITHM_LEGACY
             )
 
             # Review startup must keep the refiner alive without a key. Its
@@ -415,9 +419,18 @@ def _check_algorithm_contract_and_cli() -> None:
         review.locate_mod.REFINE_ALGORITHM_LEGACY,
         review.locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR,
     )
+    # context_anchor_v1 is the production default; legacy_v1 stays selectable.
     assert (
         review.DEFAULT_BBOX_REFINE_ALGORITHM
-        == review.locate_mod.REFINE_ALGORITHM_LEGACY
+        == review.locate_mod.REFINE_ALGORITHM_CONTEXT_ANCHOR
+    )
+    # The refiner's own keyword default must agree with the review-level
+    # constant, so a caller that passes neither cannot get the superseded path.
+    assert (
+        inspect.signature(review.locate_mod.refine_scan_boxes)
+        .parameters["algorithm"]
+        .default
+        == review.DEFAULT_BBOX_REFINE_ALGORITHM
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -437,7 +450,7 @@ def _check_algorithm_contract_and_cli() -> None:
     assert "--bbox-refine-algorithm" in help_result.output
     assert "legacy_v1" in help_result.output
     assert "context_anchor_v1" in help_result.output
-    assert "default: legacy_v1" in help_result.output
+    assert "default: context_anchor_v1" in help_result.output
 
 
 def main() -> None:

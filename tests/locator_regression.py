@@ -661,8 +661,9 @@ def _check_refine_plumbing(root: Path) -> None:
         # Word-level snapping: a fraction of the line, not the whole line.
         assert (box["x1"] - box["x0"]) < 0.8 * (line_frac["x1"] - line_frac["x0"])
 
-        # The established matcher is the explicit default/control. An exact
-        # Query.span alone must not silently activate the context pilot.
+        # context_anchor_v1 is the PRODUCTION default: an exact Query.span
+        # activates context-anchored identity with no flag. legacy_v1 remains
+        # selectable as the superseded control and must stay inert when chosen.
         exact_q = Query(q.text, span)
         contextual = _context_variants(md, exact_q)
         assert contextual
@@ -685,6 +686,20 @@ def _check_refine_plumbing(root: Path) -> None:
             mode_calls.append(("read", len(strips)))
             return [list(control_reading) for _ in strips]
 
+        default_box = refine_scan_boxes(
+            root / "source.pdf",
+            8,
+            md,
+            [exact_q],
+            [scan_box],
+            _mode_reader,
+        )[0]
+        assert REFINE_ALGORITHM_CONTEXT_ANCHOR == "context_anchor_v1"
+        # No algorithm argument -> the context derivation must be the one that ran.
+        assert default_box is not None and default_box["debug"]["context"] is True
+        assert mode_calls == [("read", 1)]
+
+        mode_calls.clear()
         control_box = refine_scan_boxes(
             root / "source.pdf",
             8,
@@ -692,6 +707,7 @@ def _check_refine_plumbing(root: Path) -> None:
             [exact_q],
             [scan_box],
             _mode_reader,
+            algorithm=REFINE_ALGORITHM_LEGACY,
         )[0]
         assert REFINE_ALGORITHM_LEGACY == "legacy_v1"
         assert control_box is not None
@@ -708,8 +724,9 @@ def _check_refine_plumbing(root: Path) -> None:
             _mode_reader,
             algorithm=REFINE_ALGORITHM_CONTEXT_ANCHOR,
         )[0]
-        assert REFINE_ALGORITHM_CONTEXT_ANCHOR == "context_anchor_v1"
         assert pilot_box is not None and pilot_box["debug"]["context"] is True
+        # Explicit selection and the default must agree exactly.
+        assert pilot_box["debug"]["context"] == default_box["debug"]["context"]
         assert mode_calls == [("read", 1)]
 
         try:

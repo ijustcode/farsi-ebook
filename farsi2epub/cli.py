@@ -221,7 +221,7 @@ main.add_command(qc_cmd, name="qc")
     type=click.Choice(review.BBOX_REFINE_ALGORITHMS, case_sensitive=True),
     default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
     show_default=True,
-    help="Scan-refinement derivation: legacy_v1 is the control; context_anchor_v1 is the opt-in pilot.",
+    help="Scan-refinement derivation: context_anchor_v1 is the default; legacy_v1 is the superseded control.",
 )
 @click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
 def review_cmd(
