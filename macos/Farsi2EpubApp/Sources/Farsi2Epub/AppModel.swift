@@ -283,12 +283,18 @@ enum PipelineCommands {
         return CommandStep(label: mode == "auto" ? "Running quality control" : "Opening manual QC", arguments: args)
     }
 
-    static func review(slug: String, all: Bool, refine: Bool, model: String, background: Bool = false) -> CommandStep {
+    /// `algorithm` empty means "inherit whatever the CLI's default is", the
+    /// same contract `model` uses above. Do NOT default it to a literal
+    /// algorithm name here: that would hardcode the default in a second place
+    /// and silently drift the moment `review.DEFAULT_BBOX_REFINE_ALGORITHM`
+    /// moves.
+    static func review(slug: String, all: Bool, refine: Bool, model: String, algorithm: String = "", background: Bool = false) -> CommandStep {
         var args = ["review", slug]
         if all { args.append("--all") }
         if background { args.append("--background") }
         if !refine { args.append("--no-bbox-refine") }
         if !model.isEmpty { args += ["--bbox-refine-model", model] }
+        if refine && !algorithm.isEmpty { args += ["--bbox-refine-algorithm", algorithm] }
         return CommandStep(label: "Opening manual review", arguments: args)
     }
 }

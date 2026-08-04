@@ -271,6 +271,9 @@ struct ReviewView: View {
     @State private var allPages = true
     @State private var refine = true
     @State private var refineModel = ""
+    // "" = inherit the CLI default, so the picker cannot pin a stale algorithm
+    // if the production default moves.
+    @State private var refineAlgorithm = ""
 
     var body: some View {
         Form {
@@ -279,6 +282,11 @@ struct ReviewView: View {
                 Text(allPages ? "No review budget: every flagged page is surfaced." : "Budgeted review: only the worst fifth is surfaced; the remainder is marked skipped.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Refine scan-page boxes with the vision model", isOn: $refine)
                 TextField("Box-refinement model override (optional)", text: $refineModel).disabled(!refine)
+                Picker("Box-refinement algorithm", selection: $refineAlgorithm) {
+                    Text("Context anchor — default").tag("")
+                    Text("Legacy — superseded control").tag("legacy_v1")
+                }.disabled(!refine)
+                Text("Both algorithms reuse the same cached strip readings, so switching costs nothing once a page has been read. Legacy is kept for A/B comparison only.").font(.caption).foregroundStyle(.secondary)
             }
             HStack {
                 Button("Server Status") { simple(["review", book.slug, "--status"], "Checking review server") }
@@ -291,7 +299,7 @@ struct ReviewView: View {
     }
 
     private func openReview() {
-        runner.start(steps: [PipelineCommands.review(slug: book.slug, all: allPages, refine: refine, model: refineModel)], model: model)
+        runner.start(steps: [PipelineCommands.review(slug: book.slug, all: allPages, refine: refine, model: refineModel, algorithm: refineAlgorithm)], model: model)
     }
     private func simple(_ args: [String], _ label: String) {
         runner.start(steps: [CommandStep(label: label, arguments: args)], model: model)

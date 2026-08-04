@@ -23,8 +23,10 @@ launched elsewhere, choose the repository folder at the bottom of the sidebar.
   resolution, and model override.
 - Automated QC with page range, full/risk-selected coverage, one-click
   noninteractive execution, and pending-suggestion replacement controls.
-- Manual review with full/budgeted selection and bbox-refinement controls, plus
-  server status, stop, and decision reset.
+- Manual review with full/budgeted selection and bbox-refinement controls
+  (on/off, model override, and algorithm choice — context anchor by default,
+  legacy available as the superseded control), plus server status, stop, and
+  decision reset.
 - Build and open the resulting EPUB.
 
 The manual review remains the project’s purpose-built browser UI; the native app
