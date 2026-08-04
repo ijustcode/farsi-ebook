@@ -2,6 +2,8 @@
 
 Convert Farsi (Persian) PDF books into clean, right-to-left EPUB 3 ebooks. PDF text extraction is notoriously unreliable for Persian — broken word ordering, mangled ligatures, lost ZWNJ — so instead of extracting text, farsi2epub renders each page to an image and has a Claude vision model transcribe it. Every page is then checked by deterministic validators, optionally reviewed by an LLM QC pass and a human in a local web UI, and finally assembled into an RTL EPUB with embedded Vazirmatn fonts. It works on scanned and digital PDFs alike.
 
+![farsi2epub pipeline architecture](architectural-diagram.png)
+
 ## macOS app
 
 There is also a native SwiftUI app that covers the complete workflow and the
