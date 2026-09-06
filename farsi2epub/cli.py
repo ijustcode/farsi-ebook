@@ -206,23 +206,15 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
 @click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
 @click.option("--stop", "stop_server", is_flag=True, help="Stop a running review server for this workspace.")
-@click.option(
-    "--bbox-refine/--no-bbox-refine",
-    "bbox_refine",
-    default=True,
-    help="Refine scan-located finding boxes with a VLM strip reader (results "
-    "cached per book; without ANTHROPIC_API_KEY, cached evidence is replayed "
-    "and uncached boxes stay plain).",
-)
-@click.option("--bbox-refine-model", "bbox_refine_model", default=MODEL_STRONG, show_default=True, help="Model used for bbox-refinement strip reading.")
-@click.option(
-    "--bbox-refine-algorithm",
-    "bbox_refine_algorithm",
-    type=click.Choice(review.BBOX_REFINE_ALGORITHMS, case_sensitive=True),
-    default=review.DEFAULT_BBOX_REFINE_ALGORITHM,
-    show_default=True,
-    help="Scan-refinement derivation: context_anchor_v1 is the default; legacy_v1 is the superseded control.",
-)
+@click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default=None,
+              help="Image evidence acquisition: auto or cached evidence only (default: auto).")
+@click.option("--bbox-model", default=None, help="Image region reader model (default: Sonnet).")
+@click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5.0, show_default=True,
+              help="Maximum USD reserved for image evidence acquisition in this review run.")
+@click.option("--bbox-refine/--no-bbox-refine", default=None, hidden=True,
+              help="Deprecated aliases for --bbox-mode auto/offline.")
+@click.option("--bbox-refine-model", default=None, hidden=True)
+@click.option("--bbox-refine-algorithm", default=None, hidden=True)
 @click.option("--_child", "is_child", is_flag=True, hidden=True, help="Internal: re-entry point for a detached background server.")
 def review_cmd(
     slug: str,
@@ -231,12 +223,33 @@ def review_cmd(
     background: bool,
     status: bool,
     stop_server: bool,
-    bbox_refine: bool,
-    bbox_refine_model: str,
-    bbox_refine_algorithm: str,
+    bbox_mode: str | None,
+    bbox_model: str | None,
+    bbox_max_cost: float,
+    bbox_refine: bool | None,
+    bbox_refine_model: str | None,
+    bbox_refine_algorithm: str | None,
     is_child: bool,
 ):
     """Launch the review workflow for workspace SLUG."""
+    if bbox_refine_algorithm is not None:
+        raise click.UsageError("Live bbox algorithm selection was removed. Use tests/bbox_score.py for historical offline comparisons.")
+    if bbox_refine is not None:
+        alias_mode = "auto" if bbox_refine else "offline"
+        if bbox_mode is not None and bbox_mode != alias_mode:
+            raise click.UsageError("Conflicting --bbox-mode and deprecated refinement flag")
+        bbox_mode = alias_mode
+        click.echo(f"Deprecated refinement flag: use --bbox-mode {alias_mode}; unsupported boxes remain unresolved.", err=True)
+    if bbox_refine_model is not None:
+        if bbox_model is not None and bbox_model != bbox_refine_model:
+            raise click.UsageError("Conflicting bbox model options")
+        bbox_model = bbox_refine_model
+        click.echo("--bbox-refine-model is deprecated; use --bbox-model.", err=True)
+    bbox_mode = bbox_mode or "auto"
+    bbox_model = bbox_model or MODEL_STRONG
+    import math
+    if not math.isfinite(bbox_max_cost):
+        raise click.UsageError("--bbox-max-cost must be finite")
     ws = _load_workspace(slug)
     if reset:
         if all_pages:
@@ -289,9 +302,9 @@ def review_cmd(
             review.run_review(
                 ws,
                 budget_all=all_pages,
-                bbox_refine=bbox_refine,
-                bbox_refine_model=bbox_refine_model,
-                bbox_refine_algorithm=bbox_refine_algorithm,
+                bbox_mode=bbox_mode,
+                bbox_model=bbox_model,
+                bbox_max_cost=bbox_max_cost,
             )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
@@ -315,9 +328,9 @@ def review_cmd(
             url = review.launch_review_background(
                 ws,
                 budget_all=all_pages,
-                bbox_refine=bbox_refine,
-                bbox_refine_model=bbox_refine_model,
-                bbox_refine_algorithm=bbox_refine_algorithm,
+                bbox_mode=bbox_mode,
+                bbox_model=bbox_model,
+                bbox_max_cost=bbox_max_cost,
             )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -331,9 +344,9 @@ def review_cmd(
         review.run_review(
             ws,
             budget_all=all_pages,
-            bbox_refine=bbox_refine,
-            bbox_refine_model=bbox_refine_model,
-            bbox_refine_algorithm=bbox_refine_algorithm,
+            bbox_mode=bbox_mode,
+            bbox_model=bbox_model,
+            bbox_max_cost=bbox_max_cost,
         )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")

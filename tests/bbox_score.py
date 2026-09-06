@@ -88,7 +88,8 @@ import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from farsi2epub import locate, placement, review  # noqa: E402
+from historical import locate, placement, review  # noqa: E402
+# This is the frozen v5 instrument. New audited geometry uses bbox_metrics.py.
 
 # The geometry/metric core now LIVES IN PRODUCTION (farsi2epub/placement.py) so
 # the review UI can score boxes live against the same code this harness grades
@@ -124,7 +125,7 @@ def _llm():
     actually taken. --judge cached / --judge deterministic never call the API,
     and importing the SDK costs minutes of wall clock when the filesystem is
     under pressure, so the scorer must not pay it just to grade from cache."""
-    from farsi2epub import llm as _m
+    from historical import llm as _m
 
     return _m
 from farsi2epub.config import MODEL_STRONG  # noqa: E402

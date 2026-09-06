@@ -22,9 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from click.testing import CliRunner  # noqa: E402
 
-from farsi2epub import review  # noqa: E402
+from historical import review  # noqa: E402
 from farsi2epub.cli import main as cli_main  # noqa: E402
-from farsi2epub.locate import Query  # noqa: E402
+from historical.locate import Query  # noqa: E402
 
 
 SCAN = {"x0": 0.1, "y0": 0.2, "x1": 0.2, "y1": 0.3, "source": "scan"}
@@ -447,10 +447,10 @@ def _check_algorithm_contract_and_cli() -> None:
 
     help_result = CliRunner().invoke(cli_main, ["review", "--help"])
     assert help_result.exit_code == 0, help_result.output
-    assert "--bbox-refine-algorithm" in help_result.output
-    assert "legacy_v1" in help_result.output
-    assert "context_anchor_v1" in help_result.output
-    assert "default: context_anchor_v1" in help_result.output
+    assert "--bbox-mode" in help_result.output
+    assert "--bbox-model" in help_result.output
+    assert "--bbox-max-cost" in help_result.output
+    assert "--bbox-refine-algorithm" not in help_result.output
 
 
 def main() -> None:

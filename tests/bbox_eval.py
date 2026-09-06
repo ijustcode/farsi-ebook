@@ -35,9 +35,9 @@ import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from farsi2epub import llm, review  # noqa: E402
+from historical import llm, review  # noqa: E402
 from farsi2epub.config import MODEL_STRONG  # noqa: E402
-from farsi2epub.review import (  # noqa: E402
+from historical.review import (  # noqa: E402
     _build_boxes,
     _cap_words,
     _read_sidecar,

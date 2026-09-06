@@ -2,6 +2,14 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## Consolidated placement update (2026-09-05)
+
+Current code has only `match` and `scan` geometry sources, then unresolved. The detailed tier and v5 sections below describe historical controls and must not be used to restore live fallbacks. Current contracts, limitations, migration, and experimental status are in `docs/bbox-consolidation.md`. Historical locator/scorer/review snapshots are under `tests/historical`; production must never import them.
+
+Review options are `--bbox-mode auto|offline`, `--bbox-model`, and `--bbox-max-cost` (default $5 per review process, separate from transcription/QC budgets). Legacy refine flags are deprecated aliases; explicit legacy algorithm selection is rejected. QC issues no longer request/store coordinates; old sidecar bboxes are ignored. Live chips show evidence status, not word-miss accuracy. Full-passage evaluation with independently audited word rectangles is `tests/bbox_metrics.py` (v6); keep v5 exact-box results separate. New tests: `tests/consolidated_bbox_regression.py`, plus benchmark/metric regression scripts when available.
+
+The candidate has not passed the promotion gate. Do not call an export template audited truth, a box count accuracy, or a change of instrument a locator improvement.
+
 ## What this is
 
 `farsi2epub` converts Farsi (Persian) PDF books into RTL EPUB 3 ebooks using Claude vision models to transcribe page images. It is a CLI (`click`-based) installed as an editable package.
@@ -29,7 +37,7 @@ The CLI stages operate on a per-book workspace identified by a slug; QC and huma
 farsi2epub analyze <pdf> [--slug s] [--pages 3-10] [--force]   # create workspace, classify PDF, estimate cost
 farsi2epub transcribe <slug> [--pages ...] [--force] [--max-cost N] [--concurrency 4] [--model ...] [--qc auto|manual|skip|ask] [--yes]  # --yes skips the auto-QC cost prompt
 farsi2epub qc <slug> [--mode auto|manual] [--all] [--yes] [--force] [--pages ...]  # auto = LLM verifier pass (suggest-only), manual = review UI
-farsi2epub review <slug> [--all] [--reset] [--background|--status|--stop] [--no-bbox-refine] [--bbox-refine-model ...] [--bbox-refine-algorithm legacy_v1|context_anchor_v1]  # local web UI for human correction; -b detaches the server
+farsi2epub review <slug> [--all] [--reset] [--background|--status|--stop] [--bbox-mode auto|offline] [--bbox-model ...] [--bbox-max-cost N]  # local web UI for human correction; -b detaches the server
 farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 ```
 

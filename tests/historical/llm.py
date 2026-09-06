@@ -13,50 +13,11 @@ import anthropic
 import pydantic
 from pydantic import BaseModel, Field
 
-from .config import PRICES
+from farsi2epub.config import PRICES
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 MAX_OUTPUT_TOKENS = 8000
-
-REGION_OUTPUT_TOKENS = 4096
-REGION_READER_VERSION = 1
-READ_REGIONS_SYSTEM = """Read unmarked crops of printed Persian text literally.
-Each numbered region is independent. Echo its region_index. Return one entry
-per physically printed line, in reading order. Do not correct spelling,
-modernize, invent letters, or infer missing text from context. Set legible=false
-when you cannot read every word reliably. Set complete=false if a word or line
-is clipped by the crop. Preserve uncertainty; never give a forced best guess.
-Use Persian letterforms, preserve digits and word boundaries. Return no image
-coordinates. These crops may contain one word, joined word fragments, or lines.
-"""
-
-
-class RegionReading(BaseModel):
-    region_index: int
-    lines: list[str]
-    legible: bool
-    complete: bool
-
-
-class RegionReadings(BaseModel):
-    regions: list[RegionReading]
-
-
-def read_regions(client, pngs: list[bytes], model: str, page_no: int):
-    """One billable attempt; reservation and retries belong to the caller."""
-    content = []
-    for i, png in enumerate(pngs):
-        content.extend([{"type": "text", "text": f"Region {i}:"}, _image_block(png)])
-    kwargs = {"thinking": {"type": "disabled"}} if model.startswith("claude-sonnet-5") else {}
-    response = client.messages.parse(
-        model=model, max_tokens=REGION_OUTPUT_TOKENS,
-        system=READ_REGIONS_SYSTEM, messages=[{"role": "user", "content": content}],
-        output_format=RegionReadings, **kwargs)
-    usage = {"input_tokens": response.usage.input_tokens,
-             "output_tokens": response.usage.output_tokens}
-    # Preserve usage even when output is unparseable, so the caller settles it.
-    return response.parsed_output, usage, cost_of(response.usage, model)
 
 T = TypeVar("T")
 
@@ -182,14 +143,8 @@ def load_env() -> None:
             os.environ[key] = value
 
 
-def get_client() -> anthropic.Anthropic:
-    load_env()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "No Anthropic API key found. Set ANTHROPIC_API_KEY in your environment "
-            "or put ANTHROPIC_API_KEY=sk-ant-... in a .env file at the project root."
-        )
-    return anthropic.Anthropic()
+def get_client():
+    raise RuntimeError("Historical readers are offline-only; use the consolidated scan service for acquisition")
 
 
 def cost_of(usage, model: str) -> float:
@@ -265,7 +220,12 @@ class QCIssue(BaseModel):
         description="Short explanation of the problem written entirely in natural Persian (Farsi)."
     )
     snippet: str = Field(description="The affected text as it currently appears in the transcription (verbatim excerpt).")
-
+    bbox: Optional[list[int]] = Field(
+        default=None,
+        description="Approximate bounding box [x0, y0, x1, y1] of the affected region on the page image, "
+        "in 0-1000 normalized coordinates (origin top-left, x rightward, y downward). "
+        "null if the issue cannot be localized.",
+    )
 
 
 class QCReport(BaseModel):
@@ -280,7 +240,7 @@ class QCReport(BaseModel):
 QC_SYSTEM = """You are a meticulous quality-control verifier for Persian (Farsi) book transcriptions. You receive one page of a book as an image, followed by the current Markdown transcription of that page. Compare them character by character and report real discrepancies.
 
 VERIFY IN PARTICULAR
-- Completeness: check that every paragraph, dialogue exchange, and verse line visible in the image is present in the transcription — read the whole page image top to bottom and confirm nothing was skipped, even a single missing line or a dialogue turn. Report any gap as a "missing_text" issue, with the surrounding text as the snippet. Placement is handled independently.
+- Completeness: check that every paragraph, dialogue exchange, and verse line visible in the image is present in the transcription — read the whole page image top to bottom and confirm nothing was skipped, even a single missing line or a dialogue turn. Report any gap as a "missing_text" issue, with the surrounding text as the snippet and a bbox for the missing region when you can localize it.
 - Headings: every chapter/page title, boxed or banner section title (even inside decorative frames), and bold standalone label on the page must appear as a `#` / `##` / `###` line. Report missing or wrongly-leveled headings. Running headers at the extreme top/bottom margin and page numbers are correctly omitted — do not report those.
 - Words containing ه at a joining boundary (e.g. علاقه‌مند، خانه‌ها): verify the exact letters and the zero-width non-joiner (U+200C) usage against the image.
 - Footnotes: every superscript marker printed in the body must appear as [^n] in the text, with a matching [^n]: definition at the end of the page.
@@ -294,7 +254,7 @@ RULES
 - Quotation marks: Persian guillemets «…» are the standard Persian quotation marks; differences or conversions between «…», "…", '…' or other quote styles are NEVER an issue — do not report them and do not change quote characters in suggested corrections.
 - verdict "pass" requires zero real issues; otherwise "fail" with every issue listed.
 - suggested_text_md: only when verdict is "fail" — the full corrected page Markdown. Change ONLY what is wrong; keep all correct text byte-for-byte identical.
-- Report textual issues only. Do not estimate image coordinates."""
+- bbox: for every issue, estimate its bounding box on the page image — the box containing the affected text, as [x0, y0, x1, y1] scaled 0-1000 (origin top-left, x rightward, y downward). A loose box covering the right line(s) is fine. Use null only when the issue has no specific location on the page (e.g. missing_text at an unknown spot)."""
 
 
 def qc_verify_page(

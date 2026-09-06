@@ -22,7 +22,7 @@ import fitz
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from farsi2epub.locate import (  # noqa: E402
+from historical.locate import (  # noqa: E402
     Query,
     REFINE_ALGORITHM_CONTEXT_ANCHOR,
     REFINE_ALGORITHM_LEGACY,
@@ -54,7 +54,7 @@ from farsi2epub.locate import (  # noqa: E402
     locate_queries,
     refine_scan_boxes,
 )
-from farsi2epub.review import (  # noqa: E402
+from historical.review import (  # noqa: E402
     _LOCATE_VLM_CACHE_VERSION,
     _PAGE_TEMPLATE,
     _ScanBoxRefiner,
@@ -811,11 +811,11 @@ def _check_read_strips_live(root: Path) -> None:
     from page 8, then refine_scan_boxes reusing that reading. This is explicitly
     opt-in so a routine offline regression can never bill merely because the
     repository has an API key in .env."""
-    from farsi2epub import llm
+    from historical import llm
     from farsi2epub.config import MODEL_STRONG
 
-    if os.environ.get("RUN_LIVE_LLM_TESTS") != "1":
-        print("live read_strips check: SKIPPED (set RUN_LIVE_LLM_TESTS=1)")
+    if True:  # Historical implementations are now offline-only.
+        print("live historical read_strips check: DISABLED (offline control)")
         return
     llm.load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):

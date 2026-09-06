@@ -370,24 +370,6 @@ def _qc_per_page_cost() -> float:
     return (QC_TOKENS_IN / 1_000_000) * prices["in"] + (QC_TOKENS_OUT / 1_000_000) * prices["out"]
 
 
-def _clean_bbox(b) -> Optional[list[int]]:
-    """Sanitize a model-reported bbox: must be a 4-item list/tuple of numbers.
-    Values are rounded to ints and clamped to [0, 1000]; the box must still
-    have positive width and height afterwards. Anything else returns None.
-    """
-    if not isinstance(b, (list, tuple)) or len(b) != 4:
-        return None
-    vals: list[int] = []
-    for v in b:
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        vals.append(max(0, min(1000, int(round(v)))))
-    x0, y0, x1, y1 = vals
-    if x0 >= x1 or y0 >= y1:
-        return None
-    return vals
-
-
 def _select_pages(
     ws: Workspace, all_pages: bool, force: bool = False, pages: list[int] | None = None
 ) -> tuple[list[int], list[int]]:
@@ -462,7 +444,6 @@ def _verify_one(ws: Workspace, client, n: int, source_type: str, state: _QCState
                 "type": i.type,
                 "description": i.description,
                 "snippet": i.snippet,
-                "bbox": _clean_bbox(i.bbox),
             }
             for i in report.issues
         ],

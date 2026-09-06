@@ -1,0 +1,13 @@
+{
+  "git_sha": "3704adbbea83190b5f3a916ea4414b005047fbde",
+  "files": {
+    "farsi2epub/locate.py": "356abde32ace034ec419a1ade86aaf6bae013ea3a84f062ac5688c7183baedea",
+    "farsi2epub/placement.py": "d0713f47d43ea5829428f68172ccbdf9a8c9627e9f441ef0ee9602c06b381b91",
+    "farsi2epub/review.py": "a6c2fe1e27869d711bd11d8af9f8e440f7f5c018892a31824730f8012e0e7d4e",
+    "farsi2epub/llm.py": "c673ea8ac1c7a954e9a1f0d0f9c1d1d74ef7732d229ec851f1cbecda085b546a"
+  },
+  "transformations": [
+    "Relative package imports rewritten for offline evaluation namespace",
+    "Historical reader client creation disabled; geometry and v5 scoring unchanged"
+  ]
+}
