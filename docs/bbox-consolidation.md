@@ -19,11 +19,14 @@ The service owns four acquisition workers, per-page work deduplication, pre-disp
 ```bash
 source venv/bin/activate
 farsi2epub review my-book --bbox-mode auto --bbox-max-cost 5
+farsi2epub review my-book --pages 61,128 --bbox-mode auto --bbox-max-cost 1
 farsi2epub review my-book --bbox-mode offline
 farsi2epub review my-book --bbox-model claude-sonnet-5
 ```
 
 `--bbox-refine-model` aliases `--bbox-model`; `--bbox-refine`/`--no-bbox-refine` alias auto/offline, with migration messages. Conflicting aliases are errors. Explicit `--bbox-refine-algorithm` requests fail with an offline-tooling migration message. Detached server arguments use the same new options. Old strip caches use incompatible reading prompts/schema and are not silently certified as the new engine's evidence.
+
+`--pages` selects PDF page numbers for both the UI and background evidence work. It surfaces only those transcribed pages, bypasses risk selection, and does not mark other pages skipped. Stop an existing review process before changing its scope.
 
 ## Measurement artifacts and remaining work
 

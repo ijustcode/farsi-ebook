@@ -202,6 +202,7 @@ main.add_command(qc_cmd, name="qc")
 @main.command()
 @click.argument("slug")
 @click.option("--all", "all_pages", is_flag=True, help="Surface every flagged page, ignoring the review budget.")
+@click.option("--pages", "pages_spec", default=None, help="Only review and acquire boxes for these PDF pages, e.g. 61,128 or 11-13.")
 @click.option("--reset", "reset", is_flag=True, help="Undo all human review decisions (keeps text edits and .orig.md backups) and exit.")
 @click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
 @click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
@@ -219,6 +220,7 @@ main.add_command(qc_cmd, name="qc")
 def review_cmd(
     slug: str,
     all_pages: bool,
+    pages_spec: str | None,
     reset: bool,
     background: bool,
     status: bool,
@@ -251,6 +253,19 @@ def review_cmd(
     if not math.isfinite(bbox_max_cost):
         raise click.UsageError("--bbox-max-cost must be finite")
     ws = _load_workspace(slug)
+    selected_pages = None
+    if pages_spec is not None:
+        if reset or status or stop_server:
+            raise click.UsageError("--pages applies to launching review, not --reset/--status/--stop")
+        try:
+            selected_pages = parse_pages_spec(pages_spec, ws.meta.get("page_count"))
+        except (ValueError, TypeError) as exc:
+            raise click.UsageError(f"Invalid --pages: {exc}") from exc
+        if not selected_pages:
+            raise click.UsageError("--pages selects no PDF pages")
+        missing = set(selected_pages)-set(ws.pages_done())
+        if missing:
+            raise click.UsageError(f"Selected pages have not been transcribed: {sorted(missing)}")
     if reset:
         if all_pages:
             click.echo("Note: --all is ignored with --reset.")
@@ -305,6 +320,7 @@ def review_cmd(
                 bbox_mode=bbox_mode,
                 bbox_model=bbox_model,
                 bbox_max_cost=bbox_max_cost,
+                pages=selected_pages,
             )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
@@ -313,6 +329,8 @@ def review_cmd(
     # Plain `review <slug>` or `--background`: never start a duplicate server.
     existing = review.read_server_state(ws)
     if existing:
+        if selected_pages is not None:
+            raise click.ClickException(f"A review is already running. Stop it first: farsi2epub review {slug} --stop")
         click.echo(f"Review server already running: {existing['url']} (pid {existing['pid']})")
         if not background:
             try:
@@ -331,6 +349,7 @@ def review_cmd(
                 bbox_mode=bbox_mode,
                 bbox_model=bbox_model,
                 bbox_max_cost=bbox_max_cost,
+                pages=selected_pages,
             )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -347,6 +366,7 @@ def review_cmd(
             bbox_mode=bbox_mode,
             bbox_model=bbox_model,
             bbox_max_cost=bbox_max_cost,
+            pages=selected_pages,
         )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")

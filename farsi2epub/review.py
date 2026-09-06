@@ -825,7 +825,8 @@ def reset_reviews(ws: Workspace) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _select_pages_for_review(ws: Workspace, budget_all: bool = False) -> tuple[list[int], list[int]]:
+def _select_pages_for_review(ws: Workspace, budget_all: bool = False,
+                             pages: Optional[list[int]] = None) -> tuple[list[int], list[int]]:
     """Return (surfaced, skipped) page numbers.
 
     `surfaced` are the pages to actually show in the review UI: those with
@@ -841,6 +842,13 @@ def _select_pages_for_review(ws: Workspace, budget_all: bool = False) -> tuple[l
     surfaced and none are skipped.
     """
     done = ws.pages_done()
+    if pages is not None:
+        missing = set(pages)-set(done)
+        if missing:
+            raise ValueError(f"Selected pages have not been transcribed: {sorted(missing)}")
+        # Explicit scope bypasses risk selection and never marks other pages
+        # skipped or queues their evidence acquisition.
+        return sorted(set(pages)), []
     total = len(done)
     budget = math.ceil(total / 5) if total else 0
     if budget_all:
@@ -2443,6 +2451,7 @@ def launch_review_background(
     bbox_model: str = MODEL_STRONG,
     bbox_max_cost: float = DEFAULT_MAX_COST,
     lan: bool = False,
+    pages: Optional[list[int]] = None,
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
@@ -2459,6 +2468,8 @@ def launch_review_background(
     args = [sys.argv[0], "review", ws.slug, "--_child"]
     if budget_all:
         args.append("--all")
+    if pages is not None:
+        args += ["--pages", ",".join(map(str, pages))]
     args += ["--bbox-mode", bbox_mode, "--bbox-model", bbox_model,
              "--bbox-max-cost", str(bbox_max_cost)]
     if lan:
@@ -2503,8 +2514,9 @@ def run_review(
     bbox_mode: str = "auto",
     bbox_model: str = MODEL_STRONG,
     bbox_max_cost: float = DEFAULT_MAX_COST,
+    pages: Optional[list[int]] = None,
 ) -> None:
-    surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all)
+    surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all, pages=pages)
 
     if not surfaced:
         if skipped:

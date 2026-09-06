@@ -48,7 +48,7 @@ farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 - `analyze --pages` writes `page_range` into `book.yaml`, and `transcribe` falls back to it (`cli.py`: `spec = pages_spec or meta.get("page_range")`). Passing `--pages` explicitly at each stage is the safer habit, since an existing workspace carries whatever range it was created with.
 - `transcribe --qc auto` does **not** QC every page it transcribed. It calls `qc.run_qc(...)` without `all_pages`, so QC risk-selects: forced (needs_review or any validator issue) + risky (`risk_score >= RISK_THRESHOLD`) + a `RANDOM_SAMPLE_FRAC` sample of clean pages. Full coverage is only reachable via the standalone `farsi2epub qc --mode auto --all`.
 - `--max-cost` guards **`transcribe` only**, and is a running total of actual spend checked as pages complete — in-flight pages still finish, so it can overshoot by up to `--concurrency` pages. Auto-QC and bbox refinement bill separately and are not counted against it.
-- `review` has **no `--pages`**; it reviews whatever was transcribed, and surfaces only the worst `ceil(total/5)` flagged pages unless `--all` (the rest are auto-accepted with `review_skipped: true`).
+- `review --pages 61,128` scopes both the UI and bbox acquisition to those transcribed PDF pages without touching other pages. Without `--pages`, review surfaces only the worst `ceil(total/5)` flagged pages unless `--all`.
 - Auto-QC re-runs **skip** pages whose previous suggestion is still pending; `--force` replaces it.
 
 ### Tests
