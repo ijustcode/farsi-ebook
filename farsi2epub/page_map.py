@@ -14,7 +14,7 @@ import fitz
 
 from . import locate
 
-DERIVATION_VERSION = 3
+DERIVATION_VERSION = 4
 
 
 @dataclass
@@ -94,6 +94,8 @@ def target_span(md: str, q: locate.Query, reader: list[str], *,
                 end = start + length
                 if end > len(reader):
                     break
+                if any(not word for word in reader[start:end]):
+                    continue  # unreadable regions cannot bridge a target
                 target = _similar(variant, reader[start:end], fragments)
                 if target < (0.40 if has_context else 0.94):
                     continue
@@ -148,6 +150,35 @@ def supported_groups(line_text: str, groups: list[tuple[str, list[float], str]],
     return out
 
 
+def supported_windows(line_text, groups, line_id, line_evidence):
+    """Certify words by unique exact readings of overlapping physical crops.
+
+    Crop widths never assign identities. Multiword crops share geometry and
+    pay the normal neighboring-word buffer cost.
+    """
+    tokens = locate._norm_words(line_text)
+    joined = "".join(tokens)
+    offsets = [0]
+    for token in tokens:
+        offsets.append(offsets[-1]+len(token))
+    candidates = {}
+    for text, rect, key in groups:
+        reading = "".join(locate._norm_words(text))
+        if not reading:
+            continue
+        starts = [i for i,a in enumerate(offsets[:-1])
+                  if joined.startswith(reading,a) and a+len(reading) in offsets]
+        if len(starts) != 1:
+            continue
+        lo = starts[0]; hi = offsets.index(offsets[lo]+len(reading))
+        for i in range(lo,hi):
+            item = PrintedWord(tokens[i],list(rect),line_id,[line_evidence,key],True,key)
+            if i not in candidates or fitz.Rect(rect).get_area() < fitz.Rect(candidates[i].rect).get_area():
+                candidates[i] = item
+    return [candidates.get(i,PrintedWord(token,[0,0,0,0],line_id,[line_evidence],False))
+            for i,token in enumerate(tokens)]
+
+
 def insertion_slot(md, q, reader):
     before, after = _context(md, q)
     if q.kind != "insertion" or not before or not after:
@@ -193,6 +224,8 @@ def place(md: str, q: locate.Query, words: list[PrintedWord], *,
     rects = [locate._union_rects(by_line[i]) for i in line_ids]
     covered = set()
     for i, word in enumerate(words):
+        if not word.supported:
+            continue
         r = fitz.Rect(word.rect)
         if any((r & b).get_area() > 1e-12 for b in rects):
             covered.add(i)

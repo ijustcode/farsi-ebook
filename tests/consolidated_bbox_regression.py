@@ -14,7 +14,7 @@ import fitz
 from click.testing import CliRunner
 from farsi2epub import locate, review, llm
 from farsi2epub.cli import main
-from farsi2epub.page_map import PrintedWord, place, supported_groups
+from farsi2epub.page_map import PrintedWord, place, supported_groups, supported_windows
 from farsi2epub.scan import PlacementService, Budget
 import bbox_metrics as metric
 
@@ -45,6 +45,18 @@ def run():
     fused = supported_groups("one two three four five six",[("one two three four five six",[.1,.1,.9,.2],"all")],0,"line")
     assert place("",locate.Query("one"),fused).box is None
     assert locate._fold_word("۱۴۰۳") == locate._fold_word("١٤٠٣") == "1403"
+    # A failed region elsewhere cannot veto an independently read passage.
+    partial = [PrintedWord('�',[.1,.01,.9,.05],0,[],False)] + words
+    assert place('alpha beta gamma',locate.Query('beta',(6,10)),partial).box is not None
+    assert place('',locate.Query('alpha beta'),[
+        PrintedWord('alpha',[.7,.1,.8,.2],0),
+        PrintedWord('�',[.5,.1,.6,.2],0,[],False),
+        PrintedWord('beta',[.3,.1,.4,.2],0)]).box is None
+    windows = supported_windows('alpha beta gamma',[
+        ('alpha beta',[.4,.1,.9,.2],'ab'),('gamma',[.1,.1,.3,.2],'g')],0,'line')
+    assert place('',locate.Query('beta'),windows).buffer_before == 1
+    assert not any(w.supported for w in supported_windows('same same',[
+        ('same',[.1,.1,.3,.2],'ambiguous')],0,'line'))
     overlapping = [PrintedWord("آرام",[.7-i*.2,.1,.8-i*.2,.2],0) for i in range(3)]
     assert place("",locate.Query("آرام آرام"),overlapping).status == "unresolved"
     insertion_md = "one two three four five six seven eight nine ten eleven twelve"
@@ -129,14 +141,16 @@ def run():
             doc.new_page(width=100, height=100); doc.save(root/'source.pdf')
         ws = SimpleNamespace(root=root, pdf_path=root/'source.pdf')
         lines = [locate._ScanLine(fitz.Rect(10,10,90,20),
-                 [fitz.Rect(65,10,90,20),fitz.Rect(35,10,60,20),fitz.Rect(10,10,30,20)])]
+                 [fitz.Rect(65,10,90,20),fitz.Rect(35,10,60,20),fitz.Rect(10,10,30,20)]),
+                 locate._ScanLine(fitz.Rect(10,40,90,50),[fitz.Rect(10,40,90,50)])]
         def render(page, rect, factor=1.):
+            if rect.y0 > 30: return b'unreadable'
             if rect.width > 70: return b'alpha beta gamma'
             return b'alpha' if rect.x0 > 60 else b'beta' if rect.x0 > 30 else b'gamma'
         calls = []
         def reader(images, *_):
             calls.append(len(images))
-            return [{"region_index":i,"lines":[v.decode()],"legible":True,"complete":True}
+            return [{"region_index":i,"lines":[v.decode()],"legible":v!=b'unreadable',"complete":True}
                     for i,v in enumerate(images)], {}, .001
         q = locate.Query("beta", (6,10))
         service = PlacementService(ws, reader=reader)

@@ -23,10 +23,10 @@ import fitz
 from . import llm, locate
 from .config import MODEL_STRONG, PRICES, LONG_EDGE_HI
 from .page_map import (DERIVATION_VERSION, PlacementResult, PrintedWord, place,
-                       supported_groups, target_span, insertion_slot)
+                       supported_groups, supported_windows, target_span, insertion_slot)
 
 RENDER_VERSION = 1
-DETECTOR = "projection_v1"
+DETECTOR = "projection_v2_wordgaps"
 DEFAULT_MAX_COST = 5.0
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _LOCK_GUARD = threading.Lock()
@@ -108,7 +108,7 @@ def _cached_words(cached, key):
     words = []
     for w in cached["words"]:
         if (not isinstance(w, dict) or not isinstance(w.get("text"), str) or not w["text"]
-                or not _valid_rect(w.get("rect")) or type(w.get("line")) is not int or w["line"] < 0
+                or not (_valid_rect(w.get("rect")) or (w.get("supported") is False and w.get("rect") == [0,0,0,0])) or type(w.get("line")) is not int or w["line"] < 0
                 or type(w.get("supported")) is not bool or not isinstance(w.get("evidence"), list)
                 or not all(isinstance(e, str) for e in w["evidence"])):
             return []
@@ -353,11 +353,14 @@ class PlacementService:
                     self._failures[page_key] = {"reason": "page_reading_incomplete",
                         "line_indices": [i for i, ob in enumerate(observations)
                                          if ob is None or len(ob["lines"]) != 1]}
-                return [], False
+                # Keep unreadable lines as explicit barriers. Unrelated
+                # unreadable text must not discard independently read lines.
             words = []
             for i, (line, ob) in enumerate(zip(lines, observations)):
                 rect = locate._rect_to_fracs(line.rect, page.rect)
-                for token in locate._norm_words(ob["lines"][0]):
+                tokens = (locate._norm_words(ob["lines"][0])
+                          if ob is not None and len(ob["lines"]) == 1 else ["�"])
+                for token in tokens:
                     words.append(PrintedWord(token, [rect[k] for k in ("x0","y0","x1","y1")],
                                              i, [line_keys[i]], False))
             needed = set()
@@ -371,6 +374,8 @@ class PlacementService:
                         needed.update(w.line for w in words[slot-1:slot+1])
             verified = {}
             for i in sorted(needed):
+                if observations[i] is None or len(observations[i]["lines"]) != 1:
+                    continue
                 line = lines[i]
                 # Each gap-derived physical group is independently read. Equal
                 # token counts alone never make these rectangles trustworthy.
@@ -386,13 +391,26 @@ class PlacementService:
                     for j, ob, key in zip(missing, obs2, keys2):
                         if ob is not None and len(ob["lines"]) == 1:
                             group_obs[j], group_keys[j] = ob, key
-                if any(ob is None or len(ob["lines"]) != 1 for ob in group_obs):
-                    continue
                 groups = []
                 for ob, r, key in zip(group_obs, line.words, group_keys):
+                    if ob is None or len(ob["lines"]) != 1:
+                        continue
                     nr = locate._rect_to_fracs(r, page.rect)
                     groups.append((ob["lines"][0], [nr[k] for k in ("x0","y0","x1","y1")], key))
                 verified[i] = supported_groups(observations[i]["lines"][0], groups, i, line_keys[i])
+                if not verified[i]:
+                    windows = []
+                    for length in (2,3):
+                        for start in range(len(line.words)-length+1):
+                            r = locate._union_rects(line.words[start:start+length])
+                            r.y0, r.y1 = clips[i].y0, clips[i].y1
+                            windows.append(r)
+                    obs3, keys3 = self._read([self._render(page,r) for r in windows],n,allow_api)
+                    for ob,r,key in zip(obs3,windows,keys3):
+                        if ob is not None and len(ob['lines']) == 1:
+                            nr=locate._rect_to_fracs(r,page.rect)
+                            groups.append((ob['lines'][0],[nr[k] for k in ('x0','y0','x1','y1')],key))
+                    verified[i] = supported_windows(observations[i]['lines'][0],groups,i,line_keys[i])
             result = []
             for i in range(len(lines)):
                 result.extend(verified.get(i) or [w for w in words if w.line == i])
@@ -402,8 +420,9 @@ class PlacementService:
                 _write_json(self.root / "pages" / f"{page_key}.json",
                             {"key": page_key, "words": [asdict(w) for w in result],
                              "detector": DETECTOR, "render_version": RENDER_VERSION,
-                             "coordinate_space": "normalized_original_page", "complete": complete})
-            return result, complete
+                             "coordinate_space": "normalized_original_page", "complete": bool(result),
+                             "reading_complete": complete})
+            return result, bool(result)
 
     def results(self, n, md, queries, boxes=None):
         if boxes is None:

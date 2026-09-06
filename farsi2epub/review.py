@@ -2369,7 +2369,6 @@ def _find_free_port(preferred: int, host: str = "127.0.0.1") -> int:
     port = preferred
     for _ in range(200):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind((host, port))
             except OSError:
@@ -2547,7 +2546,7 @@ def run_review(
     handler_cls = _make_handler(state)
 
     free_port = _find_free_port(port)
-    httpd = ThreadingHTTPServer(("0.0.0.0", free_port), handler_cls)
+    httpd = ThreadingHTTPServer(("127.0.0.1", free_port), handler_cls)
     state.httpd = httpd
 
     url = f"http://127.0.0.1:{free_port}/"

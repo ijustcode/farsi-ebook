@@ -223,7 +223,7 @@ def _scan_page_lines(page: fitz.Page) -> list[_ScanLine]:
             continue
         col_active = sub.sum(axis=0) > 0
         glyph_runs = _true_runs(col_active)
-        word_gap = max(3, int(round(line_h * 0.2)))
+        word_gap = max(1, int(round(line_h * 0.08)))
         word_runs = _merge_nearby_runs(glyph_runs, max_gap=word_gap)
         words = [fitz.Rect((xlo + start) / scale, y0 / scale, (xlo + end) / scale, y1 / scale) for start, end in word_runs if end > start]
         words.sort(key=lambda r: -r.x1)
