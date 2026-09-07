@@ -2451,6 +2451,7 @@ def launch_review_background(
     bbox_max_cost: float = DEFAULT_MAX_COST,
     lan: bool = False,
     pages: Optional[list[int]] = None,
+    wait_for_boxes: bool = False,
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
@@ -2471,6 +2472,8 @@ def launch_review_background(
         args += ["--pages", ",".join(map(str, pages))]
     args += ["--bbox-mode", bbox_mode, "--bbox-model", bbox_model,
              "--bbox-max-cost", str(bbox_max_cost)]
+    if wait_for_boxes:
+        args.append("--wait-for-boxes")
     if lan:
         args.append("--lan")
 
@@ -2505,6 +2508,21 @@ def _make_review_refiner(ws: Workspace, model: str, mode: str, max_cost: float) 
     return PlacementService(ws, model, mode=mode, max_cost=max_cost)
 
 
+def _wait_for_boxes(ws, pages, server_thread):
+    """Keep the browser closed until every selected page has terminal results."""
+    remaining = set(pages)
+    previous = None
+    while remaining and server_thread.is_alive():
+        remaining = {n for n in remaining if _boxes_payload(ws, n)["pending"]}
+        if len(remaining) != previous:
+            print(f"Preparing boxes: {len(pages) - len(remaining)}/{len(pages)} pages finished", flush=True)
+            previous = len(remaining)
+        if remaining:
+            time.sleep(0.5)
+    if not remaining:
+        print("Placement finished; unsupported locations remain unresolved.", flush=True)
+
+
 def run_review(
     ws: Workspace,
     port: int = DEFAULT_PORT,
@@ -2514,6 +2532,7 @@ def run_review(
     bbox_model: str = MODEL_STRONG,
     bbox_max_cost: float = DEFAULT_MAX_COST,
     pages: Optional[list[int]] = None,
+    wait_for_boxes: bool = False,
 ) -> None:
     surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all, pages=pages)
 
@@ -2555,16 +2574,17 @@ def run_review(
     print(f"Surfaced {len(surfaced)} page(s) for review: {surfaced}")
     print("Press Ctrl+C when finished (or click Done in the page).")
 
-    if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
-
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     server_thread.start()
 
     try:
+        if wait_for_boxes:
+            _wait_for_boxes(ws, surfaced, server_thread)
+        if open_browser and server_thread.is_alive():
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
         server_thread.join()
     except KeyboardInterrupt:
         httpd.shutdown()

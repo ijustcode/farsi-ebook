@@ -207,6 +207,7 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--background", "-b", "background", is_flag=True, help="Start the review server detached and return immediately.")
 @click.option("--status", "status", is_flag=True, help="Report whether a review server is running for this workspace.")
 @click.option("--stop", "stop_server", is_flag=True, help="Stop a running review server for this workspace.")
+@click.option("--wait-for-boxes", is_flag=True, help="Finish placement before opening the browser; failed locations remain unresolved.")
 @click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default=None,
               help="Image evidence acquisition: auto or cached evidence only (default: auto).")
 @click.option("--bbox-model", default=None, help="Image region reader model (default: Sonnet).")
@@ -225,6 +226,7 @@ def review_cmd(
     background: bool,
     status: bool,
     stop_server: bool,
+    wait_for_boxes: bool,
     bbox_mode: str | None,
     bbox_model: str | None,
     bbox_max_cost: float,
@@ -321,6 +323,7 @@ def review_cmd(
                 bbox_model=bbox_model,
                 bbox_max_cost=bbox_max_cost,
                 pages=selected_pages,
+                wait_for_boxes=wait_for_boxes,
             )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
@@ -329,7 +332,7 @@ def review_cmd(
     # Plain `review <slug>` or `--background`: never start a duplicate server.
     existing = review.read_server_state(ws)
     if existing:
-        if selected_pages is not None:
+        if selected_pages is not None or wait_for_boxes:
             raise click.ClickException(f"A review is already running. Stop it first: farsi2epub review {slug} --stop")
         click.echo(f"Review server already running: {existing['url']} (pid {existing['pid']})")
         if not background:
@@ -350,6 +353,7 @@ def review_cmd(
                 bbox_model=bbox_model,
                 bbox_max_cost=bbox_max_cost,
                 pages=selected_pages,
+                wait_for_boxes=wait_for_boxes,
             )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -367,6 +371,7 @@ def review_cmd(
             bbox_model=bbox_model,
             bbox_max_cost=bbox_max_cost,
             pages=selected_pages,
+            wait_for_boxes=wait_for_boxes,
         )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")

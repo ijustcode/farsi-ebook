@@ -24,10 +24,11 @@ def run():
          patch.object(review,'run_review') as start, \
          patch.object(review,'launch_review_background',return_value='http://example.invalid') as background:
         for flags in ([],['--_child'],['--background']):
-            result=runner.invoke(main,['review','synthetic','--pages','61,128',*flags])
+            result=runner.invoke(main,['review','synthetic','--pages','61,128','--wait-for-boxes',*flags])
             assert result.exit_code==0,result.output
             call=background if '--background' in flags else start
             assert call.call_args.kwargs['pages']==[61,128]
+            assert call.call_args.kwargs['wait_for_boxes'] is True
         for spec in ('62','xyz','300'):
             result=runner.invoke(main,['review','synthetic','--pages',spec])
             assert result.exit_code==2,result.output
@@ -37,6 +38,16 @@ def run():
         result=runner.invoke(main,['review','synthetic','--pages','61,128'])
         assert result.exit_code==1 and '--stop' in result.output
         start.assert_not_called()
+    # A terminal unresolved page is finished; pending pages must be polled again.
+    with patch.object(review, '_boxes_payload', side_effect=[
+        {'pending': True}, {'pending': False}, {'pending': False}
+    ]) as payload, patch.object(review.time, 'sleep') as sleep:
+        review._wait_for_boxes(ws, [61, 128], SimpleNamespace(is_alive=lambda: True))
+        assert payload.call_count == 3
+        sleep.assert_called_once_with(0.5)
+    with patch.object(review, '_boxes_payload') as payload:
+        review._wait_for_boxes(ws, [61], SimpleNamespace(is_alive=lambda: False))
+        payload.assert_not_called()
     print('REVIEW PAGE SCOPE REGRESSIONS PASSED')
 
 
