@@ -2,7 +2,7 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
-## Consolidated placement update (2026-09-05)
+## Consolidated placement update (2026-09-07)
 
 Current code has only `match` and `scan` geometry sources, then unresolved. The detailed tier and v5 sections below describe historical controls and must not be used to restore live fallbacks. Current contracts, limitations, migration, and experimental status are in `docs/bbox-consolidation.md`. Historical locator/scorer/review snapshots are under `tests/historical`; production must never import them.
 
@@ -37,7 +37,7 @@ The CLI stages operate on a per-book workspace identified by a slug; QC and huma
 farsi2epub analyze <pdf> [--slug s] [--pages 3-10] [--force]   # create workspace, classify PDF, estimate cost
 farsi2epub transcribe <slug> [--pages ...] [--force] [--max-cost N] [--concurrency 4] [--model ...] [--qc auto|manual|skip|ask] [--yes]  # --yes skips the auto-QC cost prompt
 farsi2epub qc <slug> [--mode auto|manual] [--all] [--yes] [--force] [--pages ...]  # auto = LLM verifier pass (suggest-only), manual = review UI
-farsi2epub review <slug> [--all] [--reset] [--background|--status|--stop] [--bbox-mode auto|offline] [--bbox-model ...] [--bbox-max-cost N]  # local web UI for human correction; -b detaches the server
+farsi2epub review <slug> [--pages ...] [--wait-for-boxes] [--all] [--reset] [--background|--status|--stop] [--bbox-mode auto|offline] [--bbox-model ...] [--bbox-max-cost N]  # local web UI for human correction; -b detaches the server
 farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 ```
 
@@ -49,13 +49,18 @@ farsi2epub build <slug>      # assemble EPUB into books/<slug>/out/
 - `transcribe --qc auto` does **not** QC every page it transcribed. It calls `qc.run_qc(...)` without `all_pages`, so QC risk-selects: forced (needs_review or any validator issue) + risky (`risk_score >= RISK_THRESHOLD`) + a `RANDOM_SAMPLE_FRAC` sample of clean pages. Full coverage is only reachable via the standalone `farsi2epub qc --mode auto --all`.
 - `--max-cost` guards **`transcribe` only**, and is a running total of actual spend checked as pages complete — in-flight pages still finish, so it can overshoot by up to `--concurrency` pages. Auto-QC and bbox refinement bill separately and are not counted against it.
 - `review --pages 61,128` scopes both the UI and bbox acquisition to those transcribed PDF pages without touching other pages. Without `--pages`, review surfaces only the worst `ceil(total/5)` flagged pages unless `--all`.
+- `review --wait-for-boxes` waits for every surfaced page to finish placement before automatically opening the browser. It prints page progress. Located/buffered boxes are ready on opening; unresolved results remain boxless. This is a readiness guarantee, not an accuracy guarantee. Without the flag, the browser opens while workers run. The flag is forwarded to detached children; `--background` itself still returns when the server starts.
+- An existing review must be stopped before starting with `--pages` or `--wait-for-boxes`. Review binds to `127.0.0.1`. Use the actual printed URL; other books may occupy nearby ports.
+- For a fresh experiment, use a new workspace slug to isolate transcription, QC, and placement caches. Run `transcribe --pages 1-30 --qc skip`, then `qc --pages 1-30 --mode auto --all --yes`, then `review --pages 1-30 --bbox-mode auto --wait-for-boxes`. Do not present this as an accuracy improvement or launch paid work when the user only requests a command.
 - Auto-QC re-runs **skip** pages whose previous suggestion is still pending; `--force` replaces it.
 
 ### Tests
 
-No pytest/linter is configured. `tests/` holds seven standalone scripts (run with `./venv/bin/python`, no API key needed except where noted); they operate on real transcribed books under `books/`, so they need a book already processed:
+No pytest/linter is configured. Tests are standalone scripts; some historical tests require processed books under `books/`. Current placement and review scope regressions use synthetic evidence and need no API key:
 
 ```bash
+./venv/bin/python tests/consolidated_bbox_regression.py     # current placement contracts, caches and budgets
+./venv/bin/python tests/review_pages_regression.py          # page scope, wait completion/cancellation, CLI forwarding
 ./venv/bin/python tests/locator_regression.py             # locate.py tiers + both strip-alignment algorithms; live LLM smoke requires RUN_LIVE_LLM_TESTS=1
 ./venv/bin/python tests/review_cache_regression.py        # raw/derived bbox caches, invalidation, offline replay, concurrency, CLI/UI contracts
 ./venv/bin/python tests/word_miss_smoke.py                # target-identity + word-miss checks and exact-box v5 reproducibility
