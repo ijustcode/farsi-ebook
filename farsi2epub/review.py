@@ -288,15 +288,15 @@ def _attach_boxes(
     for (key, _query, _unused, hunk, issue), loc, result in zip(specs, located, results):
         box = loc if loc and loc.get("source") in {"match", "scan"} else None
         status = result.status if isinstance(result, PlacementResult) else (box.get("status", "located") if box else "unresolved")
-        label = {"pending": "locating…", "located": "located", "buffered": "buffered", "unresolved": "unresolved"}[status]
-        if status == "buffered" and box:
+        label = {"pending": "locating…", "located": "located", "buffered": "buffered", "estimated": "approximate", "unresolved": "unresolved"}[status]
+        if status in {"buffered", "estimated"} and box and (box.get('buffer_before',0)+box.get('buffer_after',0)):
             label += f" +{box.get('buffer_before', 0) + box.get('buffer_after', 0)} words"
         reason = result.reason if isinstance(result, PlacementResult) else ""
         detail = f": {reason.replace(chr(95), chr(32))}" if reason else ""
         if status == "unresolved" and detail:
             label += detail
-        chip = {"cls": "pm-zero" if status == "located" else "pm-near" if status == "buffered" else "pm-none",
-                "label": label, "title": f"{label}. Evidence status, not independently measured accuracy.",
+        chip = {"cls": "pm-zero" if status == "located" else "pm-near" if status in {"buffered", "estimated"} else "pm-none",
+                "label": label, "title": f"{label}{detail if status == 'estimated' else ''}. Evidence status, not independently measured accuracy.",
                 "status": status, "source": box.get("source") if box else None,
                 "evidence": result.evidence if isinstance(result, PlacementResult) else [],
                 "kind": result.kind if isinstance(result, PlacementResult) else "words",
@@ -319,6 +319,7 @@ def _attach_boxes(
             "w": (box["x1"] - box["x0"]) * 100.0,
             "h": (box["y1"] - box["y0"]) * 100.0,
             "source": box["source"],
+            "status": status,
         }
         # Render only accepted geometry; evidence diagnostics remain separate.
         view_box.pop("debug", None)
@@ -1208,6 +1209,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   margin-top: 0.45rem;
 }
 .issue-placement-row { margin-top: 0.35rem; }
+.qc-box-single.qc-box-estimated { border-color: #b7791f; border-style: dashed; background: rgba(183,121,31,.10); }
+.qc-box-estimated .qc-box-shape { stroke: #b7791f; stroke-dasharray: 1 .6; fill: rgba(183,121,31,.10); }
 </style>
 </head>
 <body>
@@ -1252,7 +1255,7 @@ button:disabled { opacity: 0.5; cursor: default; }
         <span class="pill qc-pill">QC: {{ p.qc_issue_types|join(', ') }}</span>
         {% endif %}
       </div>
-      <div id="geometry-summary-{{ p.page }}">Geometry: {{ p.page_map.status|default('pending') }}; {{ p.page_map.verified_words|default(0) }}/{{ p.page_map.words|default(0) }} words verified; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read</div>
+      <div id="geometry-summary-{{ p.page }}">Geometry: {{ p.page_map.detected_word_geometry|default(0) }}/{{ p.page_map.detected_words|default(0) }} detected regions; {{ p.page_map.verified_words|default(0) }} words verified, {{ p.page_map.inferred_words|default(0) }} approximate; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read</div>
       {% if p.qc_panel %}
       <div class="qc-panel" id="qc-panel-{{ p.page }}">
         <div class="qc-panel-title">QC findings</div>
@@ -1393,12 +1396,12 @@ function createBoxElement(page, b) {
   if (segments.length > 1) {
     var ns = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('class', 'qc-box qc-box-multipart qc-box-' + b.source);
+    svg.setAttribute('class', 'qc-box qc-box-multipart qc-box-' + b.source + (b.status === 'estimated' ? ' qc-box-estimated' : ''));
     svg.setAttribute('id', id);
     svg.setAttribute('viewBox', '0 0 100 100');
     svg.setAttribute('preserveAspectRatio', 'none');
     svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', 'multi-line located finding');
+    svg.setAttribute('aria-label', b.status === 'estimated' ? 'approximate finding location' : 'multi-line located finding');
     setFocusGeometry(svg, segments[0]);
     for (var i = 0; i < segments.length; i++) {
       var path = document.createElementNS(ns, 'path');
@@ -1410,7 +1413,7 @@ function createBoxElement(page, b) {
     return svg;
   }
   var div = document.createElement('div');
-  div.className = 'qc-box qc-box-single qc-box-' + b.source;
+  div.className = 'qc-box qc-box-single qc-box-' + b.source + (b.status === 'estimated' ? ' qc-box-estimated' : '');
   div.id = id;
   div.style.left = b.x0.toFixed(2) + '%';
   div.style.top = b.y0.toFixed(2) + '%';
@@ -1899,7 +1902,7 @@ function applyPlacementScores(page, data) {
   var summary = document.getElementById('geometry-summary-' + page);
   if (summary && data.page_map) {
     var m = data.page_map;
-    summary.textContent = 'Geometry: ' + (m.status || 'pending') + '; ' + (m.verified_words || 0) + '/' + (m.words || 0) + ' words verified; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
+    summary.textContent = 'Geometry: ' + (m.detected_word_geometry || 0) + '/' + (m.detected_words || 0) + ' detected regions; ' + (m.verified_words || 0) + ' words verified, ' + (m.inferred_words || 0) + ' approximate; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
   }
   var k;
   if (data.hunk_scores) {
@@ -2549,7 +2552,7 @@ def _wait_for_boxes(ws, pages, server_thread):
             payload = terminal[n]
             totals.update(payload.get("correction_statuses", []))
             maps[payload.get("page_map", {}).get("status", "unknown")] += 1
-        print(f"Placement finished: {totals['located']} located, {totals['buffered']} buffered, {totals['unresolved']} unresolved. Page maps: {dict(maps)}.", flush=True)
+        print(f"Placement finished: {totals['located']} located, {totals['buffered']} buffered, {totals['estimated']} approximate, {totals['unresolved']} unresolved. Page maps: {dict(maps)}.", flush=True)
 
 
 def run_review(

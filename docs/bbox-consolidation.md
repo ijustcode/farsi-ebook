@@ -1,6 +1,6 @@
 # Consolidated box placement — experimental implementation
 
-The working tree implements `match → scan → unresolved`. It has **not** passed the promotion gate. Independent page/word annotations, a frozen audited held-out set, and a valid paired accuracy comparison are still outstanding. No accuracy gain is claimed.
+The working tree implements `match → scan`, with supported or explicitly approximate placements before unresolved. See [coverage-first update](geometry-best-attempt.md) for the current owner-requested policy. It has **not** passed the promotion gate. Independent page/word annotations, a frozen audited held-out set, and a valid paired accuracy comparison are still outstanding. No accuracy gain is claimed.
 
 For the subsequent correction-independent page-map repair and its incomplete acceptance status, see [page-geometry-coverage-status.md](page-geometry-coverage-status.md).
 
@@ -8,7 +8,7 @@ For the subsequent correction-independent page-map repair and its incomplete acc
 
 `farsi2epub.placement` exposes `PlacementService`, `PlacementResult`, `PrintedWord`, and `place`. Review uses the same service. Queries contain the full original/suggested span, exact Markdown boundaries, and correction kind. There is no five-word cap or QC-coordinate input. Successful outputs contain `source: match|scan`, ordered normalized line segments, a union envelope, evidence references, status, and buffer counts. Unresolved/pending outputs have no accepted rectangle. Anchored insertions without printed target words use a distinct insertion-boundary marker.
 
-The embedded path matches normalized words and surrounding content. It transforms unrotated PDF word coordinates into displayed-page coordinates. Ambiguous repeated occurrences defer to scan. Scan reads explicit line crops before matching corrections. It independently reads physical word groups and reconciles their concatenated text against the corresponding line. Equal counts or character-width estimates cannot certify geometry. Fused groups can cause a buffer of up to two adjacent words at each end; larger unsupported coverage is unresolved.
+The embedded path matches normalized words and surrounding content. It transforms unrotated PDF word coordinates into displayed-page coordinates. Ambiguous repeated occurrences defer to scan. Scan reads explicit line crops before matching corrections. It independently reads physical word groups and reconciles their concatenated text against the corresponding line. Equal counts or character-width estimates cannot certify geometry. Fused groups can cause a buffer of up to two adjacent words at each end; larger unsupported coverage is approximate. Character-width inference cannot certify word geometry, but can now provide explicitly labeled approximate placement.
 
 Successful observations are stored under `books/<slug>/locate_evidence/readings/`, with image, reader prompt/schema, model and renderer identity. Derived page maps and boxes bind the PDF, derivation version and, for query outputs, Markdown/full query. Atomic writes and file locks deduplicate raw acquisitions across processes. Invalid JSON or malformed geometry is a cache miss. Source replacement invalidates in-memory identity; a source changed during acquisition cannot receive that result.
 

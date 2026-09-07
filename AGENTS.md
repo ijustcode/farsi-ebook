@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Consolidated placement update (2026-09-07)
 
-Current code has only `match` and `scan` geometry sources, then unresolved. The detailed tier and v5 sections below describe historical controls and must not be used to restore live fallbacks. Current contracts, limitations, migration, and experimental status are in `docs/bbox-consolidation.md`. Historical locator/scorer/review snapshots are under `tests/historical`; production must never import them.
+Current code has only `match` and `scan` geometry sources. The owner-requested coverage-first policy now permits explicitly `estimated` placements before unresolved; see `docs/geometry-best-attempt.md`. Strict supported evidence remains separate from estimates. The detailed tier and v5 sections below describe historical controls and must not be used to restore live fallbacks. Current contracts, limitations, migration, and experimental status are in `docs/bbox-consolidation.md`. Historical locator/scorer/review snapshots are under `tests/historical`; production must never import them.
 
 Review options are `--bbox-mode auto|offline`, `--bbox-model`, and `--bbox-max-cost` (default $5 per review process, separate from transcription/QC budgets). Legacy refine flags are deprecated aliases; explicit legacy algorithm selection is rejected. QC issues no longer request/store coordinates; old sidecar bboxes are ignored. Live chips show evidence status, not word-miss accuracy. Full-passage evaluation with independently audited word rectangles is `tests/bbox_metrics.py` (v6); keep v5 exact-box results separate. New tests: `tests/consolidated_bbox_regression.py`, plus benchmark/metric regression scripts when available.
 

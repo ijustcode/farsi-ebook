@@ -14,7 +14,7 @@ import fitz
 
 from . import locate
 
-DERIVATION_VERSION = 5
+DERIVATION_VERSION = 7
 
 
 @dataclass

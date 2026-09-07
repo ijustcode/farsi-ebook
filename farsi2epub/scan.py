@@ -21,6 +21,7 @@ import uuid
 import fitz
 
 from . import llm, locate
+from .geometry_attempt import ATTEMPT_VERSION, complete_geometry, PageProjection, best_attempt
 from .config import MODEL_STRONG, PRICES, LONG_EDGE_HI
 from .page_map import (DERIVATION_VERSION, PlacementResult, PrintedWord, place,
                        supported_groups, supported_windows, target_span, insertion_slot)
@@ -79,7 +80,7 @@ def _valid_rect(rect):
 
 
 def _cached_result(data):
-    if not isinstance(data, dict) or data.get("status") not in {"located", "buffered"}:
+    if not isinstance(data, dict) or data.get("status") not in {"located", "buffered", "estimated"}:
         return None
     box = data.get("box")
     if not isinstance(box, dict) or box.get("source") != "scan" or not _valid_rect(box):
@@ -91,7 +92,7 @@ def _cached_result(data):
         if abs(box[k] - fn(r[k] for r in segments)) > 1e-7:
             return None
     for k in ("buffer_before", "buffer_after"):
-        if type(data.get(k, 0)) is not int or not 0 <= data.get(k, 0) <= 2:
+        if type(data.get(k, 0)) is not int or not 0 <= data.get(k, 0) or (data["status"] != "estimated" and data.get(k, 0) > 2):
             return None
         if type(box.get(k, 0)) is not int or box.get(k, 0) != data.get(k, 0):
             return None
@@ -188,7 +189,7 @@ class PlacementService:
     def _key(self, n, md, q):
         page_key = self._page_key(n)
         revision = _read_json(self.root / "pages" / f"{page_key}.json").get("revision")
-        return digest([page_key, revision, md, asdict(q)])
+        return digest([page_key, revision, ATTEMPT_VERSION, md, asdict(q)])
 
     def _observation_key(self, png):
         return digest([hashlib.sha256(png).hexdigest(), self.model, self.prompt_hash,
@@ -317,6 +318,40 @@ class PlacementService:
     def page_map_summary(self, n):
         return _read_json(self.root / "pages" / f"{self._page_key(n)}.json").get("summary", {})
 
+    def _with_geometry(self, n, cached):
+        """Persist all detected ink regions, even when every reader call fails."""
+        key = self._page_key(n)
+        words = _cached_words(cached, key)
+        if cached.get("summary", {}).get("source") == "match":
+            regions = [{"id":f"pdfword:{key}:{i}", "line":w.line, "rect":w.rect} for i,w in enumerate(words)]
+        else:
+            with fitz.open(self.ws.pdf_path) as doc:
+                page = doc[n-1]
+                lines = locate._scan_page_lines(page)
+                regions = []
+                for i,line in enumerate(lines):
+                    expanded = self._retry_line_clip(page.rect, lines, i)
+                    for j,rect in enumerate(line.words or [line.rect]):
+                        rect = fitz.Rect(rect)
+                        rect.y0, rect.y1 = expanded.y0, expanded.y1
+                        nr = locate._rect_to_fracs(rect, page.rect)
+                        regions.append({"id": f"ink:{key}:{i}:{j}", "line":i,
+                                        "rect":[nr[k] for k in ("x0","y0","x1","y1")]})
+        words = complete_geometry(words, regions)
+        rows = [asdict(w) for w in words]
+        summary = dict(cached.get("summary", {}))
+        summary.update(geometry_complete=True, detected_words=len(regions),
+                       detected_word_geometry=len(regions), geometry_words=sum(_valid_rect(w.rect) for w in words),
+                       inferred_words=sum(not w.supported and bool(locate._fold_word(w.text)) for w in words))
+        if self._page_key(n) != key:
+            raise RuntimeError("source_changed")
+        cached = {**cached, "key":key, "words":rows, "regions":regions, "summary":summary,
+                  "revision":digest([rows,regions]),
+                  "normalized_words":[locate._fold_word(w.text) for w in words],
+                  "word_ids":[digest([key,w.line,j]) for j,w in enumerate(words)]}
+        _write_json(self.root / "pages" / f"{key}.json", cached)
+        return words, summary
+
     def ensure_page_map(self, n, *, allow_api=None):
         """Acquire reusable evidence independently of Markdown and corrections."""
         allow_api = self.mode == "auto" if allow_api is None else allow_api
@@ -324,9 +359,22 @@ class PlacementService:
         with _claim(self.root / "pages" / f"{key}.json"):
             cached = _read_json(self.root / "pages" / f"{key}.json")
             words = _cached_words(cached, key)
+            if not cached:
+                for version in (6,5,4):
+                    previous_key = digest([self.source_hash(), n, self.model, RENDER_VERSION, LONG_EDGE_HI,
+                                           fitz.VersionBind, self.prompt_hash, llm.REGION_READER_VERSION, DETECTOR, version])
+                    previous = _read_json(self.root / "pages" / f"{previous_key}.json")
+                    if _cached_words(previous, previous_key) or previous.get("summary", {}).get("status") == "blank_nontext":
+                        cached = {**previous, "key":key, "summary":{**previous.get("summary", {}), "geometry_complete":False}}
+                        words = _cached_words(cached, key)
+                        break
+            if not allow_api and cached and (words or cached.get("words") == []):
+                if cached.get("summary", {}).get("geometry_complete") and isinstance(cached.get("regions"), list) and len(cached['regions']) == cached['summary'].get('detected_words') and all(isinstance(r,dict) and isinstance(r.get('id'),str) and type(r.get('line')) is int and r['line']>=0 and _valid_rect(r.get('rect')) for r in cached['regions']) and len({r['id'] for r in cached['regions']}) == len(cached['regions']):
+                    return words, cached["summary"]
+                return self._with_geometry(n, cached)
             if cached.get("complete") and cached.get("summary") and (words or
                     cached["summary"].get("status") == "blank_nontext" and cached.get("words") == []):
-                return words, cached["summary"]
+                return self._with_geometry(n, cached)
             with fitz.open(self.ws.pdf_path) as doc:
                 page = doc[n-1]
                 embedded = locate._page_words(page)
@@ -347,10 +395,12 @@ class PlacementService:
                                 "revision": digest(rows), "complete": True, "summary": summary,
                                 "normalized_words": [locate._fold_word(w.text) for w in words],
                                 "word_ids": [digest([key, w.line, j]) for j, w in enumerate(words)]})
-                    return words, summary
+                    return self._with_geometry(n, _read_json(self.root / "pages" / f"{key}.json"))
+            if cached:
+                _write_json(self.root / "pages" / f"{key}.json", cached)
             self._build_map(n, "", [], allow_api)
             cached = _read_json(self.root / "pages" / f"{key}.json")
-            return _cached_words(cached, key), cached.get("summary", {})
+            return self._with_geometry(n, cached)
 
     def _build_map(self, n, md, queries, allow_api):
         page_key = self._page_key(n)
@@ -580,23 +630,14 @@ class PlacementService:
             lock = _THREAD_LOCKS.setdefault(str(self.root / page_key), threading.RLock())
         with lock:
             try:
+                words, summary = self.ensure_page_map(n, allow_api=allow_api)
                 cached = _read_json(self.root / "pages" / f"{page_key}.json")
-                words = _cached_words(cached, page_key)
-                # Cached page geometry can answer a new Markdown/query for free.
+                projection = PageProjection(md, words, cached.get("regions", []))
                 for i in missing:
-                    if words:
-                        result = place(md, queries[i], words, source=cached.get("summary", {}).get("source", "scan"))
-                        if result.box is not None:
-                            results[i] = result
-                still = [i for i in missing if results[i].box is None]
-                if still:
-                    words, summary = self.ensure_page_map(n, allow_api=allow_api)
-                    complete = bool(words)
-                    for i in still:
-                        results[i] = (place(md, queries[i], words, source=summary.get("source", "scan")) if complete
-                                      else PlacementResult("unresolved", reason="page_reading_incomplete"))
-                        if results[i].box is None and summary.get("acquisition_reasons"):
-                            results[i].reason += ": " + ", ".join(summary["acquisition_reasons"])
+                    strict = place(md, queries[i], words, source=summary.get("source", "scan"))
+                    results[i] = best_attempt(md, queries[i], words, projection, strict)
+                    if results[i].box is None and summary.get("acquisition_reasons"):
+                        results[i].reason += ": " + ", ".join(summary["acquisition_reasons"])
             except Exception as exc:
                 with self.lock:
                     self._failures[page_key] = {"error_type": type(exc).__name__, "time": time.time()}
@@ -610,7 +651,7 @@ class PlacementService:
                 key = self._key(n, md, queries[i])
                 with self.lock:
                     self._done[key] = results[i]
-                if results[i].box is not None and allow_api:
+                if results[i].box is not None:
                     _write_json(self.root / "boxes" / f"{key}.json",
                                 {"key": key, "result": results[i].to_dict()})
         return [r.box for r in results]

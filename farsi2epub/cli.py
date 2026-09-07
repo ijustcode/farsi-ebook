@@ -204,7 +204,8 @@ def _geometry_pages(ws, pages, mode, model, max_cost):
                 continue
             _, summary = service.ensure_page_map(n)
             click.echo(f"Geometry page {n}: {summary.get('status', 'partial')}; "
-                       f"{summary.get('verified_words', 0)}/{summary.get('words', 0)} words verified; "
+                       f"{summary.get('detected_word_geometry', 0)}/{summary.get('detected_words', 0)} detected regions; "
+                       f"{summary.get('verified_words', 0)} verified / {summary.get('inferred_words', 0)} approximate words; "
                        f"{summary.get('read_lines', 0)}/{summary.get('detected_lines', 0)} lines read")
     finally:
         cost = service.budget.snapshot()

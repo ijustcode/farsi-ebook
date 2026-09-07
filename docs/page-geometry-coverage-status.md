@@ -1,3 +1,5 @@
+> Superseded for live placement policy by [the coverage-first update](geometry-best-attempt.md). The results below record the earlier strict-evidence experiment.
+
 # Page geometry repair status — 2026-09-07
 
 The implementation is partial. The 30-page acceptance target is **not met** and no placement accuracy improvement or promotion is claimed.
