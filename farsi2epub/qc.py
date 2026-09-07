@@ -539,7 +539,7 @@ def _run_auto(
     click.echo("")
     click.echo(
         f"Verified {state.verified} page(s): {state.passed} passed, {state.failed} failed. "
-        f"Total cost: ${state.total_cost:.4f}"
+        f"QC cost: ${state.total_cost:.4f}"
     )
 
     if state.failed:

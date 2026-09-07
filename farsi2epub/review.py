@@ -192,6 +192,10 @@ def _box_specs(
         span = (start, start + len(h["old"])) if start is not None else None
         alts = (h["new"],) if h["new"].strip() else ()
         kind = "insertion" if not h["old"].strip() else "replacement"
+        if h.get("edit_only"):
+            kind = "finding"
+            if not h.get("unique"):
+                span = None
         specs.append((f"h{h['id']}", Query(h["old"], span, alts, kind), None, h, None))
     for i, iss in enumerate(issues):
         if i in linked:
@@ -289,8 +293,10 @@ def _attach_boxes(
             label += f" +{box.get('buffer_before', 0) + box.get('buffer_after', 0)} words"
         reason = result.reason if isinstance(result, PlacementResult) else ""
         detail = f": {reason.replace(chr(95), chr(32))}" if reason else ""
+        if status == "unresolved" and detail:
+            label += detail
         chip = {"cls": "pm-zero" if status == "located" else "pm-near" if status == "buffered" else "pm-none",
-                "label": label, "title": f"{label}{detail}. Evidence status, not independently measured accuracy.",
+                "label": label, "title": f"{label}. Evidence status, not independently measured accuracy.",
                 "status": status, "source": box.get("source") if box else None,
                 "evidence": result.evidence if isinstance(result, PlacementResult) else [],
                 "kind": result.kind if isinstance(result, PlacementResult) else "words",
@@ -388,6 +394,7 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
         return {
             "pending": False, "boxes": [], "hunk_boxes": {}, "issue_boxes": {},
             "hunk_scores": {}, "issue_scores": {},
+            "page_map": _REFINER.page_map_summary(n) if _REFINER and hasattr(_REFINER, "page_map_summary") else {},
         }
 
     specs = _box_specs(issues, hunks, text)
@@ -409,6 +416,9 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
     return {
         "pending": False,
         "boxes": boxes,
+        "page_map": refiner.page_map_summary(n) if refiner and hasattr(refiner, "page_map_summary") else {},
+        "correction_statuses": [(hunk or issue or {}).get("placement", {}).get("status", "unresolved")
+                                for _, _, _, hunk, issue in specs],
         "hunk_boxes": {str(h["id"]): h.get("box") for h in hunks},
         "issue_boxes": {str(i): iss.get("box") for i, iss in enumerate(issues)},
         "hunk_scores": {str(h["id"]): h.get("placement") for h in hunks},
@@ -1242,6 +1252,7 @@ button:disabled { opacity: 0.5; cursor: default; }
         <span class="pill qc-pill">QC: {{ p.qc_issue_types|join(', ') }}</span>
         {% endif %}
       </div>
+      <div id="geometry-summary-{{ p.page }}">Geometry: {{ p.page_map.status|default('pending') }}; {{ p.page_map.verified_words|default(0) }}/{{ p.page_map.words|default(0) }} words verified; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read</div>
       {% if p.qc_panel %}
       <div class="qc-panel" id="qc-panel-{{ p.page }}">
         <div class="qc-panel-title">QC findings</div>
@@ -1885,6 +1896,11 @@ function setPlacementChip(id, chip) {
 }
 
 function applyPlacementScores(page, data) {
+  var summary = document.getElementById('geometry-summary-' + page);
+  if (summary && data.page_map) {
+    var m = data.page_map;
+    summary.textContent = 'Geometry: ' + (m.status || 'pending') + '; ' + (m.verified_words || 0) + '/' + (m.words || 0) + ' words verified; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
+  }
   var k;
   if (data.hunk_scores) {
     for (k in data.hunk_scores) {
@@ -2117,6 +2133,7 @@ def _page_view(ws: Workspace, n: int) -> dict:
         "quality_score": sidecar.get("quality_score", 0.0) or 0.0,
         "flags": sidecar.get("flags", []) or [],
         "validator_issues": validator_issues,
+        "page_map": _REFINER.page_map_summary(n) if _REFINER and hasattr(_REFINER, "page_map_summary") else {},
         "qc_issue_types": qc_issue_types,
         "qc_panel": qc_panel,
         "boxes": boxes,
@@ -2512,15 +2529,27 @@ def _wait_for_boxes(ws, pages, server_thread):
     """Keep the browser closed until every selected page has terminal results."""
     remaining = set(pages)
     previous = None
+    terminal = {}
     while remaining and server_thread.is_alive():
-        remaining = {n for n in remaining if _boxes_payload(ws, n)["pending"]}
+        for n in list(remaining):
+            payload = _boxes_payload(ws, n)
+            if not payload["pending"]:
+                terminal[n] = payload
+                remaining.remove(n)
         if len(remaining) != previous:
             print(f"Preparing boxes: {len(pages) - len(remaining)}/{len(pages)} pages finished", flush=True)
             previous = len(remaining)
         if remaining:
             time.sleep(0.5)
     if not remaining:
-        print("Placement finished; unsupported locations remain unresolved.", flush=True)
+        from collections import Counter
+        totals = Counter()
+        maps = Counter()
+        for n in pages:
+            payload = terminal[n]
+            totals.update(payload.get("correction_statuses", []))
+            maps[payload.get("page_map", {}).get("status", "unknown")] += 1
+        print(f"Placement finished: {totals['located']} located, {totals['buffered']} buffered, {totals['unresolved']} unresolved. Page maps: {dict(maps)}.", flush=True)
 
 
 def run_review(
@@ -2559,9 +2588,6 @@ def run_review(
 
     state = _ReviewState(ws, surfaced, skipped)
 
-    # Acquire evidence in the background; polling follows pending queries.
-    _start_refine_pipeline(state)
-
     handler_cls = _make_handler(state)
 
     free_port = _find_free_port(port)
@@ -2578,6 +2604,9 @@ def run_review(
     server_thread.start()
 
     try:
+        # Publish readiness before queue construction and CPU-heavy replay.
+        # Detached parents can now observe a listening server immediately.
+        _start_refine_pipeline(state)
         if wait_for_boxes:
             _wait_for_boxes(ws, surfaced, server_thread)
         if open_browser and server_thread.is_alive():

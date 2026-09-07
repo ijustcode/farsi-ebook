@@ -146,6 +146,7 @@ def run():
         def render(page, rect, factor=1.):
             if rect.y0 > 30: return b'unreadable'
             if rect.width > 70: return b'alpha beta gamma'
+            if rect.width > 40: return b'alpha beta'
             return b'alpha' if rect.x0 > 60 else b'beta' if rect.x0 > 30 else b'gamma'
         calls = []
         def reader(images, *_):
@@ -156,7 +157,7 @@ def run():
         service = PlacementService(ws, reader=reader)
         with patch.object(locate, '_scan_page_lines', return_value=lines), patch.object(PlacementService, '_render', side_effect=render):
             result = service.refine(1,"alpha beta gamma",[q],[None])[0]
-            assert result['source'] == 'scan' and result['x0'] == .35
+            assert result['source'] == 'scan' and result['x0'] == .34  # crop includes one point of horizontal whitespace
             paid = sum(calls)
             # Re-derive from physical observations under changed Markdown.
             offline = PlacementService(ws, mode='offline', reader=lambda *a:1/0)

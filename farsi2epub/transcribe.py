@@ -324,4 +324,4 @@ def transcribe_pages(
         click.echo(f"Failed pages (rerun with --pages): {','.join(str(n) for n in sorted(state.failed))}")
     if state.budget_exceeded:
         click.echo(f"Stopped early: --max-cost {max_cost} reached.")
-    click.echo(f"Total cost this run: ${state.total_cost:.4f}")
+    click.echo(f"Transcription cost this run: ${state.total_cost:.4f}")

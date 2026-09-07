@@ -14,7 +14,7 @@ import fitz
 
 from . import locate
 
-DERIVATION_VERSION = 4
+DERIVATION_VERSION = 5
 
 
 @dataclass
@@ -70,6 +70,48 @@ def _anchor_score(anchor: list[str], reader: list[str], at: int,
     return max(scores, default=0.0)
 
 
+def _aligned_exact_span(md, q, reader):
+    """Use unique surrounding page alignment, never incomplete-map uniqueness.
+
+    Concatenated normalized tokens reconcile split/fused boundaries; offsets
+    into the original Markdown are retained by normalizing each side of span.
+    Both flanks must independently anchor the candidate in reading order.
+    """
+    if q.span is None or not (0 <= q.span[0] < q.span[1] <= len(md)):
+        return None
+    left = "".join(locate._norm_words(md[:q.span[0]]))
+    target = "".join(locate._norm_words(md[q.span[0]:q.span[1]]))
+    right = "".join(locate._norm_words(md[q.span[1]:]))
+    if not target:
+        return None
+    full = left + target + right
+    reading = "".join(reader)
+    offsets = [0]
+    for token in reader:
+        offsets.append(offsets[-1] + len(token))
+    blocks = [b for b in SequenceMatcher(None, full, reading, autojunk=False).get_matching_blocks()
+              if b.size >= 12 and full.count(full[b.a:b.a+b.size]) == 1
+              and reading.count(full[b.a:b.a+b.size]) == 1]
+    candidates = []
+    for lo, start in enumerate(offsets[:-1]):
+        end = start + len(target)
+        if not reading.startswith(target, start) or end not in offsets:
+            continue
+        if any(not token for token in reader[lo:offsets.index(end)]):
+            continue
+        # Unique blocks may overlap the target, but must supply real flanking
+        # evidence. Distant or contradictory alignment cannot certify identity.
+        before = any(b.a < len(left)-11 and b.b <= start
+                     and abs((start-b.b)-(len(left)-b.a)) <= 16
+                     and 0 <= len(left)-min(b.a+b.size, len(left)) <= 60 for b in blocks)
+        after = any(b.a+b.size >= len(left)+len(target)+12 and b.b+b.size >= end
+                    and abs((b.b+b.size-end)-(b.a+b.size-len(left)-len(target))) <= 16
+                    and 0 <= max(b.a, len(left)+len(target))-len(left)-len(target) <= 60 for b in blocks)
+        if before and after:
+            candidates.append((lo, offsets.index(end)))
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def target_span(md: str, q: locate.Query, reader: list[str], *,
                 fragments: bool = False) -> Optional[tuple[int, int]]:
     """Resolve occurrence by text and exact Markdown anchors, never geometry."""
@@ -107,7 +149,7 @@ def target_span(md: str, q: locate.Query, reader: list[str], *,
                 score = 0.85 * context + 0.15 * target if has_context else target
                 candidates[start, end] = max(score, candidates.get((start, end), 0))
     if not candidates:
-        return None
+        return _aligned_exact_span(md, q, reader) if not fragments else None
     ranked = sorted(candidates.items(), key=lambda v: (-v[1], v[0][1]-v[0][0], v[0][0]))
     (lo, hi), score = ranked[0]
     # Contained windows can represent split/fused token boundaries. Distinct
@@ -192,6 +234,11 @@ def insertion_slot(md, q, reader):
 def place(md: str, q: locate.Query, words: list[PrintedWord], *,
           source: str = "scan") -> PlacementResult:
     reader = [locate._fold_word(w.text) for w in words]
+    if q.kind == "finding" and q.span is None:
+        if any(not token for token in reader):
+            return PlacementResult("unresolved", reason="missing_reading")
+        if q.text and md.count(q.text) > 1:
+            return PlacementResult("unresolved", reason="ambiguous_occurrence")
     span = target_span(md, q, reader, fragments=source == "match")
     if span is None:
         slot = insertion_slot(md, q, reader)

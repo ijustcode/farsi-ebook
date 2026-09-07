@@ -112,9 +112,20 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--res", "resolution", type=click.Choice([RES_HI, RES_STD]), default=RES_HI, help="Page-image resolution: hi (2576px, default — best character accuracy) or std (1568px, ~30% cheaper; use for crisp large-print sources or very long books; failing pages escalate to hi-res).")
 @click.option("--qc", "qc_mode", type=click.Choice(["auto", "manual", "skip", "ask"]), default="ask", help="Run a QC pass after transcription: auto (automated), manual (review UI), skip (none), or ask (prompt if TTY).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the auto-QC cost confirmation prompt.")
-def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str, assume_yes: bool):
+@click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default="auto", show_default=True)
+@click.option("--bbox-model", default=MODEL_STRONG, show_default=True)
+@click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5., show_default=True, help="Separate geometry budget in dollars.")
+def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str, assume_yes: bool, bbox_mode: str, bbox_model: str, bbox_max_cost: float):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
     ws = _load_workspace(slug)
+    from .scan import Budget
+    from .config import PRICES
+    try:
+        Budget(bbox_max_cost)
+        if bbox_model not in PRICES:
+            raise ValueError(f"No price configured for bbox model {bbox_model!r}")
+    except ValueError as exc:
+        raise click.BadParameter(str(exc)) from exc
     meta = ws.meta
     page_count = meta.get("page_count")
     if page_count is None:
@@ -123,32 +134,35 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
     spec = pages_spec or meta.get("page_range")
     pages = parse_pages_spec(spec, page_count)
+    requested_pages = list(pages)
 
     if not force:
         done = set(ws.pages_done())
         pages = [p for p in pages if p not in done]
 
     if not pages:
-        click.echo("Nothing to do: all requested pages are already transcribed (use --force to redo).")
-        return
+        click.echo("All requested pages are transcribed; resuming geometry.")
 
-    click.echo(f"Resolved {len(pages)} page(s) to transcribe: {pages[0]}-{pages[-1]}" if len(pages) > 1 else f"Resolved 1 page to transcribe: {pages[0]}")
+    if pages:
+        click.echo(f"Resolved {len(pages)} page(s) to transcribe: {pages[0]}-{pages[-1]}" if len(pages) > 1 else f"Resolved 1 page to transcribe: {pages[0]}")
 
-    # Ensure page images exist at the chosen resolution, rendering any missing.
-    for n in pages:
-        img_path = ws.page_hires_path(n) if resolution == RES_HI else ws.page_image_path(n)
-        if not img_path.is_file():
-            click.echo(f"Rendering page {n} ({resolution}-res) ...")
-            render_page_to(ws.pdf_path, n, img_path, long_edge=LONG_EDGE_BY_RES[resolution])
+        # Ensure page images exist at the chosen resolution, rendering any missing.
+        for n in pages:
+            img_path = ws.page_hires_path(n) if resolution == RES_HI else ws.page_image_path(n)
+            if not img_path.is_file():
+                click.echo(f"Rendering page {n} ({resolution}-res) ...")
+                render_page_to(ws.pdf_path, n, img_path, long_edge=LONG_EDGE_BY_RES[resolution])
 
-    try:
-        transcribe.transcribe_pages(
-            ws, pages, model=model, max_cost=max_cost, concurrency=concurrency, resolution=resolution
-        )
-    except NotImplementedError:
-        click.echo("")
-        click.echo("Transcription module not yet implemented (coming in a later task).")
-        return
+        try:
+            transcribe.transcribe_pages(
+                ws, pages, model=model, max_cost=max_cost, concurrency=concurrency, resolution=resolution
+            )
+        except NotImplementedError:
+            click.echo("")
+            click.echo("Transcription module not yet implemented (coming in a later task).")
+            return
+
+    _geometry_pages(ws, requested_pages, bbox_mode, bbox_model, bbox_max_cost)
 
     # Handle post-transcription QC logic
     resolved_qc_mode = qc_mode
@@ -170,13 +184,45 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
     if resolved_qc_mode in ("auto", "manual"):
         try:
-            qc.run_qc(ws, resolved_qc_mode, assume_yes=assume_yes, pages=pages)
+            qc.run_qc(ws, resolved_qc_mode, assume_yes=assume_yes, pages=[p for p in requested_pages if p in set(ws.pages_done())])
         except NotImplementedError:
             click.echo("QC module not yet implemented (coming in a later task).")
 
 
 # `transcribe` is a reserved-looking name; expose it as the `transcribe` command.
 main.add_command(transcribe_cmd, name="transcribe")
+
+
+def _geometry_pages(ws, pages, mode, model, max_cost):
+    from .scan import PlacementService
+    service = PlacementService(ws, mode=mode, model=model, max_cost=max_cost)
+    completed = set(ws.pages_done())
+    try:
+        for n in pages:
+            if n not in completed:
+                click.echo(f"Geometry page {n}: skipped (not transcribed)")
+                continue
+            _, summary = service.ensure_page_map(n)
+            click.echo(f"Geometry page {n}: {summary.get('status', 'partial')}; "
+                       f"{summary.get('verified_words', 0)}/{summary.get('words', 0)} words verified; "
+                       f"{summary.get('read_lines', 0)}/{summary.get('detected_lines', 0)} lines read")
+    finally:
+        cost = service.budget.snapshot()
+        service.close()
+        click.echo(f"Geometry spend: ${cost['spent']:.6f}; uncertain: ${cost['uncertain']:.6f}; separate cap: ${cost['limit']:.2f}")
+
+
+@main.command()
+@click.argument("slug")
+@click.option("--pages", "pages_spec", default=None)
+@click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default="auto", show_default=True)
+@click.option("--bbox-model", default=MODEL_STRONG, show_default=True)
+@click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5., show_default=True)
+def geometry(slug, pages_spec, bbox_mode, bbox_model, bbox_max_cost):
+    """Backfill or resume page geometry without transcription or QC."""
+    ws = _load_workspace(slug)
+    pages = parse_pages_spec(pages_spec or ws.meta.get("page_range"), ws.meta["page_count"])
+    _geometry_pages(ws, pages, bbox_mode, bbox_model, bbox_max_cost)
 
 
 @main.command()

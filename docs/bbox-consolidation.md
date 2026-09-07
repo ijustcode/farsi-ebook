@@ -2,6 +2,8 @@
 
 The working tree implements `match → scan → unresolved`. It has **not** passed the promotion gate. Independent page/word annotations, a frozen audited held-out set, and a valid paired accuracy comparison are still outstanding. No accuracy gain is claimed.
 
+For the subsequent correction-independent page-map repair and its incomplete acceptance status, see [page-geometry-coverage-status.md](page-geometry-coverage-status.md).
+
 ## Runtime and contracts
 
 `farsi2epub.placement` exposes `PlacementService`, `PlacementResult`, `PrintedWord`, and `place`. Review uses the same service. Queries contain the full original/suggested span, exact Markdown boundaries, and correction kind. There is no five-word cap or QC-coordinate input. Successful outputs contain `source: match|scan`, ordered normalized line segments, a union envelope, evidence references, status, and buffer counts. Unresolved/pending outputs have no accepted rectangle. Anchored insertions without printed target words use a distinct insertion-boundary marker.

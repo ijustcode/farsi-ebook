@@ -186,7 +186,9 @@ class PlacementService:
                        DETECTOR, DERIVATION_VERSION])
 
     def _key(self, n, md, q):
-        return digest([self._page_key(n), md, asdict(q)])
+        page_key = self._page_key(n)
+        revision = _read_json(self.root / "pages" / f"{page_key}.json").get("revision")
+        return digest([page_key, revision, md, asdict(q)])
 
     def _observation_key(self, png):
         return digest([hashlib.sha256(png).hexdigest(), self.model, self.prompt_hash,
@@ -312,12 +314,69 @@ class PlacementService:
         return fitz.Rect(max(page_rect.x0, r.x0-2), top,
                          min(page_rect.x1, r.x1+2), bottom)
 
+    def page_map_summary(self, n):
+        return _read_json(self.root / "pages" / f"{self._page_key(n)}.json").get("summary", {})
+
+    def ensure_page_map(self, n, *, allow_api=None):
+        """Acquire reusable evidence independently of Markdown and corrections."""
+        allow_api = self.mode == "auto" if allow_api is None else allow_api
+        key = self._page_key(n)
+        with _claim(self.root / "pages" / f"{key}.json"):
+            cached = _read_json(self.root / "pages" / f"{key}.json")
+            words = _cached_words(cached, key)
+            if cached.get("complete") and cached.get("summary") and (words or
+                    cached["summary"].get("status") == "blank_nontext" and cached.get("words") == []):
+                return words, cached["summary"]
+            with fitz.open(self.ws.pdf_path) as doc:
+                page = doc[n-1]
+                embedded = locate._page_words(page)
+                if locate._tier_a_usable(embedded):
+                    words = []
+                    groups = locate._cluster_rect_lines([r for r, _ in embedded])
+                    for line_id, group in enumerate(groups):
+                        for rect in sorted(group, key=lambda r: -r.x1):
+                            text = next(t for r, t in embedded if r == rect)
+                            nr = locate._rect_to_fracs(rect * page.rotation_matrix, page.rect)
+                            words.append(PrintedWord(text, [nr[k] for k in ("x0", "y0", "x1", "y1")], line_id, ["pdf_words"]))
+                    rows = [asdict(w) for w in words]
+                    summary = {"status": "complete", "detected_lines": len(groups), "read_lines": len(groups),
+                               "words": len(words), "verified_words": len(words), "failures": [], "source": "match"}
+                    if self._page_key(n) != key:
+                        raise RuntimeError("source_changed")
+                    _write_json(self.root / "pages" / f"{key}.json", {"key": key, "words": rows,
+                                "revision": digest(rows), "complete": True, "summary": summary,
+                                "normalized_words": [locate._fold_word(w.text) for w in words],
+                                "word_ids": [digest([key, w.line, j]) for j, w in enumerate(words)]})
+                    return words, summary
+            self._build_map(n, "", [], allow_api)
+            cached = _read_json(self.root / "pages" / f"{key}.json")
+            return _cached_words(cached, key), cached.get("summary", {})
+
     def _build_map(self, n, md, queries, allow_api):
         page_key = self._page_key(n)
         with fitz.open(self.ws.pdf_path) as doc:
             page = doc[n-1]
             lines = locate._scan_page_lines(page)
+            map_path = self.root / "pages" / f"{page_key}.json"
+            previous = _cached_words(_read_json(map_path), page_key)
+            if not previous:
+                legacy_key = digest([self.source_hash(), n, self.model, RENDER_VERSION, LONG_EDGE_HI,
+                                     fitz.VersionBind, self.prompt_hash, llm.REGION_READER_VERSION, DETECTOR, 4])
+                previous = _cached_words(_read_json(self.root / "pages" / f"{legacy_key}.json"), legacy_key)
+            blocked = []
+            def read(pngs, number, api):
+                try:
+                    return self._read(pngs, number, api and not blocked)
+                except Exception as exc:
+                    _write_json(self.root / "attempts" / f"{self.run_id}-{n}.json",
+                                {"page": n, "error_type": type(exc).__name__, "time": time.time()})
+                    blocked.append(self._acquisition_error or ("budget_exhausted" if str(exc) == "budget_exhausted" else "api_failure"))
+                    return self._read(pngs, number, False)
             if not lines:
+                summary = {"status": "blank_nontext", "detected_lines": 0,
+                           "read_lines": 0, "words": 0, "verified_words": 0, "failures": []}
+                _write_json(map_path, {"key": page_key, "words": [], "complete": True,
+                                     "summary": summary, "revision": digest([])})
                 return [], False
             # Full-width crops retain neighboring detached letters and dots;
             # explicit line identity is fixed before recognition.
@@ -329,12 +388,12 @@ class PlacementService:
                 r.y0 = max(page.rect.y0, r.y0-1)
                 r.y1 = min(page.rect.y1, r.y1+1)
                 clips.append(r)
-            observations, line_keys = self._read([self._render(page, r) for r in clips], n, allow_api)
+            observations, line_keys = read([self._render(page, r) for r in clips], n, allow_api)
             # Older successful high-resolution observations remain compatible.
             # Replay them before acquiring a differently padded retry crop.
             old_retry = [i for i, ob in enumerate(observations) if ob is None or len(ob["lines"]) != 1]
             if old_retry:
-                old_obs, old_keys = self._read([self._render(page, clips[i], 1.5)
+                old_obs, old_keys = read([self._render(page, clips[i], 1.5)
                                                for i in old_retry], n, False)
                 for i, ob, key in zip(old_retry, old_obs, old_keys):
                     if ob is not None and len(ob["lines"]) == 1:
@@ -343,10 +402,28 @@ class PlacementService:
             retry = [i for i, ob in enumerate(observations) if ob is None or len(ob["lines"]) != 1]
             if retry:
                 retry_clips = [self._retry_line_clip(page.rect, lines, i) for i in retry]
-                obs2, keys2 = self._read([self._render(page, r, 1.5) for r in retry_clips], n, allow_api)
+                obs2, keys2 = read([self._render(page, r, 1.5) for r in retry_clips], n, allow_api)
                 for i, ob, key in zip(retry, obs2, keys2):
                     if ob is not None and len(ob["lines"]) == 1:
                         observations[i], line_keys[i] = ob, key
+            # A second, overlapping contextual read can recover a missing line.
+            # Independently read neighbors must agree exactly; line count alone
+            # never establishes identity, and ambiguous/split regions stay local.
+            contextual = [i for i, ob in enumerate(observations)
+                          if ob is None or len(ob["lines"]) != 1]
+            for i in contextual:
+                lo, hi = max(0, i-1), min(len(lines)-1, i+1)
+                neighbors = [j for j in range(lo, hi+1) if j != i]
+                if not neighbors or any(observations[j] is None or len(observations[j]["lines"]) != 1 for j in neighbors):
+                    continue
+                region = locate._union_rects([self._retry_line_clip(page.rect, lines, j) for j in range(lo, hi+1)])
+                context_obs, context_keys = read([self._render(page, region, 1.5)], n, allow_api)
+                ob = context_obs[0]
+                if ob is None or len(ob["lines"]) != hi-lo+1:
+                    continue
+                if all(locate._norm_words(ob["lines"][j-lo]) == locate._norm_words(observations[j]["lines"][0]) for j in neighbors):
+                    observations[i] = {**ob, "lines": [ob["lines"][i-lo]]}
+                    line_keys[i] = context_keys[0]
             complete = all(ob is not None and len(ob["lines"]) == 1 for ob in observations)
             if not complete:
                 with self.lock:
@@ -363,36 +440,86 @@ class PlacementService:
                 for token in tokens:
                     words.append(PrintedWord(token, [rect[k] for k in ("x0","y0","x1","y1")],
                                              i, [line_keys[i]], False))
-            needed = set()
-            for q in queries:
-                span = target_span(md, q, [w.text for w in words])
-                if span:
-                    needed.update(w.line for w in words[span[0]:span[1]])
-                else:
-                    slot = insertion_slot(md, q, [w.text for w in words])
-                    if slot is not None:
-                        needed.update(w.line for w in words[slot-1:slot+1])
+            needed = set(range(len(lines)))
             verified = {}
+            def persist():
+                result = []
+                for line_id in range(len(lines)):
+                    current = verified.get(line_id) or [w for w in words if w.line == line_id]
+                    old = [w for w in previous if w.line == line_id]
+                    if [w.text for w in old] == [w.text for w in current]:
+                        current = [a if a.supported else b for a, b in zip(current, old)]
+                    elif old and (any(w.supported for w in old) or all(w.text == "�" for w in current)):
+                        # Conflicting new text cannot erase previously supported
+                        # identities. Keep that line until evidence reconciles it.
+                        current = old
+                    result.extend(current)
+                failures = [{"line": i, "reason": "missing_reading" if any(w.text == "�" for w in result if w.line == i)
+                             else "missing_word_geometry"} for i in range(len(lines))
+                            if any(not w.supported for w in result if w.line == i)]
+                done = not failures
+                summary = {"status": "complete" if done else "acquisition_blocked" if blocked or self.cancelled.is_set() else "partial",
+                           "detected_lines": len(lines),
+                           "read_lines": sum(not any(w.text == "�" for w in result if w.line == i) for i in range(len(lines))),
+                           "words": sum(w.text != "�" for w in result),
+                           "verified_words": sum(w.supported for w in result),
+                           "failures": failures, "acquisition_reasons": sorted(set(blocked + (["cancelled"] if self.cancelled.is_set() else [])))}
+                if self._page_key(n) != page_key:
+                    raise RuntimeError("source_changed")
+                rows = [asdict(w) for w in result]
+                originals = {}
+                for line_id, observation in enumerate(observations):
+                    if observation and len(observation["lines"]) == 1:
+                        tokens = [t for t in observation["lines"][0].split() if locate._fold_word(t)]
+                        if [locate._fold_word(t) for t in tokens] == [w.text for w in result if w.line == line_id]:
+                            originals[line_id] = tokens
+                word_text = [{"original": originals.get(i, [None] * len([w for w in result if w.line == i]))[j],
+                              "normalized": w.text}
+                             for i in range(len(lines)) for j, w in enumerate(w for w in result if w.line == i)]
+                _write_json(map_path, {"key": page_key, "words": rows, "revision": digest(rows),
+                            "word_text": word_text, "summary": summary, "complete": done, "reading_complete": summary["read_lines"] == len(lines),
+                            "word_ids": [digest([page_key, i, j, w.text]) for i in range(len(lines)) for j, w in enumerate(w for w in result if w.line == i)],
+                            "lines": [{"id": i, "text": observations[i]["lines"][0] if observations[i] else None} for i in range(len(lines))],
+                            "detector": DETECTOR, "coordinate_space": "normalized_original_page"})
+                return result
+            persist()
             for i in sorted(needed):
                 if observations[i] is None or len(observations[i]["lines"]) != 1:
+                    continue
+                old = [w for w in previous if w.line == i]
+                if old and all(w.supported for w in old) and [w.text for w in old] == locate._norm_words(observations[i]["lines"][0]):
+                    verified[i] = old
                     continue
                 line = lines[i]
                 # Each gap-derived physical group is independently read. Equal
                 # token counts alone never make these rectangles trustworthy.
+                # Coalesce nearby fragments into physical groups before paying
+                # for recognition. Identity still requires independent text.
                 group_clips = []
+                expanded = self._retry_line_clip(page.rect, lines, i)
                 for r in line.words:
                     c = fitz.Rect(r)
-                    c.y0, c.y1 = clips[i].y0, clips[i].y1
-                    group_clips.append(c)
-                group_obs, group_keys = self._read([self._render(page, r) for r in group_clips], n, allow_api)
+                    c.y0, c.y1 = expanded.y0, expanded.y1
+                    if group_clips and group_clips[-1].x0 - c.x1 < line.rect.height * .25:
+                        group_clips[-1] |= c
+                    else:
+                        group_clips.append(c)
+                physical_groups = [fitz.Rect(r) for r in group_clips]
+                # Short groups retain linguistic context and amortize the
+                # reader overhead without implying word-count geometry.
+                group_clips = [locate._union_rects(physical_groups[j:j+2])
+                               for j in range(0, len(physical_groups), 2)]
+                group_clips = [fitz.Rect(max(page.rect.x0, r.x0-1), r.y0,
+                                         min(page.rect.x1, r.x1+1), r.y1) for r in group_clips]
+                group_obs, group_keys = read([self._render(page, r) for r in group_clips], n, allow_api)
                 missing = [j for j, ob in enumerate(group_obs) if ob is None or len(ob["lines"]) != 1]
                 if missing:
-                    obs2, keys2 = self._read([self._render(page, group_clips[j], 1.5) for j in missing], n, allow_api)
+                    obs2, keys2 = read([self._render(page, group_clips[j], 1.5) for j in missing], n, allow_api)
                     for j, ob, key in zip(missing, obs2, keys2):
                         if ob is not None and len(ob["lines"]) == 1:
                             group_obs[j], group_keys[j] = ob, key
                 groups = []
-                for ob, r, key in zip(group_obs, line.words, group_keys):
+                for ob, r, key in zip(group_obs, group_clips, group_keys):
                     if ob is None or len(ob["lines"]) != 1:
                         continue
                     nr = locate._rect_to_fracs(r, page.rect)
@@ -400,28 +527,19 @@ class PlacementService:
                 verified[i] = supported_groups(observations[i]["lines"][0], groups, i, line_keys[i])
                 if not verified[i]:
                     windows = []
-                    for length in (2,3):
-                        for start in range(len(line.words)-length+1):
-                            r = locate._union_rects(line.words[start:start+length])
-                            r.y0, r.y1 = clips[i].y0, clips[i].y1
+                    for length in (1,3):
+                        for start in range(len(physical_groups)-length+1):
+                            r = locate._union_rects(physical_groups[start:start+length])
+                            r.y0, r.y1 = expanded.y0, expanded.y1
                             windows.append(r)
-                    obs3, keys3 = self._read([self._render(page,r) for r in windows],n,allow_api)
+                    obs3, keys3 = read([self._render(page,r) for r in windows],n,allow_api)
                     for ob,r,key in zip(obs3,windows,keys3):
                         if ob is not None and len(ob['lines']) == 1:
                             nr=locate._rect_to_fracs(r,page.rect)
                             groups.append((ob['lines'][0],[nr[k] for k in ('x0','y0','x1','y1')],key))
                     verified[i] = supported_windows(observations[i]['lines'][0],groups,i,line_keys[i])
-            result = []
-            for i in range(len(lines)):
-                result.extend(verified.get(i) or [w for w in words if w.line == i])
-            if self._page_key(n) != page_key:
-                raise RuntimeError("source_changed")
-            if allow_api:
-                _write_json(self.root / "pages" / f"{page_key}.json",
-                            {"key": page_key, "words": [asdict(w) for w in result],
-                             "detector": DETECTOR, "render_version": RENDER_VERSION,
-                             "coordinate_space": "normalized_original_page", "complete": bool(result),
-                             "reading_complete": complete})
+                persist()
+            result = persist()
             return result, bool(result)
 
     def results(self, n, md, queries, boxes=None):
@@ -467,15 +585,18 @@ class PlacementService:
                 # Cached page geometry can answer a new Markdown/query for free.
                 for i in missing:
                     if words:
-                        result = place(md, queries[i], words)
+                        result = place(md, queries[i], words, source=cached.get("summary", {}).get("source", "scan"))
                         if result.box is not None:
                             results[i] = result
                 still = [i for i in missing if results[i].box is None]
                 if still:
-                    words, complete = self._build_map(n, md, [queries[i] for i in still], allow_api)
+                    words, summary = self.ensure_page_map(n, allow_api=allow_api)
+                    complete = bool(words)
                     for i in still:
-                        results[i] = (place(md, queries[i], words) if complete
+                        results[i] = (place(md, queries[i], words, source=summary.get("source", "scan")) if complete
                                       else PlacementResult("unresolved", reason="page_reading_incomplete"))
+                        if results[i].box is None and summary.get("acquisition_reasons"):
+                            results[i].reason += ": " + ", ".join(summary["acquisition_reasons"])
             except Exception as exc:
                 with self.lock:
                     self._failures[page_key] = {"error_type": type(exc).__name__, "time": time.time()}
