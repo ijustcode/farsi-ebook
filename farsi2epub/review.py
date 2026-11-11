@@ -38,7 +38,7 @@ from markupsafe import Markup
 from . import llm, qc
 from .config import MODEL_STRONG
 from .locate import Query, locate_queries
-from .scan import PlacementService, DEFAULT_MAX_COST
+from .scan import PlacementService, DEFAULT_MAX_COST, no_evidence_reason
 from .page_map import PlacementResult
 from .workspace import PROJECT_ROOT, Workspace
 
@@ -172,6 +172,48 @@ def _nth_index(hay: str, needle: str, nth: int) -> int:
 
 _REFINER: Optional[PlacementService] = None
 
+_NO_EVIDENCE_TEXT = {
+    "reader_credit_unavailable": "the image reader was refused because the API account has no credit",
+    "reader_access_denied": "the image reader was refused (API key not accepted)",
+    "budget_exhausted": "acquisition stopped at the run's --bbox-max-cost limit before any line was read",
+    "api_failure": "image reader requests failed",
+    "cancelled": "acquisition was cancelled before any line was read",
+    "no_reading_stored": ("no detected line has a stored reading (acquisition never ran or ran offline, "
+                          "or every reading came back illegible or incomplete)"),
+}
+
+
+def _page_map_summary(n: int) -> dict:
+    refiner = _REFINER
+    if refiner is None or not hasattr(refiner, "page_map_summary"):
+        return {}
+    try:
+        return refiner.page_map_summary(n)
+    except Exception:
+        return {}
+
+
+def _evidence_banner(slug: str, n: int, summary: dict) -> Optional[dict]:
+    """Page banner when no detected line has a reading; None otherwise."""
+    reason = no_evidence_reason(summary)
+    if reason is None:
+        return None
+    causes = [c.strip() for c in reason.split(":", 1)[1].split(",")]
+    text = "; ".join(_NO_EVIDENCE_TEXT.get(c, c.replace("_", " ")) for c in causes)
+    command = f"farsi2epub geometry {slug} --pages {n} --bbox-mode auto"
+    hint = (f"To acquire it, run: {command} (or start review with --pages {n} --bbox-mode auto)."
+            + (" If the budget stops it again, add --bbox-max-cost with a higher amount."
+               if "budget_exhausted" in causes else "")
+            + (" Add API credit first." if "reader_credit_unavailable" in causes else "")
+            + " Corrections on this page stay unresolved until then.")
+    return {
+        "reason": reason,
+        "text": (f"No reading evidence on this page: {text}. "
+                 f"0 of {summary.get('detected_lines', 0)} detected lines were read, so no boxes are shown."),
+        "hint": hint,
+        "command": command,
+    }
+
 
 def _box_specs(
     issues: list[dict],
@@ -293,10 +335,18 @@ def _attach_boxes(
             label += f" +{box.get('buffer_before', 0) + box.get('buffer_after', 0)} words"
         reason = result.reason if isinstance(result, PlacementResult) else ""
         detail = f": {reason.replace(chr(95), chr(32))}" if reason else ""
-        if status == "unresolved" and detail:
+        title = f"{label}{detail if status == 'estimated' else ''}"
+        if status == "unresolved" and reason.startswith("no evidence"):
+            # Zero read lines on the page: say so plainly, cause in the tooltip.
+            label = "no evidence"
+            title = ("No evidence: " + reason.split(":", 1)[1].strip().replace("_", " ")
+                     + " (no line on this page has an image reading, so no box is shown)")
+        elif status == "unresolved" and detail:
             label += detail
+            title = label
         chip = {"cls": "pm-zero" if status == "located" else "pm-near" if status in {"buffered", "estimated"} else "pm-none",
-                "label": label, "title": f"{label}{detail if status == 'estimated' else ''}. Evidence status, not independently measured accuracy.",
+                "label": label, "title": f"{title}. Evidence status, not independently measured accuracy.",
+                "reason": reason,
                 "status": status, "source": box.get("source") if box else None,
                 "evidence": result.evidence if isinstance(result, PlacementResult) else [],
                 "kind": result.kind if isinstance(result, PlacementResult) else "words",
@@ -392,10 +442,12 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
     for iss in issues:
         iss.setdefault("box", None)
     if not issues and not hunks:
+        summary = _page_map_summary(n)
         return {
             "pending": False, "boxes": [], "hunk_boxes": {}, "issue_boxes": {},
             "hunk_scores": {}, "issue_scores": {},
-            "page_map": _REFINER.page_map_summary(n) if _REFINER and hasattr(_REFINER, "page_map_summary") else {},
+            "page_map": summary,
+            "evidence_banner": _evidence_banner(ws.slug, n, summary),
         }
 
     specs = _box_specs(issues, hunks, text)
@@ -414,10 +466,12 @@ def _boxes_payload(ws: Workspace, n: int) -> dict:
 
     boxes = _attach_boxes(specs, located,
         refiner.results(n, text, queries, located) if refiner else None)
+    summary = _page_map_summary(n)
     return {
         "pending": False,
         "boxes": boxes,
-        "page_map": refiner.page_map_summary(n) if refiner and hasattr(refiner, "page_map_summary") else {},
+        "page_map": summary,
+        "evidence_banner": _evidence_banner(ws.slug, n, summary),
         "correction_statuses": [(hunk or issue or {}).get("placement", {}).get("status", "unresolved")
                                 for _, _, _, hunk, issue in specs],
         "hunk_boxes": {str(h["id"]): h.get("box") for h in hunks},
@@ -1191,8 +1245,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status-note { font-size: 0.85rem; color: #8fce9f; direction: ltr; align-self: center; }
 .status-note.err { color: #f5b5b8; }
 .meta-row span.pill.refine-chip { color: #9a9ba3; border-color: #3a3b42; font-size: 0.75rem; }
-/* Live PLACEMENT chip (farsi2epub/placement.py). It sits on its own row below
-   the associated correction/finding card content: a diagnostic, not a control. */
+/* Live placement-status chip (evidence status from scan.PlacementService). It
+   sits on its own row below the correction/finding card: a diagnostic, not a control. */
 .pm-chip {
   font-size: 0.72rem; line-height: 1; direction: ltr; align-self: center;
   border: 1px solid #3a3b42; border-radius: 999px; padding: 0.22rem 0.5rem;
@@ -1211,6 +1265,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 .issue-placement-row { margin-top: 0.35rem; }
 .qc-box-single.qc-box-estimated { border-color: #b7791f; border-style: dashed; background: rgba(183,121,31,.10); }
 .qc-box-estimated .qc-box-shape { stroke: #b7791f; stroke-dasharray: 1 .6; fill: rgba(183,121,31,.10); }
+/* Page has detected lines but no reading at all: no boxes, say why. */
+.evidence-banner {
+  direction: ltr; margin: 0.45rem 0; padding: 0.5rem 0.7rem; font-size: 0.85rem;
+  border: 1px solid #7a2020; border-radius: 6px; background: rgba(122,32,32,.18); color: #f2c0c0;
+}
+.evidence-banner[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -1256,6 +1316,10 @@ button:disabled { opacity: 0.5; cursor: default; }
         {% endif %}
       </div>
       <div id="geometry-summary-{{ p.page }}">Geometry: {{ p.page_map.detected_word_geometry|default(0) }}/{{ p.page_map.detected_words|default(0) }} detected regions; {{ p.page_map.verified_words|default(0) }} words verified, {{ p.page_map.inferred_words|default(0) }} approximate; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read</div>
+      <div class="evidence-banner" id="evidence-banner-{{ p.page }}" role="status"{% if not p.evidence_banner %} hidden{% endif %}>
+        <span class="eb-text">{{ p.evidence_banner.text if p.evidence_banner else '' }}</span>
+        <span class="eb-hint">{{ p.evidence_banner.hint if p.evidence_banner else '' }}</span>
+      </div>
       {% if p.qc_panel %}
       <div class="qc-panel" id="qc-panel-{{ p.page }}">
         <div class="qc-panel-title">QC findings</div>
@@ -1904,6 +1968,13 @@ function applyPlacementScores(page, data) {
     var m = data.page_map;
     summary.textContent = 'Geometry: ' + (m.detected_word_geometry || 0) + '/' + (m.detected_words || 0) + ' detected regions; ' + (m.verified_words || 0) + ' words verified, ' + (m.inferred_words || 0) + ' approximate; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
   }
+  var banner = document.getElementById('evidence-banner-' + page);
+  if (banner && 'evidence_banner' in data) {
+    var eb = data.evidence_banner;
+    banner.hidden = !eb;
+    banner.querySelector('.eb-text').textContent = eb ? eb.text : '';
+    banner.querySelector('.eb-hint').textContent = eb ? eb.hint : '';
+  }
   var k;
   if (data.hunk_scores) {
     for (k in data.hunk_scores) {
@@ -2086,6 +2157,7 @@ def _page_view(ws: Workspace, n: int) -> dict:
     # Overlay boxes: sets "box" on each hunk / unlinked issue, returns the
     # template list (percent geometry). Must run before view_hunks copies.
     boxes = _build_boxes(ws, n, issues, hunks, text)
+    page_map = _page_map_summary(n)
 
     if panel_kind is not None:
         view_hunks = []
@@ -2136,7 +2208,8 @@ def _page_view(ws: Workspace, n: int) -> dict:
         "quality_score": sidecar.get("quality_score", 0.0) or 0.0,
         "flags": sidecar.get("flags", []) or [],
         "validator_issues": validator_issues,
-        "page_map": _REFINER.page_map_summary(n) if _REFINER and hasattr(_REFINER, "page_map_summary") else {},
+        "page_map": page_map,
+        "evidence_banner": _evidence_banner(ws.slug, n, page_map),
         "qc_issue_types": qc_issue_types,
         "qc_panel": qc_panel,
         "boxes": boxes,
@@ -2190,9 +2263,9 @@ class _ReviewState:
         self.httpd: Optional[ThreadingHTTPServer] = None
 
 
-# Background scan-box refinement fan-out. The render path never calls the
-# API, so these workers are what actually warms locate_vlm.json; the browser
-# polls /boxes/<n> and swaps refined boxes in as pages complete.
+# Background evidence fan-out. The render path never calls the API, so the
+# PlacementService workers are what fill locate_evidence/; the browser polls
+# /boxes/<n> and swaps boxes, chips and the evidence banner in as pages finish.
 _REFINE_WORKERS = 4
 
 

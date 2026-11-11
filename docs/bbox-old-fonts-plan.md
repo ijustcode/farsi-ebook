@@ -34,8 +34,8 @@ What v1 got right:
 What v1 got wrong or missed, in order of severity:
 
 1. **The transcription dependency was left as an open question. It is the main risk.** The hadpi
-   transcription is poor (§2 E20–E23): the model flagged the page `illegible` with confidence 0.55,
-   yet `needs_review` stayed false. The text contains fluent, plausible legal phrasing that is not
+   transcription is poor (§2 E20–E23): the model flagged the page `illegible` with confidence 0.55.
+   (Correction after Step 0: the review gate *did* flag it; see E20.) The text contains fluent, plausible legal phrasing that is not
    on the page, and nonsense strings survive even after human review. An aligner fed this text
    cannot be accurate. v2 adds a transcription track (§5) and makes the aligner tolerate local
    text errors by design (§4.4).
@@ -134,7 +134,7 @@ are new in this review.
 | **E17** | The top 4 lines of hadpi p2 are detected correctly; merging starts where the slope starts. | same overlay as E9 | verified |
 | **E18** | **Line slope varies within a page.** Cross-correlating row-ink profiles of a left and a right column strip, in three vertical bands: p1 ≈ 2.2° / 2.6° / 3.3°; p2 ≈ 0.1° / 2.2° / 3.3°; p4 ≈ 1.1° / 1.7° / 2.3° (top / middle / bottom). | crude measurement, ±0.3°; sign not determined | verified as a rough measurement |
 | **E19** | Embedded photos are 2276–2392 × 3200–3428 px. The hi-res render sent to the transcriber is 1821×2576. | `page.get_images()`; `pages/hires/0002.png` size | verified |
-| **E20** | hadpi sidecars: model confidence 0.45–0.68, `flags: ["illegible"]` on p2, yet `needs_review: false` and `escalated: false` on all five. | `books/hadpi-articles/text/000N.json` | verified |
+| **E20** | hadpi sidecars: model confidence 0.45–0.68, `flags: ["illegible"]` on p2, and `needs_review: false`, `escalated: false` on all five. **Corrected after Step 0:** the gate worked. `validators.needs_review` flags confidence < 0.70 or `illegible`, and all five pages were flagged and surfaced. The stored `false` is written by the review Accept (`review.py` ~2397); `escalated: false` is by design, because the first pass was already Sonnet at hi-res. v2's original reading of this as a gate failure was wrong. | `tests/review_gate_regression.py` | verified, corrected |
 | **E21** | Human review changed 49 of 417 words on p1, 42 of 396 on p2, and 3–10 on p3–p5 (word-level diff of `.orig.md` vs `.md`). | `difflib` over the two files | verified; note the review may be incomplete |
 | **E22** | The reviewed p2 text still contains strings that are not Persian legal prose and do not match the image ("و در رقاب او", "جزء شریانند", "در رقتی"), and fluent phrases not visibly on the page ("لازم‌الاجرا و معتبر است"). | read `text/0002.md` beside `pages/hires/0002.png` | verified by reading; exact error rate needs step 1 truth |
 | **E23** | The Markdown is normalized, not diplomatic: it inserts ZWNJ ("می‌گردد" where the print has no break) and splits words the print fuses ("به وسیله" for printed "بوسیله"). | same comparison | verified |
@@ -144,8 +144,9 @@ are new in this review.
 - RC1 — no reading evidence on hadpi (E1–E6).
 - RC2 — line detection fails on warped photographed pages (E8–E11, E17–E18).
 - RC3 — the UI hid both (E7).
-- **RC4 — the transcription itself is unreliable on these pages, and the pipeline did not flag
-  it** (E20–E23).
+- **RC4 — the transcription itself is unreliable on these pages** (E21–E23). The pipeline did
+  flag the pages for review (E20, corrected); what it lacks is any way to say *which words* are
+  wrong, or to do better than one low-confidence read.
 
 ---
 
@@ -275,13 +276,14 @@ grade deterministically. Kept only to measure whether it beats G/C. It never gra
 ## 5. Transcription quality track
 
 Placement depends on it, and hadpi shows the current pipeline is blind on hard scanned pages:
-with no embedded text there is no oracle, so `validators.py` has nothing to compare against (E20).
+with no embedded text there is no oracle, so `validators.py` can only fall back on the model's
+own confidence. That is enough to flag a whole page (E20) but not to locate or reduce the errors.
 
 | ID | Change | Why | How it is tested |
 |---|---|---|---|
 | T1 | **Stop discarding resolution.** When the embedded image is larger than the 2576 px render, or glyphs are small, transcribe in 2–3 overlapping horizontal bands at native resolution and stitch on the overlap. | E19: hadpi loses ~22% linear resolution before the model reads it. | WER on truth pages, bands vs whole page. |
 | T2 | **Two independent readings and a deterministic comparison.** The line-faithful reading (§4.2) is the second reading. Compare it with `text_md` using the same word-multiset similarity `validators.py` uses against embedded text. Disagreeing spans go to a third, zoomed read of just those lines; two-of-three wins, otherwise the span is flagged for the human. | Gives scanned pages the oracle they lack. Independent errors rarely coincide. | Fraction of true errors (from truth) that fall inside flagged spans; false flag rate. |
-| T3 | **Fix the review gate.** A scanned page with an `illegible` flag, low confidence, or low two-reading agreement must set `needs_review` and escalate. | E20: confidence 0.55 + `illegible` produced `needs_review: false`. | Regression test on the hadpi sidecars. |
+| T3 | **Review gate (revised after Step 0).** The existing gate already flags low confidence and `illegible`; it is now pinned by `tests/review_gate_regression.py`. Remaining work: add low two-reading agreement (T2) as a trigger; reject non-finite confidence values (`ghessehaye-majid` p18 has `confidence: Infinity`, which passes `< 0.70`); decide whether Accept should keep a visible mark when an `illegible` flag was never resolved. | Step 0 found the original premise false (E20). | Regression test exists; extend it with each addition. |
 | T4 | **Diplomatic rule and an explicit unreadable marker.** The prompt forbids completing or paraphrasing text that cannot be read, and requires a marker (e.g. `⟦؟⟧`) instead. The marker is **rendered visibly in the EPUB** until a human resolves it (D3), and review lists every unresolved marker. | E22: fluent legal phrasing that is not on the page. A marked gap is cheap to fix; a confident invention is not. | Count of invented words on truth pages; marker rate. |
 | T5 | **Image clean-up before reading** (flatten lighting, straighten warp), as an A/B test. Do not assume it helps: vision models are often robust to this and resampling can hurt. | Cheap to test once §4.1 exists. | WER with and without. |
 | T6 | **Geometry as a transcription check.** After alignment, flag: read lines with no detected line (or the reverse), lines whose text length is far from their ink width, words whose width is far from expected. | Catches skipped or duplicated lines and locally garbled words, with a location. | Recall of truth errors among flags. |
@@ -394,7 +396,7 @@ after step 1.
 
 - A page with zero readings shows no estimate. Chip: "no evidence (reader failed: …)". Page
   banner with a resume hint.
-- T3 gate fix.
+- T3 gate: investigate and pin with a regression test (done; no gate change was needed, see E20).
 - Update CLAUDE.md and AGENTS.md to match the current engine (E15).
 - Find the cause of E4 ($0.10 spent, nothing saved).
 - **PASS:** regression tests for both fixes; hadpi review shows no amber boxes.

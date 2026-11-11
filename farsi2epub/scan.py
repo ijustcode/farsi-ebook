@@ -103,6 +103,26 @@ def _cached_result(data):
     return result
 
 
+def no_evidence_reason(summary):
+    """Reason string when a scanned page map has detected lines but none read.
+
+    Such a page has no anchor at all: any estimate would be a pure
+    character-proportional guess, so placement is withheld (Step 0 of
+    docs/bbox-old-fonts-plan.md). Pages with at least one read line, blank
+    pages and embedded-text ("match") pages return None and are unaffected.
+    """
+    if not isinstance(summary, dict) or summary.get("source") == "match":
+        return None
+    detected, read = summary.get("detected_lines"), summary.get("read_lines")
+    if type(detected) is not int or detected <= 0 or read != 0:
+        return None
+    reasons = [r for r in summary.get("acquisition_reasons") or [] if isinstance(r, str)]
+    # Without a recorded reason the map cannot tell "never acquired" (offline
+    # build) from "acquired, but every reading was rejected" (illegible or
+    # incomplete readings are not persisted), so name only what is known.
+    return "no evidence: " + (", ".join(reasons) if reasons else "no_reading_stored")
+
+
 def _cached_words(cached, key):
     if cached.get("key") != key or not isinstance(cached.get("words"), list):
         return []
@@ -596,6 +616,7 @@ class PlacementService:
         if boxes is None:
             boxes = locate.locate_queries(self.ws.pdf_path, n, md, queries)
         out = []
+        no_evidence = False  # resolved lazily: only image-path queries need the map
         for q, box in zip(queries, boxes):
             if box is not None and box.get("source") == "match":
                 out.append(PlacementResult(box.get("status", "located"), box,
@@ -604,12 +625,20 @@ class PlacementService:
                                            buffer_after=box.get("buffer_after", 0),
                                            kind=box.get("kind", "words")))
                 continue
+            if no_evidence is False:
+                no_evidence = no_evidence_reason(self.page_map_summary(n))
             key = self._key(n, md, q)
             with self.lock:
                 result = self._done.get(key)
-            cached = _read_json(self.root / "boxes" / f"{key}.json")
-            if result is None and cached.get("key") == key:
-                result = _cached_result(cached.get("result"))
+            # A page map with zero read lines never replays a stored box: boxes
+            # derived before Step 0 are blind proportional estimates, and the
+            # map revision in the key does not change when the policy does.
+            # Leave it pending so refine() re-checks (and in auto mode retries
+            # acquisition) before reporting the no-evidence reason.
+            if result is None and not no_evidence:
+                cached = _read_json(self.root / "boxes" / f"{key}.json")
+                if cached.get("key") == key:
+                    result = _cached_result(cached.get("result"))
             out.append(result or PlacementResult("pending", reason="evidence_pending"))
         return out
 
@@ -633,7 +662,11 @@ class PlacementService:
                 words, summary = self.ensure_page_map(n, allow_api=allow_api)
                 cached = _read_json(self.root / "pages" / f"{page_key}.json")
                 projection = PageProjection(md, words, cached.get("regions", []))
+                no_evidence = no_evidence_reason(summary)
                 for i in missing:
+                    if no_evidence:
+                        results[i] = PlacementResult("unresolved", reason=no_evidence)
+                        continue
                     strict = place(md, queries[i], words, source=summary.get("source", "scan"))
                     results[i] = best_attempt(md, queries[i], words, projection, strict)
                     if results[i].box is None and summary.get("acquisition_reasons"):

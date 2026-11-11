@@ -74,10 +74,15 @@ def run():
             assert summary['geometry_complete'] and summary['detected_word_geometry']==summary['detected_words']==2
             assert summary['verified_words']==0
             q=locate.Query('beta',(6,10))
+            # Step 0 (docs/bbox-old-fonts-plan.md): zero read lines means no
+            # blind estimate; the correction is unresolved with its cause.
             first=service.replay(1,'alpha beta',[q],[None])[0]
-            assert first['status']=='estimated'
+            assert first is None
+            result=service.results(1,'alpha beta',[q],[None])[0]
+            assert result.status=='unresolved' and result.reason=='no evidence: no_reading_stored'
             second=PlacementService(ws,mode='offline',reader=lambda *a:1/0)
-            assert second.results(1,'alpha beta',[q],[None])[0].box==first
+            assert second.results(1,'alpha beta',[q],[None])[0].status=='pending'
+            assert second.replay(1,'alpha beta',[q],[None])[0] is None
             second.close()
         service.close()
     # UI accepts estimates and exposes their qualification on initial and polling paths.
