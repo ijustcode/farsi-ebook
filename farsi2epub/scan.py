@@ -22,7 +22,7 @@ import fitz
 
 from . import llm, locate
 from .geometry_attempt import ATTEMPT_VERSION, complete_geometry, PageProjection, best_attempt
-from .config import MODEL_STRONG, PRICES, LONG_EDGE_HI
+from .config import MODEL_STRONG, PRICES, LONG_EDGE_HI, MAX_IMAGE_TOKENS, image_tokens
 from .page_map import (DERIVATION_VERSION, PlacementResult, PrintedWord, place,
                        supported_groups, supported_windows, target_span, insertion_slot)
 
@@ -140,6 +140,47 @@ def _cached_words(cached, key):
     return words
 
 
+# Allowance for request input the API adds and does not document: the
+# structured-output format prompt injected for output_format, the schema, and
+# message/image framing. This is the overhead figure the byte-based formula
+# already carried; it is kept unchanged rather than re-guessed.
+RESERVATION_OVERHEAD_TOKENS = 16000
+# Explicit safety margin over the computed worst case (see reader_reservation).
+RESERVATION_MARGIN = 1.10
+
+
+def _png_size(png):
+    """(width, height) from a PNG's IHDR chunk, or None if it is not a PNG."""
+    if (isinstance(png, (bytes, bytearray)) and len(png) >= 24
+            and png[:8] == b"\x89PNG\r\n\x1a\n" and png[12:16] == b"IHDR"):
+        return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    return None
+
+
+def reader_reservation(batch, model):
+    """Worst-case USD cost of one llm.read_regions request for `batch`.
+
+    Input: each image's visual tokens from its pixel dimensions under the
+    documented resize/patch rule (config.image_tokens), or the per-image
+    maximum when the dimensions cannot be read; plus the system prompt, region
+    labels and output schema bounded at one token per UTF-8 byte; plus
+    RESERVATION_OVERHEAD_TOKENS. Output: the full REGION_OUTPUT_TOKENS cap
+    (thinking, if any, counts against it too). The sum is multiplied by
+    RESERVATION_MARGIN, so it is an upper bound on what cost_of can book.
+    """
+    prices = PRICES[model]
+    images = 0
+    for png in batch:
+        size = _png_size(png)
+        images += image_tokens(*size) if size else MAX_IMAGE_TOKENS
+    text = (len(llm.READ_REGIONS_SYSTEM.encode())
+            + sum(len(f"Region {i}:".encode()) for i in range(len(batch)))
+            + len(json.dumps(llm.RegionReadings.model_json_schema()).encode()))
+    tokens_in = images + text + RESERVATION_OVERHEAD_TOKENS
+    return RESERVATION_MARGIN * (tokens_in * prices["in"]
+                                 + llm.REGION_OUTPUT_TOKENS * prices["out"]) / 1_000_000
+
+
 class Budget:
     def __init__(self, limit=DEFAULT_MAX_COST):
         if not math.isfinite(limit) or limit < 0:
@@ -244,12 +285,10 @@ class PlacementService:
                     break
                 batch_keys = missing[offset:offset+4]
                 batch = [pngs[keys.index(k)] for k in batch_keys]
-                prices = PRICES[self.model]
-                # Conservative upper bound from encoded image bytes + schema/
-                # prompt overhead; cap every request, including retries. No SDK
+                # Worst-case cost from image pixel dimensions + prompt + the full
+                # output cap; cap every request, including retries. No SDK
                 # retries are allowed behind the budget owner's back.
-                reserved = ((sum(len(b)*4/3 for b in batch) + 16000) * prices["in"]
-                            + llm.REGION_OUTPUT_TOKENS * prices["out"]) / 1_000_000
+                reserved = reader_reservation(batch, self.model)
                 if not self.budget.reserve(reserved):
                     raise RuntimeError("budget_exhausted")
                 actual = None

@@ -17,6 +17,57 @@ PRICES = {
 LONG_EDGE_STD = 1568
 LONG_EDGE_HI = 2576
 
+# Vision input is billed in visual tokens, not encoded bytes. Rule from the
+# Claude platform docs (build-with-claude/vision, "Resolution and token cost",
+# and vision-coordinates, "How Claude resizes and pads images"; read
+# 2026-11-11): an image costs ceil(w/28) * ceil(h/28) tokens after the API
+# shrinks it to the largest aspect-preserving size that fits its tier's
+# long-edge and visual-token limits. Tiers are (max long edge, max tokens):
+# high-resolution (Claude 4.7 and later, incl. claude-sonnet-5) and standard.
+IMAGE_PATCH_PX = 28
+IMAGE_TIERS = ((2576, 4784), (1568, 1568))
+MAX_IMAGE_TOKENS = max(tokens for _, tokens in IMAGE_TIERS)
+
+
+def _patch_tokens(width: int, height: int) -> int:
+    return -(-width // IMAGE_PATCH_PX) * -(-height // IMAGE_PATCH_PX)
+
+
+def _resized_size(width: int, height: int, max_edge: int, max_tokens: int) -> tuple[int, int]:
+    """The documented reference resize (vision-coordinates), before padding."""
+    def fits(w, h):
+        return (-(-w // IMAGE_PATCH_PX) * IMAGE_PATCH_PX <= max_edge
+                and -(-h // IMAGE_PATCH_PX) * IMAGE_PATCH_PX <= max_edge
+                and _patch_tokens(w, h) <= max_tokens)
+
+    if fits(width, height):
+        return width, height
+    if height > width:
+        h, w = _resized_size(height, width, max_edge, max_tokens)
+        return w, h
+    aspect = width / height
+    lo, hi = 1, width
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if fits(mid, max(round(mid / aspect), 1)):
+            lo = mid
+        else:
+            hi = mid
+    return lo, max(round(lo / aspect), 1)
+
+
+def image_tokens(width: int, height: int) -> int:
+    """Upper bound on the visual tokens one image costs, on any model tier.
+
+    The maximum over both tiers, so the bound holds whichever tier the
+    configured model is on, and never exceeds MAX_IMAGE_TOKENS.
+    """
+    if width < 1 or height < 1:
+        return MAX_IMAGE_TOKENS
+    return min(MAX_IMAGE_TOKENS, max(_patch_tokens(*_resized_size(width, height, edge, tokens))
+                                     for edge, tokens in IMAGE_TIERS))
+
+
 # Resolution modes. "hi" is the default: a std-res Sonnet pass was measured
 # making character-level errors that the hi-res pass avoided (bidi-reversed
 # dotted abbreviations like ه.ق -> ق.ه, word transpositions, lost diacritics)
