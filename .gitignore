@@ -34,6 +34,10 @@ books/*/locate_page_read.json
 # the page PNGs `pages` renders for subagents (63 MB and regenerable).
 /out/
 
+
+# input pdf s folder
+input/
+
 # OS and editor artifacts
 .DS_Store
 .idea/
