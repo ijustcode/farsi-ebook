@@ -35,7 +35,7 @@ import fitz
 from jinja2 import Environment
 from markupsafe import Markup
 
-from . import llm, qc
+from . import feedback, llm, qc
 from .config import MODEL_STRONG
 from .locate import Query, locate_queries
 from .scan import PlacementService, DEFAULT_MAX_COST, no_evidence_reason
@@ -1271,14 +1271,40 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: 1px solid #7a2020; border-radius: 6px; background: rgba(122,32,32,.18); color: #f2c0c0;
 }
 .evidence-banner[hidden] { display: none; }
+/* Box feedback capture (feedback.py): reviewer marks, drawn boxes, spot check. */
+.fb-row { display: flex; direction: ltr; justify-content: flex-end; gap: 0.3rem; align-items: center; flex-wrap: wrap; margin-top: 0.35rem; }
+.fb-row button { font-size: 0.72rem; padding: 0.2rem 0.5rem; }
+.fb-status { font-size: 0.72rem; color: #e6a3f0; }
+.fb-status.err { color: #f5b5b8; }
+.img-viewport.fb-drawing, .img-viewport.fb-drawing.zoomed { cursor: crosshair; outline: 2px dashed #e040fb; outline-offset: -2px; }
+.fb-human, .fb-draft { position: absolute; pointer-events: none; z-index: 6; border-radius: 1px; }
+.fb-human { border: 2px dashed #e040fb; background: rgba(224,64,251,.10); }
+.fb-human::after { content: "human"; position: absolute; top: -1.1em; left: 0; font: 600 9px/1 sans-serif; color: #fff; background: #b02cc8; padding: 1px 3px; border-radius: 2px; direction: ltr; }
+.fb-draft { border: 2px solid #e040fb; background: rgba(224,64,251,.18); }
+.fb-toolbar { direction: ltr; margin-top: 0.4rem; padding: 0.45rem 0.6rem; font-size: 0.8rem; border: 1px solid #6a2f6f; border-radius: 6px; background: #241a26; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.fb-toolbar[hidden], .fb-spot[hidden] { display: none; }
+.fb-toolbar button, .fb-spot button { font-size: 0.75rem; padding: 0.22rem 0.55rem; }
+.fb-tb-label { flex: 1 1 100%; color: #e2a8ea; }
+header .fb-spot-btn { font-size: 0.85rem; padding: 0.4rem 0.8rem; margin-inline-start: auto; margin-inline-end: 0.8rem; }
+.fb-spot { position: fixed; right: 1rem; bottom: 1rem; width: min(30rem, calc(100vw - 2rem)); max-height: 60vh; overflow: auto; z-index: 30; direction: ltr; background: #26272c; border: 1px solid #6a2f6f; border-radius: 8px; padding: 0.7rem 0.9rem; font-size: 0.82rem; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+.fb-spot ol { margin: 0.5rem 0 0; padding-inline-start: 1.3rem; }
+.fb-spot li { margin-bottom: 0.55rem; }
+.fb-spot .fb-old { direction: rtl; unicode-bidi: isolate; font-family: "Vazirmatn", Tahoma, sans-serif; }
+.fb-note { color: #9a9ba3; margin-top: 0.3rem; }
 </style>
 </head>
 <body>
 <header>
   <div class="title">Review &mdash; {{ slug }}</div>
   <div class="progress" id="progress">{{ reviewed_count }} of {{ total_count }} reviewed</div>
+  <button type="button" class="fb-spot-btn" id="fb-spot-btn" title="Optional: judge a few randomly chosen boxes">Spot check</button>
   <a class="done" href="#" id="done-link">Done</a>
 </header>
+<aside class="fb-spot" id="fb-spot" hidden>
+  <div><strong>Spot check (optional)</strong> &mdash; a random sample of boxes, chosen without regard to page or status. Answer any, skip any; it only measures box accuracy. <button type="button" id="fb-spot-hide">Hide</button></div>
+  <ol id="fb-spot-list"></ol>
+  <div class="fb-note" id="fb-spot-note"></div>
+</aside>
 <main>
   {% if skipped %}
   <div class="skipped-note">
@@ -1294,6 +1320,13 @@ button:disabled { opacity: 0.5; cursor: default; }
         <div class="img-wrap" id="imgwrap-{{ p.page }}">
           <img src="{{ p.image_url }}" alt="page {{ p.page }}">
         </div>
+      </div>
+      <div class="fb-toolbar" id="fb-toolbar-{{ p.page }}" hidden>
+        <span class="fb-tb-label"></span>
+        <button type="button" onclick="fbSaveDraw()">Save box</button>
+        <button type="button" onclick="fbUndoRect()">Remove last rectangle</button>
+        <button type="button" onclick="fbDisarm()">Cancel</button>
+        <span class="fb-tb-count"></span>
       </div>
       {% else %}
       <div>(no image available for page {{ p.page }})</div>
@@ -1341,6 +1374,13 @@ button:disabled { opacity: 0.5; cursor: default; }
                       title="{{ g.issue.placement.title if g.issue.placement else 'placement: not measured yet' }}"
                       >{{ g.issue.placement.label if g.issue.placement else '…' }}</span>
               </div>
+              <div class="fb-row" data-page="{{ p.page }}" data-key="i{{ g.idx }}">
+                <button type="button" class="fb-confirm" onclick="fbMark({{ p.page }}, 'i{{ g.idx }}', 'confirm')" disabled title="The shown box is on the right words">&#10003; on target</button>
+                <button type="button" class="fb-wrong" onclick="fbMark({{ p.page }}, 'i{{ g.idx }}', 'wrong_line')" disabled title="The shown box is on the wrong line">Wrong line</button>
+                <button type="button" class="fb-fix" onclick="fbFix({{ p.page }}, 'i{{ g.idx }}')" disabled title="Draw the right box on the page image">Fix box</button>
+                <button type="button" class="fb-undo" onclick="fbUndo({{ p.page }}, 'i{{ g.idx }}')" hidden>Undo mark</button>
+                <span class="fb-status" id="fb-status-{{ p.page }}-i{{ g.idx }}"></span>
+              </div>
               {% endif %}
               {% else %}
               <div class="qc-issue-head">{{ g.other_label }}</div>
@@ -1376,6 +1416,13 @@ button:disabled { opacity: 0.5; cursor: default; }
                       aria-label="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
                       title="{{ h.placement.title if h.placement else 'placement: not measured yet' }}"
                       >{{ h.placement.label if h.placement else '…' }}</span>
+              </div>
+              <div class="fb-row" data-page="{{ p.page }}" data-key="h{{ h.id }}">
+                <button type="button" class="fb-confirm" onclick="fbMark({{ p.page }}, 'h{{ h.id }}', 'confirm')" disabled title="The shown box is on the right words">&#10003; on target</button>
+                <button type="button" class="fb-wrong" onclick="fbMark({{ p.page }}, 'h{{ h.id }}', 'wrong_line')" disabled title="The shown box is on the wrong line">Wrong line</button>
+                <button type="button" class="fb-fix" onclick="fbFix({{ p.page }}, 'h{{ h.id }}')" disabled title="Draw the right box on the page image">Fix box</button>
+                <button type="button" class="fb-undo" onclick="fbUndo({{ p.page }}, 'h{{ h.id }}')" hidden>Undo mark</button>
+                <span class="fb-status" id="fb-status-{{ p.page }}-h{{ h.id }}"></span>
               </div>
             </li>
             {% endfor %}
@@ -2031,6 +2078,7 @@ function pollBoxes(page) {
     // Scores travel WITH the boxes, so a refined box that moved never keeps
     // the score the pre-refinement geometry earned.
     applyPlacementScores(page, data);
+    fbSync(page);
     stopBoxPolling(page);
   }).catch(function () { /* transient error; the next tick retries */ });
 }
@@ -2071,6 +2119,394 @@ function startBoxPolling() {
 }
 renderInitialBoxes();
 startBoxPolling();
+
+// -- box feedback capture (farsi2epub/feedback.py) --------------------------
+// Observes only: nothing here changes engine boxes, statuses or caches.
+// FB-PURE-BEGIN
+var FB_MIN_SIDE = 0.004;
+function fbClamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+// Screen point -> normalized page point (0..1). `r` is the image wrap's
+// getBoundingClientRect(): the wrap is exactly the page image and its only
+// transform is translate()+scale() with origin 0 0, so its client rect is the
+// on-screen page at any zoom and pan (and mid-transition).
+function fbScreenToPage(clientX, clientY, r) {
+  if (!r || !(r.width > 0) || !(r.height > 0)) return null;
+  return {x: fbClamp01((clientX - r.left) / r.width), y: fbClamp01((clientY - r.top) / r.height)};
+}
+function fbRectFromPoints(a, b, minSide) {
+  if (!a || !b) return null;
+  var r = {x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y)};
+  if (r.x1 - r.x0 < minSide || r.y1 - r.y0 < minSide) return null;
+  return r;
+}
+// FB-PURE-END
+var FB = {info: {}, draw: null, swallowClick: false, spot: null, spotWanted: false, spotStatus: {}};
+
+function fbFetch(url, body) {
+  var opts = body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+  return fetch(url, opts).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (d) {
+      if (!r.ok) return {ok: false, error: d.error || ('HTTP ' + r.status)};
+      return d;
+    });
+  }).catch(function (e) { return {ok: false, error: String(e)}; });
+}
+
+function fbStatus(page, key, msg, isErr) {
+  var el = document.getElementById('fb-status-' + page + '-' + key);
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle('err', !!isErr);
+}
+
+function fbShownBox(page, key) {
+  var p = pagePayload(page);
+  if (!p) return null;
+  var i;
+  if (key.charAt(0) === 'h') {
+    var id = parseInt(key.slice(1), 10);
+    for (i = 0; p.hunks && i < p.hunks.length; i++) if (p.hunks[i].id === id) return p.hunks[i].box || null;
+  } else if (key.charAt(0) === 'i') {
+    var it = p.issues && p.issues[parseInt(key.slice(1), 10)];
+    return it ? (it.box || null) : null;
+  }
+  return null;
+}
+
+function fbPlace(el, r) {
+  el.style.left = (r.x0 * 100) + '%';
+  el.style.top = (r.y0 * 100) + '%';
+  el.style.width = ((r.x1 - r.x0) * 100) + '%';
+  el.style.height = ((r.y1 - r.y0) * 100) + '%';
+}
+
+function fbMakeRect(wrap, cls, r, page, key) {
+  var el = document.createElement('div');
+  el.className = cls;
+  if (page !== undefined) el.setAttribute('data-page', page);
+  if (key !== undefined) el.setAttribute('data-key', key);
+  fbPlace(el, r);
+  wrap.appendChild(el);
+  return el;
+}
+
+function fbRenderHuman(page) {
+  var wrap = document.getElementById('imgwrap-' + page);
+  if (!wrap) return;
+  var old = wrap.querySelectorAll('.fb-human');
+  for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+  var info = FB.info[page];
+  if (!info) return;
+  for (var key in info.corrections) {
+    if (!Object.prototype.hasOwnProperty.call(info.corrections, key)) continue;
+    var rects = info.corrections[key].human_rects || [];
+    for (var j = 0; j < rects.length; j++) {
+      var el = fbMakeRect(wrap, 'fb-human', rects[j], page, key);
+      el.title = 'human-set box';
+    }
+  }
+}
+
+var FB_LABEL = {confirm: 'you: on target', wrong_line: 'you: wrong line', drag_fix: 'you: box drawn'};
+
+function fbSync(page) {
+  var block = document.getElementById('block-' + page);
+  if (!block) return;
+  var acceptBtn = block.querySelector('button.accept');
+  var closed = acceptBtn && acceptBtn.disabled;  // accepted in this session
+  var info = FB.info[page];
+  var rows = block.querySelectorAll('.fb-row');
+  for (var i = 0; i < rows.length; i++) {
+    var key = rows[i].getAttribute('data-key');
+    var corr = info && info.corrections[key];
+    var hasBox = !!fbShownBox(page, key);
+    var ready = !!corr && !closed;
+    rows[i].querySelector('.fb-confirm').disabled = !(ready && hasBox);
+    rows[i].querySelector('.fb-wrong').disabled = !(ready && hasBox);
+    rows[i].querySelector('.fb-fix').disabled = !ready;
+    var bv = corr && corr.effective && corr.effective.box_verdict;
+    var undo = rows[i].querySelector('.fb-undo');
+    undo.hidden = !bv;
+    undo.disabled = closed;
+    var st = document.getElementById('fb-status-' + page + '-' + key);
+    if (st && !st.classList.contains('err')) st.textContent = bv ? FB_LABEL[bv.action] || '' : '';
+  }
+  fbRenderHuman(page);
+}
+
+function fbMerge(page, key, data) {
+  var info = FB.info[page];
+  if (!info || !info.corrections[key]) return;
+  var c = info.corrections[key];
+  c.effective = data.effective || {};
+  c.human_rects = data.human_rects || [];
+  c.human_rects_record = data.human_rects_record || null;
+}
+
+function fbLoadPage(page) {
+  return fbFetch('/feedback/' + page).then(function (data) {
+    if (data.ok) FB.info[page] = data;
+    fbSync(page);
+  });
+}
+
+function fbSend(page, key, action, rects) {
+  var corr = FB.info[page] && FB.info[page].corrections[key];
+  if (!corr) { fbStatus(page, key, 'feedback not loaded yet', true); return; }
+  var body = {page: parseInt(page, 10), key: key, correction_key: corr.correction_key,
+              action: action, rects: rects || [], shown_box: fbShownBox(page, key)};
+  fbStatus(page, key, 'saving…', false);
+  fbFetch('/feedback', body).then(function (data) {
+    if (!data.ok) { fbStatus(page, key, 'not saved: ' + data.error, true); return; }
+    fbStatus(page, key, '', false);
+    fbMerge(page, key, data);
+    fbSync(page);
+  });
+}
+
+function fbMark(page, key, action) { fbSend(page, key, action, []); }
+
+function fbFix(page, key) {
+  fbArm(page, key, 'Fix box', function (rects) { fbSend(page, key, 'drag_fix', rects); });
+}
+
+function fbUndo(page, key) {
+  var corr = FB.info[page] && FB.info[page].corrections[key];
+  var bv = corr && corr.effective && corr.effective.box_verdict;
+  if (!bv) return;
+  fbFetch('/feedback/undo', {record_id: bv.record_id}).then(function (data) {
+    if (!data.ok) { fbStatus(page, key, 'undo failed: ' + data.error, true); return; }
+    fbStatus(page, key, '', false);
+    fbMerge(page, key, data);
+    fbSync(page);
+  });
+}
+
+// -- drawing mode: armed explicitly by a button, never by a plain drag --------
+function fbArm(page, key, label, onSave) {
+  fbDisarm();
+  page = String(page);
+  var vp = document.getElementById('viewport-' + page);
+  var bar = document.getElementById('fb-toolbar-' + page);
+  if (!vp || !bar) return false;
+  FB.draw = {page: page, key: key, rects: [], start: null, live: null, onSave: onSave};
+  vp.classList.add('fb-drawing');
+  bar.hidden = false;
+  bar.querySelector('.fb-tb-label').textContent = label + ': drag on the page image to draw the box. ' +
+    'Drag again to add one rectangle per printed line if the text wraps. Shift-drag pans while zoomed; Esc cancels.';
+  var btns = bar.querySelectorAll('button');
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+  fbToolbarCount();
+  return true;
+}
+
+function fbToolbarCount() {
+  var d = FB.draw;
+  if (!d) return;
+  var bar = document.getElementById('fb-toolbar-' + d.page);
+  if (bar) bar.querySelector('.fb-tb-count').textContent = d.rects.length + ' rectangle(s)';
+}
+
+function fbDisarm() {
+  var d = FB.draw;
+  if (!d) return;
+  var wrap = document.getElementById('imgwrap-' + d.page);
+  if (wrap) {
+    var drafts = wrap.querySelectorAll('.fb-draft');
+    for (var i = 0; i < drafts.length; i++) drafts[i].parentNode.removeChild(drafts[i]);
+  }
+  var vp = document.getElementById('viewport-' + d.page);
+  if (vp) vp.classList.remove('fb-drawing');
+  var bar = document.getElementById('fb-toolbar-' + d.page);
+  if (bar) bar.hidden = true;
+  FB.draw = null;
+}
+
+function fbSaveDraw() {
+  var d = FB.draw;
+  if (!d) return;
+  if (!d.rects.length) {
+    var bar = document.getElementById('fb-toolbar-' + d.page);
+    if (bar) bar.querySelector('.fb-tb-count').textContent = 'draw at least one rectangle first';
+    return;
+  }
+  var rects = d.rects.map(function (x) { return x.rect; });
+  var cb = d.onSave;
+  fbDisarm();
+  cb(rects);
+}
+
+function fbUndoRect() {
+  var d = FB.draw;
+  if (!d || !d.rects.length) return;
+  var last = d.rects.pop();
+  if (last.el.parentNode) last.el.parentNode.removeChild(last.el);
+  fbToolbarCount();
+}
+
+function fbArmedViewport(target) {
+  var d = FB.draw;
+  if (!d || !target || !target.closest) return null;
+  var vp = target.closest('.img-viewport');
+  return vp && vp.getAttribute('data-page') === d.page ? vp : null;
+}
+
+// Capture phase: while armed, a plain drag on that page draws; it never reaches
+// the existing pan/zoom listeners. Shift-drag falls through to pan.
+document.addEventListener('mousedown', function (ev) {
+  FB.swallowClick = false;
+  var d = FB.draw;
+  if (!d || ev.button !== 0 || ev.shiftKey || !fbArmedViewport(ev.target)) return;
+  var wrap = document.getElementById('imgwrap-' + d.page);
+  var p = wrap && fbScreenToPage(ev.clientX, ev.clientY, wrap.getBoundingClientRect());
+  if (!p) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  d.start = p;
+  d.live = fbMakeRect(wrap, 'fb-draft', {x0: p.x, y0: p.y, x1: p.x, y1: p.y});
+}, true);
+
+document.addEventListener('mousemove', function (ev) {
+  var d = FB.draw;
+  if (!d || !d.start) return;
+  var wrap = document.getElementById('imgwrap-' + d.page);
+  var p = wrap && fbScreenToPage(ev.clientX, ev.clientY, wrap.getBoundingClientRect());
+  var r = p && fbRectFromPoints(d.start, p, 0);
+  if (r) fbPlace(d.live, r);
+}, true);
+
+document.addEventListener('mouseup', function (ev) {
+  var d = FB.draw;
+  if (!d || !d.start) return;
+  var wrap = document.getElementById('imgwrap-' + d.page);
+  var p = wrap && fbScreenToPage(ev.clientX, ev.clientY, wrap.getBoundingClientRect());
+  var r = p && fbRectFromPoints(d.start, p, FB_MIN_SIDE);
+  if (r) { fbPlace(d.live, r); d.rects.push({rect: r, el: d.live}); }
+  else if (d.live && d.live.parentNode) d.live.parentNode.removeChild(d.live);
+  d.start = null;
+  d.live = null;
+  FB.swallowClick = true;
+  fbToolbarCount();
+}, true);
+
+document.addEventListener('click', function (ev) {
+  if (FB.swallowClick || fbArmedViewport(ev.target)) {
+    // Drawing clicks never zoom or zoom out; clear a pan's pending suppression
+    // too, since the existing click listener will not see this click.
+    FB.swallowClick = false;
+    suppressClick = false;
+    ev.stopPropagation();
+  }
+}, true);
+
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape' && FB.draw) { fbDisarm(); ev.stopPropagation(); }
+}, true);
+
+// -- spot check: seeded random sample, optional, drawn once per session -------
+function fbSpotFetch(retries) {
+  return fbFetch('/feedback/spot').then(function (data) {
+    if (data.ok && !data.pending) { FB.spot = data; fbSpotRender(); return; }
+    var note = document.getElementById('fb-spot-note');
+    if (note && FB.spotWanted) note.textContent = data.ok ? 'Boxes are still being placed; the sample is drawn once they finish…' : ('Spot check unavailable: ' + data.error);
+    if (data.ok && retries > 0) setTimeout(function () { fbSpotFetch(retries - 1); }, 5000);
+  });
+}
+
+function fbSpotButtonLabel() {
+  var btn = document.getElementById('fb-spot-btn');
+  if (!btn || !FB.spot) return;
+  var done = 0;
+  for (var k in FB.spotStatus) if (Object.prototype.hasOwnProperty.call(FB.spotStatus, k)) done++;
+  btn.textContent = 'Spot check ' + done + '/' + FB.spot.items.length;
+}
+
+function fbSpotRender() {
+  var list = document.getElementById('fb-spot-list');
+  var note = document.getElementById('fb-spot-note');
+  if (!list || !FB.spot) return;
+  list.innerHTML = '';
+  var s = FB.spot;
+  if (note) note.textContent = s.items.length ? ('Sample of ' + s.items.length + ' from ' + s.population_size + ' boxed corrections (seed ' + s.seed + ').') : 'No boxed corrections to sample.';
+  s.items.forEach(function (it) {
+    var li = document.createElement('li');
+    var head = document.createElement('div');
+    head.appendChild(document.createTextNode('page ' + it.page + ': '));
+    var old = document.createElement('span');
+    old.className = 'fb-old';
+    old.textContent = it.old || '(insertion)';
+    head.appendChild(old);
+    li.appendChild(head);
+    var row = document.createElement('div');
+    [['Show', function () { fbSpotShow(it); }],
+     ['Right', function () { fbSpotVerdict(it, 'right', []); }],
+     ['Wrong', function () { fbSpotVerdict(it, 'wrong', []); }],
+     ['Wrong + draw', function () {
+        fbSpotShow(it);
+        fbArm(it.page, it.key, 'Spot check', function (rects) { fbSpotVerdict(it, 'wrong', rects); });
+      }],
+     ['Skip', function () { fbSpotVerdict(it, 'skipped', []); }]].forEach(function (b) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = b[0];
+      btn.addEventListener('click', b[1]);
+      row.appendChild(btn);
+      row.appendChild(document.createTextNode(' '));
+    });
+    var st = document.createElement('span');
+    st.className = 'fb-status';
+    st.id = 'fb-spot-status-' + it.sample_index;
+    st.textContent = FB.spotStatus[it.sample_index] || '';
+    row.appendChild(st);
+    li.appendChild(row);
+    list.appendChild(li);
+  });
+  fbSpotButtonLabel();
+}
+
+function fbSpotShow(it) {
+  var block = document.getElementById('block-' + it.page);
+  if (block) block.scrollIntoView({block: 'start', behavior: 'smooth'});
+  var boxId = 'box-' + it.page + '-' + it.key;
+  if (document.getElementById(boxId)) zoomTo(String(it.page), boxId, true);
+}
+
+function fbSpotVerdict(it, verdict, rects) {
+  var st = document.getElementById('fb-spot-status-' + it.sample_index);
+  if (st) st.textContent = 'saving…';
+  fbFetch('/feedback/spot', {sample_index: it.sample_index, verdict: verdict, rects: rects}).then(function (data) {
+    if (!data.ok) { if (st) st.textContent = 'not saved: ' + data.error; return; }
+    FB.spotStatus[it.sample_index] = verdict + (rects.length ? ' (box drawn)' : '');
+    if (st) st.textContent = FB.spotStatus[it.sample_index];
+    if (FB.info[it.page] && FB.info[it.page].corrections[it.key]) { fbMerge(it.page, it.key, data); fbSync(it.page); }
+    fbSpotButtonLabel();
+  });
+}
+
+document.getElementById('fb-spot-btn').addEventListener('click', function () {
+  var panel = document.getElementById('fb-spot');
+  panel.hidden = !panel.hidden;
+  FB.spotWanted = !panel.hidden;
+  if (!panel.hidden && !FB.spot) fbSpotFetch(120);
+});
+document.getElementById('fb-spot-hide').addEventListener('click', function () {
+  document.getElementById('fb-spot').hidden = true;
+  FB.spotWanted = false;
+});
+
+(function fbInit() {
+  var blocks = document.querySelectorAll('.page-block');
+  var chain = Promise.resolve();
+  for (var i = 0; i < blocks.length; i++) {
+    (function (page) {
+      if (!document.getElementById('viewport-' + page)) return;
+      chain = chain.then(function () { return fbLoadPage(page); });
+    })(blocks[i].getAttribute('data-page'));
+  }
+  // Draw the sample as soon as placements settle, before pages get accepted,
+  // so reviewing order cannot shape the population. Silent until opened.
+  chain.then(function () { fbSpotFetch(120); });
+})();
 
 document.getElementById('done-link').addEventListener('click', async function (ev) {
   ev.preventDefault();
@@ -2261,6 +2697,9 @@ class _ReviewState:
         # sets above stay coarse.
         self.hunk_decisions_by_page: dict[int, dict[str, int]] = {}
         self.httpd: Optional[ThreadingHTTPServer] = None
+        # Box feedback capture (feedback.py). None = disabled; run_review
+        # enables it, tests opt in with a scratch store path.
+        self.feedback: Optional[feedback.FeedbackSession] = None
 
 
 # Background evidence fan-out. The render path never calls the API, so the
@@ -2340,6 +2779,11 @@ def _make_handler(state: _ReviewState):
                     self._send_json({"ok": False, "error": str(exc)}, status=500)
                 return
 
+            if path.startswith("/feedback/"):
+                status, body = feedback.handle_get(state.feedback, path)
+                self._send_json(body, status=status)
+                return
+
             if path == "/font/vazirmatn.ttf":
                 if FONT_PATH.is_file():
                     self._send_bytes(FONT_PATH.read_bytes(), "font/ttf")
@@ -2387,6 +2831,12 @@ def _make_handler(state: _ReviewState):
                         md_path.read_text(encoding="utf-8") if md_path.is_file() else ""
                     )
                     sidecar = _read_sidecar(ws, n)
+                    fb_snap = None  # pre-edit page view for text_edit feedback records
+                    if state.feedback is not None and text != on_disk_text:
+                        try:
+                            fb_snap = state.feedback.accept_snapshot(n)
+                        except Exception:
+                            fb_snap = None
                     outcome = _decide_accept_outcome(sidecar, on_disk_text, text, hunk_decisions)
 
                     backed_up = False
@@ -2433,6 +2883,12 @@ def _make_handler(state: _ReviewState):
                     except Exception:
                         pass
 
+                if fb_snap is not None:
+                    try:
+                        state.feedback.record_accept(fb_snap, on_disk_text, text, hunk_decisions)
+                    except Exception:
+                        pass
+
                 self._send_json(
                     {
                         "ok": True,
@@ -2441,6 +2897,11 @@ def _make_handler(state: _ReviewState):
                         "backed_up": backed_up,
                     }
                 )
+                return
+
+            if path == "/feedback" or path.startswith("/feedback/"):
+                status, body = feedback.handle_post(state.feedback, path, self.headers, self.rfile)
+                self._send_json(body, status=status)
                 return
 
             if path == "/quit":
@@ -2663,6 +3124,8 @@ def run_review(
     # only by the audited benchmark, never by the locator's own inferred map.
 
     state = _ReviewState(ws, surfaced, skipped)
+    state.feedback = feedback.FeedbackSession(ws, surfaced)
+    print(f"Box feedback: {state.feedback.store.path} (spot-check seed {state.feedback.seed})")
 
     handler_cls = _make_handler(state)
 

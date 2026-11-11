@@ -69,6 +69,8 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/no_evidence_placement_regression.py  # Step 0: zero-reading pages -> no box, reason, banner
 ./venv/bin/python tests/review_gate_regression.py            # Step 0/T3: needs_review gate on no-oracle (scanned) pages
 ./venv/bin/python tests/review_pages_regression.py           # review --pages scope, --wait-for-boxes
+./venv/bin/python tests/box_truth_regression.py              # review feedback capture: records, split, endpoints (uses node if present)
+./venv/bin/python tests/synth_pages_regression.py            # synthetic page generator: determinism, truth transforms
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -87,6 +89,12 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 ```
 
 `tests/bbox_eval.py` (historical contact sheet) can make paid calls unless `--no-refine`. `tests/bbox_capture.py`, `bbox_benchmark.py`, `bbox_annotation_workflow.py`, `bbox_detector_eval.py` are offline tooling described in `docs/bbox-consolidation.md`.
+
+## Review feedback capture and synthetic benchmark (plan Step 1)
+
+- **`box_truth.jsonl`** (project root, gitignored, append-only; `farsi2epub/feedback.py`): what the reviewer says about boxes. Review adds per-correction "on target" / "Wrong line" / "Fix box" (an explicit drawing mode: drag to draw, drag again per wrapped line, Shift-drag pans, Esc cancels) / "Undo mark", an optional header "Spot check" of 5 randomly sampled boxes per session, and a `text_edit` record per changed correction on Accept. Records carry the page image SHA-256, correction key (same id as `tests/bbox_benchmark.py`), the box that was shown with engine versions, and the human verdict/rectangles. Latest record wins per (image, correction, family); undo appends a `retract`. Each page is fixed to `dev` or `heldout` by a hash of its image SHA: **tune on `dev` only, gate on `heldout` only, and compute precision from spot-check records only** (fix/confirm records are biased). Overrides: `FARSI2EPUB_BOX_TRUTH_PATH`, `FARSI2EPUB_SPOT_SEED`. Feedback observes; it never changes engine output.
+- `./venv/bin/python tests/box_truth_replay.py` replays the store against the current engine offline (it may write derived box caches under the book's `locate_evidence/`).
+- **Synthetic benchmark** (`tests/synth_pages.py`; `synth_smoke_1a.py`, `synth_smoke_1b.py`): lays out Persian text with PyMuPDF in local fonts, degrades the image, and carries exact word/line truth through the same transform. Output goes to `out/synth/`; only the manifest is tracked. **Grade against each word's `ink_aabb`, not its layout box** (layout boxes miss ink in nastaliq and DecoType Naskh). Synthetic pages are easier than real photographed ones; real pages remain the gate. Hashes are tied to PyMuPDF 1.28.0 and the system font files.
 
 ## Placement engine (current code)
 

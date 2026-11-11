@@ -13,6 +13,8 @@ dist/
 
 # QC learning history (user data, accumulates across runs)
 qc_history.json
+# Review-time box feedback (user data, append-only; farsi2epub/feedback.py)
+/box_truth.jsonl
 
 # User content and book files
 # Ignore all PDFs in project root (personal book files)

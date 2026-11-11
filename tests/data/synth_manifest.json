@@ -1,0 +1,884 @@
+{
+ "generator_version": 1,
+ "pymupdf": "1.28.0",
+ "note": "Specs, seeds and hashes only. Images regenerate into out/synth/ (gitignored). Hashes are valid only for the same font files (sha256 recorded) and PyMuPDF version.",
+ "gaps": [],
+ "entries": [
+  {
+   "name": "modern_naskh_prose_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "modern_naskh_prose_clean_s11",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "prose",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "93e71671a91c7ccc70b3a2b1696a1ee6829409fac253ced35a999db15a03c8d5",
+   "truth_sha256": "10f403405cbc14a3fe14c80b7237bcc3fe34baaccac9ad8c5868db4d3fc370b9",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 434,
+   "n_lines": 28
+  },
+  {
+   "name": "modern_naskh_prose_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "modern_naskh_prose_photo_s11",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "prose",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "1a4b4f0d9b09132ec455e48b159ce07c46378e8dba86b5df084bf7bcc9c9013e",
+   "truth_sha256": "510ac937956fd10c6dbaf896e3682526743e6e859bd928a782c5c1ebab542259",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 434,
+   "n_lines": 28
+  },
+  {
+   "name": "book_naskh_footnote_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "book_naskh_footnote_clean_s11",
+    "font_class": "book_naskh",
+    "font_name": "DecoType Naskh",
+    "font": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+    "body_font": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+    "layout": "footnote",
+    "justify": true,
+    "size": 14.0,
+    "leading": 1.65,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "2afc412155ea041d7eeba50ad0b5ff4b48d3fc07ff1315c810992dfce6e8f208",
+   "truth_sha256": "246b9c0b24deb0e1e29bbb5ed94de59a4e996f24df871f57dce7cb0068a2a052",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+     "sha256": "9cc16622afc00ac2ee567c7e460240c74ba2aa402562368e519c68e7de9c2945",
+     "name": "DecoType Naskh Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+     "sha256": "9cc16622afc00ac2ee567c7e460240c74ba2aa402562368e519c68e7de9c2945",
+     "name": "DecoType Naskh Regular"
+    }
+   ],
+   "n_words": 574,
+   "n_lines": 27
+  },
+  {
+   "name": "book_naskh_footnote_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "book_naskh_footnote_photo_s11",
+    "font_class": "book_naskh",
+    "font_name": "DecoType Naskh",
+    "font": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+    "body_font": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+    "layout": "footnote",
+    "justify": true,
+    "size": 14.0,
+    "leading": 1.65,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "8da467f527faed42992ea01c326d6a48ca76f60274db719485c48852b425dd27",
+   "truth_sha256": "5dc5c541849c366ce227dc63cb2e7a6fd95081e50b95130842b3710308170198",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+     "sha256": "9cc16622afc00ac2ee567c7e460240c74ba2aa402562368e519c68e7de9c2945",
+     "name": "DecoType Naskh Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/DecoTypeNaskh.ttc",
+     "sha256": "9cc16622afc00ac2ee567c7e460240c74ba2aa402562368e519c68e7de9c2945",
+     "name": "DecoType Naskh Regular"
+    }
+   ],
+   "n_words": 574,
+   "n_lines": 27
+  },
+  {
+   "name": "typewriter_articles_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "typewriter_articles_clean_s11",
+    "font_class": "typewriter",
+    "font_name": "Courier New",
+    "font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "body_font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "layout": "articles",
+    "justify": false,
+    "size": 11.5,
+    "leading": 1.9,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "de08372b25aec8f23c83e06bcfceefe7f8ef73b01f21d26b4c289017d4e2d997",
+   "truth_sha256": "cbfbac09c8a46d90623f4a74a52106274f2febc61ad3f423fd6a6e5f0d52b1b8",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    }
+   ],
+   "n_words": 327,
+   "n_lines": 28
+  },
+  {
+   "name": "typewriter_articles_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "typewriter_articles_photo_s11",
+    "font_class": "typewriter",
+    "font_name": "Courier New",
+    "font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "body_font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "layout": "articles",
+    "justify": false,
+    "size": 11.5,
+    "leading": 1.9,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "a80ea15586239788b3c12202e33d2748844f3400cd904e02f19bb46c546d6a73",
+   "truth_sha256": "df9beb6489ec351b453e8e151006c4b186926cd65a1ee96e6aece8c72928fca1",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    }
+   ],
+   "n_words": 327,
+   "n_lines": 28
+  },
+  {
+   "name": "nastaliq_verse_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "nastaliq_verse_clean_s11",
+    "font_class": "nastaliq",
+    "font_name": "Noto Nastaliq Urdu",
+    "font": "/System/Library/Fonts/NotoNastaliq.ttc",
+    "body_font": "/System/Library/Fonts/NotoNastaliq.ttc",
+    "layout": "verse",
+    "justify": false,
+    "size": 15.0,
+    "leading": 2.4,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "fc72ac261648e3a4600b3f0120bafab3156cf74c1b8819664ef6bee410edec4a",
+   "truth_sha256": "fa796015299823dfd7885f37fedb0d43a485aa64ffa3f0b9b01ef7a574fa5cd6",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/NotoNastaliq.ttc",
+     "sha256": "c6b75b3b3ca434c69e4a1d44205c35de0c57f314cb14c3fc33f1ef0cf0455aa7",
+     "name": "Noto Nastaliq Urdu Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/NotoNastaliq.ttc",
+     "sha256": "c6b75b3b3ca434c69e4a1d44205c35de0c57f314cb14c3fc33f1ef0cf0455aa7",
+     "name": "Noto Nastaliq Urdu Regular"
+    }
+   ],
+   "n_words": 216,
+   "n_lines": 18
+  },
+  {
+   "name": "nastaliq_verse_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "nastaliq_verse_photo_s11",
+    "font_class": "nastaliq",
+    "font_name": "Noto Nastaliq Urdu",
+    "font": "/System/Library/Fonts/NotoNastaliq.ttc",
+    "body_font": "/System/Library/Fonts/NotoNastaliq.ttc",
+    "layout": "verse",
+    "justify": false,
+    "size": 15.0,
+    "leading": 2.4,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "3f2c0f377e8e55b74789fa0cedba52d0431d3e45cef97a4854e51ab08ee1e504",
+   "truth_sha256": "54a9c2383e2ece60863e041a9164d0973169c311561bf4a26c9100184b67d7f9",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/NotoNastaliq.ttc",
+     "sha256": "c6b75b3b3ca434c69e4a1d44205c35de0c57f314cb14c3fc33f1ef0cf0455aa7",
+     "name": "Noto Nastaliq Urdu Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/NotoNastaliq.ttc",
+     "sha256": "c6b75b3b3ca434c69e4a1d44205c35de0c57f314cb14c3fc33f1ef0cf0455aa7",
+     "name": "Noto Nastaliq Urdu Regular"
+    }
+   ],
+   "n_words": 216,
+   "n_lines": 18
+  },
+  {
+   "name": "bold_heading_headings_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "bold_heading_headings_clean_s11",
+    "font_class": "bold_heading",
+    "font_name": "Vazirmatn Bold",
+    "font": "assets/fonts/Vazirmatn-Bold.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "headings",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "c8f3cce16d088b2ca5c2c074b8ca9ef3f623afaa9c8f633340dae341cd73b523",
+   "truth_sha256": "4110dd072988a949d04b4e43b4fb3a9198e4082d408f294d3feeffae6cca9f10",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Bold.ttf",
+     "sha256": "f635fdbea28f265de395ba83b4b1570dcf2f58d13c65469e61903b1c2d2ae723",
+     "name": "Vazirmatn Bold"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 393,
+   "n_lines": 27
+  },
+  {
+   "name": "bold_heading_headings_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "bold_heading_headings_photo_s11",
+    "font_class": "bold_heading",
+    "font_name": "Vazirmatn Bold",
+    "font": "assets/fonts/Vazirmatn-Bold.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "headings",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "b6b9fca057fe892ca1a51ae8df62c1c1eb91c6146fec1681cbd49a65be55a7af",
+   "truth_sha256": "47d3565391e9cb2361bde9adfaf2b0a1171f1188cd29333d7c39f35a9241e714",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Bold.ttf",
+     "sha256": "f635fdbea28f265de395ba83b4b1570dcf2f58d13c65469e61903b1c2d2ae723",
+     "name": "Vazirmatn Bold"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 393,
+   "n_lines": 27
+  },
+  {
+   "name": "mixed_mixed_clean_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "mixed_mixed_clean_s11",
+    "font_class": "mixed",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "mixed",
+    "justify": true,
+    "size": 12.5,
+    "leading": 1.85,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "490c12eb4861f4a61c4969ad7bbb58b87b4fe4419ba4ea777452ad6f0c4a29e1",
+   "truth_sha256": "1406d9fb8953d9d84b8f35da7474504fd5fcc35511b630a32a097033d0a50c3e",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 339,
+   "n_lines": 28
+  },
+  {
+   "name": "mixed_mixed_photo_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "mixed_mixed_photo_s11",
+    "font_class": "mixed",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "mixed",
+    "justify": true,
+    "size": 12.5,
+    "leading": 1.85,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 11,
+    "preset": "photo",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 1,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "stamp": true,
+     "signature": true,
+     "underlines": 4,
+     "margin_marks": 3
+    }
+   },
+   "image_sha256": "a68952d5ec9355aadceeb4ada85d9cb172d36b710b18d1db9f0a5a2f996be72d",
+   "truth_sha256": "b2f18dc204ef07a9a9f3de671291f8846b93e0633c50ca9b05ea850ce60daf31",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 339,
+   "n_lines": 28
+  },
+  {
+   "name": "layout_prose_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_prose_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "prose",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "0043756cf36e180ad8155d231d7eefe41332ca86826722e808fdf5ab1c0e11a8",
+   "truth_sha256": "57b6f043d96a456ef298ead0ef9e70a8a90b79e4dc8e14316561b38cf7c0122c",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 438,
+   "n_lines": 28
+  },
+  {
+   "name": "layout_verse_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_verse_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "verse",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "a69ee215c8b47a5584c2e677d764ae52a8051740509ee268362b59f285ffc365",
+   "truth_sha256": "840d276460b94faf60016f197c6ae5a102f9400446ef2cc31e2a2a774fdb037f",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 331,
+   "n_lines": 28
+  },
+  {
+   "name": "layout_headings_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_headings_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "headings",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "87d0b724b8149ba32a1efbfa3452cddf8e44afc7efe20a69449ae10a88e40d4c",
+   "truth_sha256": "b445bf9df5ad3cc48a27ab092da9490ad84986d7aea086c4a28e6a54fce8114d",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 375,
+   "n_lines": 27
+  },
+  {
+   "name": "layout_articles_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_articles_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "articles",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "790cdfc6e2acf1e856c82d01ba386a367eefe6721a65048ef00d3984eb8b73ce",
+   "truth_sha256": "b5b39e80a7718c391e583cd946c9e96db8b52550513e40b81b7ea617116d1b92",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 346,
+   "n_lines": 26
+  },
+  {
+   "name": "layout_footnote_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_footnote_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "footnote",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "e717ee8e1a9e3d635e3b83e7341f90322801a09257904110474f4dabbe43a75a",
+   "truth_sha256": "6b501e54a6c13eeebf0cf63045c6a8e11f4ca71ec8e3b5c7521a9f83fa684553",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 441,
+   "n_lines": 29
+  },
+  {
+   "name": "layout_mixed_clean_s23",
+   "spec": {
+    "generator_version": 1,
+    "name": "layout_mixed_clean_s23",
+    "font_class": "modern_naskh",
+    "font_name": "Vazirmatn Regular",
+    "font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "body_font": "assets/fonts/Vazirmatn-Regular.ttf",
+    "layout": "mixed",
+    "justify": true,
+    "size": 13.0,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "embedded",
+    "seed": 23,
+    "preset": "clean",
+    "degrade": {}
+   },
+   "image_sha256": "bae2dbae398b5797406b26782ea1c384758db3ba0eaad40918f8ce00ce73fd3d",
+   "truth_sha256": "823d698b6dcab0027700aba8b7d34986b41ebf2d14b0b510a23ea184a83b1b40",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "assets/fonts/Vazirmatn-Regular.ttf",
+     "sha256": "b69fd4c680b8f3f225feabcc655a2c585d97627b8f5f5c0f9985e894069f3a56",
+     "name": "Vazirmatn Regular"
+    }
+   ],
+   "n_words": 323,
+   "n_lines": 28
+  }
+ ]
+}

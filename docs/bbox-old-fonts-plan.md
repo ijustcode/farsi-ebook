@@ -418,8 +418,31 @@ after step 1.
   - KILL: PyMuPDF cannot shape a class (likely candidate: nastaliq). Then use a HarfBuzz-based
     renderer for that class, or drop the class from the synthetic set and cover it with real pages.
 - **Smoke test 1b (sim-to-real sanity):** run the *current* detector on synthetic warped pages.
-  - PASS: it fails in the same way as on hadpi (merged multi-line blocks once slope > ~1°). If it
+  - PASS: it fails in the same way as on hadpi (merged multi-line blocks under realistic slope). If it
     does not, the degradations are unrealistic; fix them before trusting any synthetic number.
+
+**Step 1 results (2026-11-11).** Built: `tests/synth_pages.py` (+ `synth_smoke_1a.py`,
+`synth_smoke_1b.py`, `synth_pages_regression.py`, manifest), `farsi2epub/feedback.py` with the
+review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth draft packet in
+`books/hadpi-articles/truth/` (private, gitignored).
+- **Smoke 1a: PASS for modern naskh, typewriter (Courier New, genuinely fixed-pitch), bold and
+  mixed (100%); FAIL for nastaliq (78–81%) and DecoType Naskh (90.9%).** In those faces ink
+  overflows the layout box PyMuPDF reports. Shaping is correct. Consequence: **truth for grading
+  is the per-word ink box (`ink_aabb`), which is exact for every class, not the layout box.**
+  Steps 3–4 must use `ink_aabb`. Both local nastaliq faces are Urdu-style; a Persian nastaliq
+  face is still a gap.
+- **Smoke 1b: PARTIAL.** The earlier "> ~1°" onset was this plan's own unsupported guess; the
+  slope measurements (E18) only bracket it between 0.1° and 2.2°. On synthetic pages the current
+  detector is correct when clean and merges lines from about 2° of slope; with the full photo
+  preset it merges paragraphs and the stamp/signature area much as on hadpi (16/28 and 13/29
+  lines found). But synthetic merges hold at most 3 lines against ~8 on real pages.
+  **Synthetic pages are easier than the real ones.** Before Step 3 relies on synthetic line
+  numbers: enlarge stamp/signature overlays and add baseline jitter, and keep real pages as the gate.
+- The embedded text corpus is small, so phrases repeat on a page; use a `books/` text source for
+  aligner tests.
+- Feedback capture: tests pass; drag-to-fix was checked in a real browser (coordinates correct
+  while zoomed). Multi-line boxes, spot-check panel, Shift-pan and Escape are covered by automated
+  tests only.
 
 ### Step 2 — Transcription experiments (≤ $3 API)
 
