@@ -1,0 +1,73 @@
+<div id="fragment-placement-review">
+  <style>
+    #fragment-placement-review .comparisons {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    #fragment-placement-review .comparisons svg {display:block;width:100%;height:auto}
+    #fragment-placement-review .passage {overflow-wrap:anywhere;margin:12px 0}
+    #fragment-placement-review .controls {display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}
+    #fragment-placement-review figure {margin:0;min-width:0}
+    #fragment-placement-review figcaption {margin-bottom:8px}
+    @media(max-width:600px) {#fragment-placement-review .comparisons {grid-template-columns:1fr}}
+  </style>
+  <div class="controls">
+    <button type="button" class="btn" data-prev>Previous</button>
+    <label class="form-label">Changed correction <select class="form-select" data-case aria-label="Changed correction"></select></label>
+    <button type="button" class="btn" data-next>Next</button>
+    <label class="form-check"><input type="checkbox" class="form-check-input" data-boxes checked><span class="form-check-label">Show boxes</span></label>
+  </div>
+  <div class="text-small">Original passage</div>
+  <div class="passage" dir="rtl" lang="fa" data-query></div>
+  <div class="passage text-small" dir="rtl" lang="fa" data-context></div>
+  <details><summary>Suggested wording</summary><div class="passage" dir="rtl" lang="fa" data-suggestion></div></details>
+  <div class="comparisons">
+    <figure><figcaption>Accepted baseline</figcaption><svg data-baseline role="img" aria-label="Baseline placement on the printed page"></svg></figure>
+    <figure><figcaption>Levenshtein experiment · approximate</figcaption><svg data-candidate role="img" aria-label="Experimental placement on the same printed page"></svg></figure>
+  </div>
+  <div class="controls">
+    <label class="form-label">Your verdict <select class="form-select" data-verdict aria-label="Your verdict">
+      <option value="pending">Not reviewed</option><option value="candidate_better">Candidate better</option>
+      <option value="baseline_better">Baseline better</option><option value="equivalent">Equivalent</option>
+      <option value="uncertain">Uncertain</option>
+    </select></label>
+    <span class="text-small" aria-live="polite" data-progress></span>
+    <button type="button" class="btn" data-export>Save verdicts</button>
+    <button type="button" class="btn" data-send>Discuss verdicts with Codex</button>
+  </div>
+  <label class="form-label">Review note <textarea class="form-control" rows="2" data-note></textarea></label>
+  <script type="application/json" id="fragment-review-data">REVIEW_DATA</script>
+  <script>
+  (()=>{
+    const root=document.getElementById('fragment-placement-review');
+    const data=JSON.parse(document.getElementById('fragment-review-data').textContent);
+    const find=s=>root.querySelector(s), select=find('[data-case]'), ns='http://www.w3.org/2000/svg';
+    const storageKey='fragment-review-'+data.comparison_sha256;
+    let votes={}, index=0;
+    try { votes=JSON.parse(localStorage.getItem(storageKey)||'{}'); } catch {}
+    data.cases.forEach((row,i)=>{const o=document.createElement('option');o.value=i;o.textContent=`Page ${row.page} · ${row.key}`;select.append(o)});
+    function current(){return data.cases[index]}
+    function identity(row){return row.page+':'+row.key}
+    function payload(){return {comparison_sha256:data.comparison_sha256,inputs_sha256:data.inputs_sha256,verdicts:data.cases.map(r=>({page:r.page,key:r.key,...(votes[identity(r)]||{verdict:'pending',note:''})}))}}
+    function save(){if(!current())return;votes[identity(current())]={verdict:find('[data-verdict]').value,note:find('[data-note]').value};try{localStorage.setItem(storageKey,JSON.stringify(votes))}catch{};progress()}
+    function progress(){find('[data-progress]').textContent=`${data.cases.filter(r=>votes[identity(r)]?.verdict && votes[identity(r)].verdict!=='pending').length} / ${data.cases.length} reviewed`}
+    function draw(svg, row, kind){
+      svg.replaceChildren();svg.setAttribute('viewBox',`0 0 ${row.width} ${row.height}`);
+      const im=document.createElementNS(ns,'image');im.setAttribute('href',row.image);im.setAttribute('width',row.width);im.setAttribute('height',row.height);svg.append(im);
+      if(!find('[data-boxes]').checked)return;
+      row[kind].forEach(b=>{const rect=document.createElementNS(ns,'rect');for(const [k,v] of Object.entries({x:b[0],y:b[1],width:b[2]-b[0],height:b[3]-b[1]}))rect.setAttribute(k,v);rect.setAttribute('fill','none');rect.setAttribute('stroke',`var(--viz-series-${kind==='baseline'?1:2})`);rect.setAttribute('stroke-width','2');rect.setAttribute('vector-effect','non-scaling-stroke');rect.setAttribute('stroke-dasharray','6 3');svg.append(rect)})
+    }
+    function show(){
+      select.value=index;const row=current();if(!row){find('[data-progress]').textContent='No changed correction boxes';return}
+      find('[data-query]').textContent=row.query;
+      find('[data-context]').textContent=row.context;
+      find('[data-suggestion]').textContent=row.suggestion || '—';
+      const vote=votes[identity(row)]||{verdict:'pending',note:''};find('[data-verdict]').value=vote.verdict;find('[data-note]').value=vote.note;
+      draw(find('[data-baseline]'),row,'baseline');draw(find('[data-candidate]'),row,'candidate');
+      find('[data-prev]').disabled=index===0;find('[data-next]').disabled=index===data.cases.length-1;progress()
+    }
+    select.onchange=()=>{index=Number(select.value);show()};find('[data-prev]').onclick=()=>{index=Math.max(0,index-1);show()};find('[data-next]').onclick=()=>{index=Math.min(data.cases.length-1,index+1);show()};
+    find('[data-boxes]').onchange=show;find('[data-verdict]').onchange=save;find('[data-note]').oninput=save;
+    find('[data-export]').onclick=()=>{const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(payload(),null,2)],{type:'application/json'}));a.href=url;a.download='fragment-placement-verdicts.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+    find('[data-send]').onclick=async()=>{if(window.openai?.sendFollowUpMessage)await window.openai.sendFollowUpMessage({prompt:'Review my verdicts for the Levenshtein placement experiment, compare gains and regressions, and recommend whether to keep the accepted baseline. '+JSON.stringify(payload()),title:'Review placement verdicts'});else find('[data-progress]').textContent='Save verdicts to share them with Codex.'};
+    show();
+  })();
+  </script>
+</div>

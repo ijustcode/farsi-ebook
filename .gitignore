@@ -40,3 +40,6 @@ books/*/locate_page_read.json
 .vscode/
 .python-version
 .build/
+
+# Personal source PDFs staged for conversion
+/input/
