@@ -883,6 +883,32 @@ disagreement marked**, so that no single model's errors are favoured. Also re-te
 (arm V) with any model documented to return bounding boxes: arm V was closed on Anthropic models
 only. Needs the owner's API keys for the other vendors.
 
+**Step 2b phase 1 status (2026-11-12, $0.115, Anthropic only): blocked on keys.** `.env` holds
+only the Anthropic key. The shell has a placeholder `OPENAI_API_KEY` (set in `~/.zshrc`) that
+OpenAI rejects (401), and it would shadow a real key added to `.env`, because `llm.load_env` does
+not override variables that are already set. There is no Google key. Built and tested offline in
+`tests/transcription_experiments.py`: stdlib HTTPS adapters for OpenAI and Google behind the same
+cache, ledger and spend guard; key redaction; skip-without-key; each vendor's image sizing rule;
+commands `plan2b`, `smoke2b`, `run2b`, `score2b`. Neither adapter has been exercised live.
+- Contenders, from each vendor's own documentation read 2026-11-12 (not from a bill):
+  `gpt-6-astra` ($10/$50 per MTok), `gpt-6.1-sol` (price conflicting between two OpenAI pages),
+  `gemini-4-carbon` ($2/$10 until 2026-11-30, then $4/$20), `gemini-3.8-flash` ($0.75/$3.75).
+  Estimated cost per hadpi page: Astra about $0.32 (about 3.6× Opus, outside the owner's ~3× rule
+  unless clearly better), Carbon about $0.056 now and about $0.11 later.
+- **D9 by vendor:** Anthropic: long edge ≤ 2,576 px and ≤ 4,784 patches of 28 px (verified by
+  token counts). OpenAI: with `detail: "original"`, `gpt-6-astra` keeps images up to 30,000
+  patches of 32 px and rejects, rather than resizes, larger ones (documented, not yet checked
+  live). **Google: Gemini 3/4 give each image a fixed token budget (ultra_high 2,240) and do not
+  document the pixel size that budget preserves, so D9 cannot be verified for Google from
+  documentation;** it needs a resolution probe (a synthetic ladder of text sizes) once a key
+  exists.
+- Word pointing: only Google documents box output (`box_2d`). OpenAI's vision guide says its
+  models struggle with precise spatial localisation.
+- G1 check: Opus 5.5 on native bands reads the printed controls at 5/336 and 2/296 lenient
+  errors, against 3 and 0 for Sonnet 5 whole-page, which stays the printed-page configuration.
+- Phase 2 (held-out p3–p5) is specified but not started; the disagreement-marked draft builder
+  still has to be written and tested before any p3–p5 call.
+
 ---
 
 ## 11. Answers to v1's open questions

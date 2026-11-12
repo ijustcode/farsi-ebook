@@ -6,6 +6,8 @@ budget guard and cache. Synthetic strings only; no API key, no books/.
 
 from __future__ import annotations
 
+import json
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -186,6 +188,148 @@ def test_truth_wild():
     # excluded line: an arm that skips it and one that reads it both score 0
     check(te.wer(t, te.tokenize_lines(["الف بب جج"]), "lenient")["errors"] == 0, "skip excluded")
     check(te.wer(t, te.tokenize_lines(["عنوان", "الف بب جج"]), "lenient")["errors"] == 0, "read excluded")
+
+
+FAKE_KEY = "sk-test-SECRETSECRETSECRET123456"
+FAKE_GKEY = "AIzaFAKEFAKEFAKEFAKEFAKE12345"
+
+
+def _png(w, h):
+    import numpy as np
+    return te.Image(te.png_from_array(np.full((h, w, 1), 255, np.uint8)), "image/png", w, h, "t")
+
+
+def _vreq(vendor, model, extra=None, rep=0):
+    return te.Request("arm", "p", model, "SYS", ["Band 1:", _png(64, 32), "go"], te.BandsReading,
+                      max_tokens=1000, rep=rep, extra=extra, vendor=vendor)
+
+
+def test_vendor_request_building():
+    url, body = te.OpenAIAdapter.build(_vreq("openai", "gpt-6-astra", {"effort": "low"}))
+    check(url == "https://api.openai.com/v1/responses", "openai url")
+    parts = body["input"][0]["content"]
+    check([p["type"] for p in parts] == ["input_text", "input_image", "input_text"], "openai parts order")
+    check(parts[1]["detail"] == "original" and parts[1]["image_url"].startswith("data:image/png;base64,"),
+          "openai image detail original")
+    check(body["instructions"] == "SYS" and body["reasoning"] == {"effort": "low"} and body["max_output_tokens"] == 1000,
+          "openai fields")
+    sch = body["text"]["format"]["schema"]
+    check(body["text"]["format"]["strict"] is True and sch["additionalProperties"] is False
+          and sch["required"] == ["bands"], "openai strict schema")
+    check(te.OpenAIAdapter.headers(FAKE_KEY) == {"Authorization": "Bearer " + FAKE_KEY}, "openai header")
+    check(FAKE_KEY not in json.dumps(body) and "key" not in url, "no key in body or url")
+    url, body = te.GoogleAdapter.build(_vreq("google", "gemini-4-carbon", {"thinking_level": "low"}))
+    check(url.endswith("/v1beta/interactions") and "key=" not in url, "google url has no key")
+    check(body["input"][0] == {"type": "text", "text": "SYS"} and body["input"][2]["resolution"] == "ultra_high",
+          "google items")
+    check(body["generation_config"] == {"max_output_tokens": 1000, "thinking_level": "low"}, "google config")
+    check("$ref" not in json.dumps(body["response_format"]["schema"]), "google schema inlined")
+    check(te.GoogleAdapter.headers(FAKE_GKEY) == {"x-goog-api-key": FAKE_GKEY}, "google header")
+
+
+def test_vendor_parsing():
+    ok = {"status": "completed", "usage": {"input_tokens": 1200, "output_tokens": 300,
+                                           "output_tokens_details": {"reasoning_tokens": 120}},
+          "output": [{"type": "reasoning"}, {"type": "message", "content": [
+              {"type": "output_text", "text": json.dumps({"bands": [{"band_index": 1, "lines": ["الف"]}]})}]}]}
+    parsed, usage, prob = te.OpenAIAdapter.parse(ok)
+    check(parsed["bands"][0]["lines"] == ["الف"] and prob is None, "openai parse")
+    check(usage == {"input_tokens": 1200, "output_tokens": 300, "reasoning_tokens": 120}, f"openai usage {usage}")
+    check(abs(te.vendor_cost("openai", "gpt-6-astra", usage) - (1200 * 10 + 300 * 50) / 1e6) < 1e-12, "openai cost")
+    inc = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"},
+           "usage": {"input_tokens": 10, "output_tokens": 1000}, "output": []}
+    parsed, usage, prob = te.OpenAIAdapter.parse(inc)
+    check(parsed is None and prob == "incomplete:max_output_tokens" and usage["output_tokens"] == 1000, "openai incomplete")
+    ref = {"status": "completed", "usage": {}, "output": [{"type": "message", "content": [{"type": "refusal"}]}]}
+    check(te.OpenAIAdapter.parse(ref)[2] == "refusal", "openai refusal")
+    g = {"outputs": [{"type": "thought", "summary": "x"}, {"type": "text", "text": json.dumps({"ok": True})}],
+         "usage": {"total_input_tokens": 500, "total_output_tokens": 40, "total_thought_tokens": 60}}
+    parsed, usage, prob = te.GoogleAdapter.parse(g)
+    check(parsed == {"ok": True} and usage == {"input_tokens": 500, "output_tokens": 100, "reasoning_tokens": 60},
+          f"google parse {usage}")
+    g2 = {"candidates": [{"content": {"parts": [{"text": "hm", "thought": True}, {"text": "{\"ok\": true}"}]}}],
+          "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "thoughtsTokenCount": 2}}
+    parsed, usage, _ = te.GoogleAdapter.parse(g2)
+    check(parsed == {"ok": True} and usage["output_tokens"] == 5, "google generateContent-shape fallback")
+
+
+def test_vendor_sizing_rules():
+    # Anthropic high tier: 2576 edge and 4784 patches of 28 px
+    check(te.vendor_fits("anthropic", "claude-sonnet-5", 2276, 1267), "anthropic band fits")
+    check(not te.vendor_fits("anthropic", "claude-sonnet-5", 1821, 2576), "anthropic whole page is shrunk")
+    # OpenAI gpt-6-astra, detail=original: 32 px patches, x1.2, <=30000 patches, <=65535 px
+    check(te.vendor_image_tokens("openai", "gpt-6-astra", 2276, 1267) == math.ceil(72 * 40 * 1.2), "openai tokens")
+    check(te.vendor_fits("openai", "gpt-6-astra", 2276, 3200), "openai astra keeps a whole native page")
+    check(not te.vendor_fits("openai", "gpt-6-astra", 6000, 6000), "openai astra over 30000 patches")
+    check(not te.vendor_fits("openai", "gpt-6.1-sol", 4000, 3000), "sol conservative 10000-patch rule")
+    check(te.vendor_fits("google", "gemini-4-carbon", 2276, 1267) and
+          not te.vendor_fits("google", "gemini-4-carbon", 3000, 3000), "google assumed pixel limit")
+    check(te.vendor_image_tokens("google", "gemini-4-carbon", 10, 10) == 2240, "google fixed budget")
+
+
+def test_redaction():
+    t = te.redact(f"bad key {FAKE_KEY} and Bearer abc.def and {FAKE_GKEY} x-goog-api-key: zzz", FAKE_KEY)
+    check(FAKE_KEY not in t and FAKE_GKEY not in t and "abc.def" not in t and "zzz" not in t, f"redact {t}")
+    check(FAKE_KEY[:8] not in te.redact("prefix " + FAKE_KEY[:8] + "...", FAKE_KEY), "redact key prefix")
+
+
+class _FakeHTTP:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def __call__(self, url, headers, body):
+        self.calls.append((url, headers, body))
+        return self.responses.pop(0)
+
+
+def test_vendor_runner_flow():
+    import tempfile
+    good = (200, {"status": "completed", "usage": {"input_tokens": 1000, "output_tokens": 200},
+                  "output": [{"type": "message", "content": [{"type": "output_text",
+                              "text": json.dumps({"bands": [{"band_index": 1, "lines": ["x"]}]})}]}]})
+    with tempfile.TemporaryDirectory() as d:
+        http = _FakeHTTP([good])
+        r = te.Runner(Path(d), cap=3.0, ledger_name="l2b.jsonl", http_post=http,
+                      key_lookup=lambda v: FAKE_KEY if v == "openai" else None)
+        req = _vreq("openai", "gpt-6-astra", {"effort": "low"})
+        rec = r.call(req)
+        check(len(http.calls) == 1 and rec["parsed"]["bands"][0]["lines"] == ["x"], "vendor call ok")
+        rec2 = r.call(req)
+        check(len(http.calls) == 1 and rec2["cache_hit"], "vendor cache hit is free")
+        on_disk = "".join(p.read_text() for p in Path(d).rglob("*.json*"))
+        check(FAKE_KEY not in on_disk and FAKE_KEY[:8] not in on_disk, "no key in ledger or cache")
+        # no key: skipped, nothing called, nothing paid
+        try:
+            r.call(_vreq("google", "gemini-4-carbon"))
+            check(False, "google without key should skip")
+        except te.VendorSkipped:
+            pass
+        check(len(http.calls) == 1, "skip makes no call")
+        # access error stops the vendor; the echoed key never reaches the ledger
+        http2 = _FakeHTTP([(401, {"error": {"message": f"Incorrect API key provided: {FAKE_KEY}"}})])
+        r2 = te.Runner(Path(d), cap=3.0, ledger_name="l2b_b.jsonl", http_post=http2, key_lookup=lambda v: FAKE_KEY)
+        try:
+            r2.call(_vreq("openai", "gpt-6-astra", rep=7))
+            check(False, "401 should stop")
+        except te.AccessError as exc:
+            check(FAKE_KEY not in str(exc), "key not in exception text")
+        try:
+            r2.call(_vreq("openai", "gpt-6.1-sol", rep=7))
+            check(False, "stopped vendor should refuse")
+        except te.AccessError:
+            pass
+        check(len(http2.calls) == 1, "no call after vendor stopped")
+        led = (Path(d) / "l2b_b.jsonl").read_text()
+        check(FAKE_KEY not in led and "http:401" in led and r2.ledger.total() == 0.0, "401 ledger entry at $0")
+        # budget guard applies to vendor calls too
+        r3 = te.Runner(Path(d), cap=0.01, ledger_name="l2b_c.jsonl", http_post=_FakeHTTP([good]),
+                       key_lookup=lambda v: FAKE_KEY)
+        try:
+            r3.call(_vreq("openai", "gpt-6-astra", rep=9))
+            check(False, "guard should refuse")
+        except te.BudgetExceeded:
+            pass
 
 
 def test_stitch():

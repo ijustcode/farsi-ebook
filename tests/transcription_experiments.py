@@ -598,14 +598,25 @@ HIGH_RES_PREFIXES = ("claude-sonnet-5", "claude-opus-5")
 
 
 def price(model: str) -> dict:
-    return config.PRICES[model] if model in config.PRICES else PRICES_EXTRA[model]
+    if model in config.PRICES:
+        return config.PRICES[model]
+    if model in PRICES_EXTRA:
+        return PRICES_EXTRA[model]
+    for v in VENDORS.values():
+        if model in v["models"]:
+            return v["models"][model]["price"]
+    raise KeyError(model)
 
 
 def guard_price(model: str) -> dict:
-    p = price(model)
     if model in config.PRICES:
-        return p
-    return {k: v * GUARD_MARGIN_EXTRA for k, v in p.items()}
+        return config.PRICES[model]
+    if model in PRICES_EXTRA:
+        return {k: v * GUARD_MARGIN_EXTRA for k, v in PRICES_EXTRA[model].items()}
+    for v in VENDORS.values():
+        if model in v["models"]:
+            return v["models"][model]["guard_price"]
+    raise KeyError(model)
 
 
 def cost_usd(usage, model: str) -> float:
@@ -666,6 +677,7 @@ class Request:
     expected_out: int = 1800
     thinking: Optional[dict] = None   # None = repo convention (thinking_kwargs)
     extra: Optional[dict] = None      # extra API kwargs, e.g. output_config effort
+    vendor: str = "anthropic"         # anthropic | openai | google
 
     def thinking_kw(self) -> dict:
         kw = {"thinking": self.thinking} if self.thinking else thinking_kwargs(self.model)
@@ -676,12 +688,18 @@ class Request:
                 "content": [{"image": c.sha, "mt": c.media_type} if isinstance(c, Image) else {"text": c}
                             for c in self.content],
                 "schema": self.schema.model_json_schema(), "thinking": self.thinking_kw(),
-                "rep": self.rep, **({"extra": self.extra} if self.extra else {})}
+                "rep": self.rep, **({"extra": self.extra} if self.extra else {}),
+                **({"vendor": self.vendor} if self.vendor != "anthropic" else {})}
 
     def input_est(self) -> int:
         n = text_tokens_est(self.system)
         for c in self.content:
-            n += api_tokens(c, self.model) if isinstance(c, Image) else text_tokens_est(c)
+            if not isinstance(c, Image):
+                n += text_tokens_est(c)
+            elif self.vendor == "anthropic":
+                n += api_tokens(c, self.model)
+            else:
+                n += vendor_image_tokens(self.vendor, self.model, c.width, c.height)
         return n
 
     def worst_case(self) -> float:
@@ -707,13 +725,18 @@ def _is_access_error(exc: BaseException) -> bool:
 
 
 class Runner:
-    def __init__(self, out: Path = OUT, client_factory: Optional[Callable] = None, cap: float = CAP_USD):
+    def __init__(self, out: Path = OUT, client_factory: Optional[Callable] = None, cap: float = CAP_USD,
+                 ledger_name: str = "ledger.jsonl", http_post: Optional[Callable] = None,
+                 key_lookup: Optional[Callable] = None):
         self.out = Path(out)
         self.cache_dir = self.out / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.ledger = Ledger(self.out / "ledger.jsonl", cap)
+        self.ledger = Ledger(self.out / ledger_name, cap)
         self._client = None
         self._factory = client_factory or llm.get_client
+        self._http_post = http_post or http_post_json
+        self._key_lookup = key_lookup or vendor_key
+        self.stopped_vendors: dict = {}
 
     @property
     def client(self):
@@ -734,6 +757,8 @@ class Runner:
             hit["cache_hit"] = True
             return hit
         key = request_key(req.key_dict())
+        if req.vendor != "anthropic":
+            return self._call_vendor(req, key)
         content = [image_block(c) if isinstance(c, Image) else {"type": "text", "text": c} for c in req.content]
         last_exc = None
         for attempt in (1, 2):   # at most one retry
@@ -774,6 +799,358 @@ class Runner:
             rec["cache_hit"] = False
             return rec
         raise RuntimeError(f"{req.arm} {req.page}: failed twice: {last_exc}")
+
+    def _call_vendor(self, req: "Request", key: str) -> dict:
+        if req.vendor in self.stopped_vendors:
+            raise AccessError(f"{req.vendor} stopped earlier: {self.stopped_vendors[req.vendor]}")
+        api_key = self._key_lookup(req.vendor)
+        if not api_key:
+            raise VendorSkipped(f"{req.vendor}: no API key ({' or '.join(VENDORS[req.vendor]['key_env'])}); skipped")
+        adapter = VENDORS[req.vendor]["adapter"]
+        url, body = adapter.build(req)
+        last_exc = None
+        for attempt in (1, 2):   # at most one retry
+            self.ledger.guard(req.worst_case())
+            try:
+                status, data = self._http_post(url, adapter.headers(api_key), body)
+            except Exception as exc:  # noqa: BLE001  (transport failure: spend unknown)
+                last_exc = exc
+                self.ledger.record({"arm": req.arm, "page": req.page, "rep": req.rep, "vendor": req.vendor,
+                                    "model": req.model, "key": key, "status": f"transport:{type(exc).__name__}",
+                                    "detail": redact(str(exc), api_key)[:200], "attempt": attempt, "cost": 0.0,
+                                    "uncertain_cost": round(req.worst_case(), 6)})
+                continue
+            if status >= 400:
+                msg = redact(json.dumps(data)[:300], api_key)
+                pre = status in (400, 401, 403, 404, 413, 422, 429)
+                self.ledger.record({"arm": req.arm, "page": req.page, "rep": req.rep, "vendor": req.vendor,
+                                    "model": req.model, "key": key, "status": f"http:{status}", "detail": msg,
+                                    "attempt": attempt, "cost": 0.0,
+                                    "uncertain_cost": 0.0 if pre else round(req.worst_case(), 6)})
+                if status in (401, 403) or (status == 429 and "quota" in msg.lower()) or "billing" in msg.lower():
+                    self.stopped_vendors[req.vendor] = f"http {status}"
+                    raise AccessError(f"{req.vendor} http {status}: {msg}")
+                last_exc = RuntimeError(f"http {status}: {msg}")
+                if status in (400, 404, 422):
+                    break       # a malformed request will not improve on retry
+                continue
+            parsed, usage, problem = adapter.parse(data)
+            cost = vendor_cost(req.vendor, req.model, usage)
+            self.ledger.record({"arm": req.arm, "page": req.page, "rep": req.rep, "vendor": req.vendor,
+                                "model": req.model, "key": key, "status": "ok" if parsed is not None else
+                                f"unparsed:{problem}", "attempt": attempt, **usage, "cost": round(cost, 6),
+                                "uncertain_cost": 0.0})
+            if parsed is None:
+                last_exc = RuntimeError(f"unparsed: {problem}")
+                continue
+            try:
+                parsed = req.schema.model_validate(parsed).model_dump()
+            except Exception as exc:  # noqa: BLE001
+                last_exc = RuntimeError(f"schema: {redact(str(exc), api_key)[:200]}")
+                continue
+            rec = {"arm": req.arm, "page": req.page, "rep": req.rep, "vendor": req.vendor, "model": req.model,
+                   "parsed": parsed, "usage": usage, "cost": cost, "stop_reason": problem or "ok",
+                   "images": [{"sha": c.sha, "w": c.width, "h": c.height, "label": c.label,
+                               "vendor_tokens_est": vendor_image_tokens(req.vendor, req.model, c.width, c.height)}
+                              for c in req.content if isinstance(c, Image)],
+                   "input_est": req.input_est()}
+            self.cache_path(req).write_text(json.dumps(rec, ensure_ascii=False, indent=1))
+            rec["cache_hit"] = False
+            return rec
+        raise RuntimeError(f"{req.vendor} {req.arm} {req.page}: failed: {last_exc}")
+
+
+# ---------------------------------------------------------------------------
+# Other vendors (Step 2b): stdlib HTTPS adapters, no SDKs
+# ---------------------------------------------------------------------------
+#
+# Model line-ups, prices and image rules below were read from the vendors' own
+# documentation on 2026-11-12 (see VENDOR_SOURCES). Keys are read from the
+# environment at send time only (after llm.load_env), never stored, logged,
+# cached or put in a URL; every error text is passed through redact().
+
+import base64 as _b64
+import os as _os
+import urllib.error as _urlerr
+import urllib.request as _urlreq
+
+
+class VendorSkipped(RuntimeError):
+    """No key for this vendor: the arm is skipped, nothing is paid."""
+
+
+_KEY_PATTERNS = [re.compile(p) for p in (r"sk-[A-Za-z0-9_\-]{6,}", r"AIza[0-9A-Za-z_\-]{10,}",
+                                         r"(?i)bearer\s+\S+", r"(?i)(x-goog-api-key|x-api-key|api[_-]?key)[\"':= ]+\S+")]
+
+
+def redact(text: str, *secrets: str) -> str:
+    """Remove every given secret and anything that looks like a key or auth header."""
+    out = str(text)
+    for sec in secrets:
+        if sec:
+            out = out.replace(sec, "[REDACTED]")
+            if len(sec) >= 8:
+                out = out.replace(sec[:8], "[REDACTED]").replace(sec[-6:], "[REDACTED]")
+    for pat in _KEY_PATTERNS:
+        out = pat.sub("[REDACTED]", out)
+    return out
+
+
+def vendor_key(vendor: str) -> Optional[str]:
+    llm.load_env()
+    for name in VENDORS[vendor]["key_env"]:
+        val = _os.environ.get(name)
+        if val:
+            return val
+    return None
+
+
+def http_post_json(url: str, headers: dict, body: dict, timeout: float = 600.0) -> tuple[int, dict]:
+    req = _urlreq.Request(url, data=json.dumps(body).encode("utf-8"),
+                          headers={"Content-Type": "application/json", **headers}, method="POST")
+    try:
+        with _urlreq.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except _urlerr.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            return e.code, json.loads(raw)
+        except ValueError:
+            return e.code, {"error": raw[:500]}
+
+
+def strict_json_schema(model: type) -> dict:
+    """Pydantic schema made strict (every object closed, every property required)."""
+    schema = model.model_json_schema()
+
+    def fix(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"].keys())
+            for v in node.values():
+                fix(v)
+        elif isinstance(node, list):
+            for v in node:
+                fix(v)
+    fix(schema)
+    return schema
+
+
+def inline_schema(model: type) -> dict:
+    """Strict schema with $defs inlined (for APIs that do not resolve $ref)."""
+    schema = strict_json_schema(model)
+    defs = schema.pop("$defs", {})
+
+    def sub(node):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return sub(dict(defs[node["$ref"].split("/")[-1]]))
+            return {k: sub(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [sub(v) for v in node]
+        return node
+    return sub(schema)
+
+
+def _data_b64(img: "Image") -> str:
+    return _b64.standard_b64encode(img.data).decode("ascii")
+
+
+class OpenAIAdapter:
+    """Responses API (POST /v1/responses), structured output via text.format."""
+    url = "https://api.openai.com/v1/responses"
+
+    @staticmethod
+    def headers(api_key: str) -> dict:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    @staticmethod
+    def build(req: "Request") -> tuple[str, dict]:
+        parts = []
+        for c in req.content:
+            if isinstance(c, Image):
+                parts.append({"type": "input_image", "image_url": f"data:{c.media_type};base64,{_data_b64(c)}",
+                              "detail": OPENAI_DETAIL})
+            else:
+                parts.append({"type": "input_text", "text": c})
+        body = {"model": req.model, "instructions": req.system,
+                "input": [{"role": "user", "content": parts}],
+                "text": {"format": {"type": "json_schema", "name": req.schema.__name__,
+                                    "schema": strict_json_schema(req.schema), "strict": True}},
+                "max_output_tokens": req.max_tokens}
+        effort = (req.extra or {}).get("effort")
+        if effort:
+            body["reasoning"] = {"effort": effort}
+        return OpenAIAdapter.url, body
+
+    @staticmethod
+    def parse(data: dict) -> tuple[Optional[dict], dict, Optional[str]]:
+        u = data.get("usage") or {}
+        usage = {"input_tokens": int(u.get("input_tokens", 0)), "output_tokens": int(u.get("output_tokens", 0)),
+                 "reasoning_tokens": int((u.get("output_tokens_details") or {}).get("reasoning_tokens", 0))}
+        if data.get("status") == "incomplete":
+            reason = (data.get("incomplete_details") or {}).get("reason", "incomplete")
+            return None, usage, f"incomplete:{reason}"
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if part.get("type") == "refusal":
+                    return None, usage, "refusal"
+                if part.get("type") == "output_text":
+                    try:
+                        return json.loads(part["text"]), usage, None
+                    except (ValueError, KeyError):
+                        return None, usage, "bad_json"
+        return None, usage, "no_output_text"
+
+
+class GoogleAdapter:
+    """Gemini Interactions API (POST /v1beta/interactions), as documented on
+    2026-11-12. Not yet exercised live (no key): request and response shapes
+    follow the documentation and are parsed defensively."""
+    url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+    @staticmethod
+    def headers(api_key: str) -> dict:
+        return {"x-goog-api-key": api_key}
+
+    @staticmethod
+    def build(req: "Request") -> tuple[str, dict]:
+        items = [{"type": "text", "text": req.system}]
+        for c in req.content:
+            if isinstance(c, Image):
+                items.append({"type": "image", "data": _data_b64(c), "mime_type": c.media_type,
+                              "resolution": GOOGLE_RESOLUTION})
+            else:
+                items.append({"type": "text", "text": c})
+        body = {"model": req.model, "input": items,
+                "response_format": {"type": "text", "mime_type": "application/json",
+                                    "schema": inline_schema(req.schema)},
+                "generation_config": {"max_output_tokens": req.max_tokens}}
+        level = (req.extra or {}).get("thinking_level")
+        if level:
+            body["generation_config"]["thinking_level"] = level
+        return GoogleAdapter.url, body
+
+    @staticmethod
+    def _find_usage(data: dict) -> dict:
+        u = data.get("usage") or data.get("usage_metadata") or data.get("usageMetadata") or {}
+        def pick(*names):
+            for n in names:
+                if n in u:
+                    return int(u[n])
+            return 0
+        inp = pick("total_input_tokens", "input_tokens", "prompt_token_count", "promptTokenCount")
+        out = pick("total_output_tokens", "output_tokens", "candidates_token_count", "candidatesTokenCount")
+        thought = pick("total_thought_tokens", "thought_tokens", "thoughts_token_count", "thoughtsTokenCount")
+        # Thinking is billed as output; count it whether or not output_tokens already includes it.
+        return {"input_tokens": inp, "output_tokens": out + thought, "reasoning_tokens": thought}
+
+    @staticmethod
+    def parse(data: dict) -> tuple[Optional[dict], dict, Optional[str]]:
+        usage = GoogleAdapter._find_usage(data)
+        texts = []
+        for o in data.get("outputs") or data.get("output") or []:
+            if isinstance(o, dict) and o.get("type") == "text" and "text" in o:
+                texts.append(o["text"])
+        for cand in data.get("candidates") or []:
+            for part in (cand.get("content") or {}).get("parts") or []:
+                if "text" in part and not part.get("thought"):
+                    texts.append(part["text"])
+        if not texts:
+            return None, usage, "no_text"
+        try:
+            return json.loads(texts[-1]), usage, None
+        except ValueError:
+            return None, usage, "bad_json"
+
+
+OPENAI_DETAIL = "original"
+GOOGLE_RESOLUTION = "ultra_high"
+
+VENDOR_SOURCES = {
+    "openai": {
+        "date": "2026-11-12",
+        "models": "https://developers.openai.com/api/docs/models (flagship: gpt-6-astra; cheaper strong: gpt-6.1-sol)",
+        "model_pages": ["https://developers.openai.com/api/docs/models/gpt-6-astra",
+                        "https://developers.openai.com/api/docs/models/gpt-6.1-sol"],
+        "pricing": "https://developers.openai.com/api/docs/pricing (gpt-6-astra $10/$50; lists gpt-5.6-sol $4/$20, "
+                   "while the gpt-6.1-sol model page says $2/$10: conflicting, guard uses $4/$20)",
+        "vision": "https://developers.openai.com/api/docs/guides/images-vision (32 px patches; gpt-6-astra "
+                  "detail=original keeps dimensions up to 65,535 px per side, >30,000 patches rejected; tokens = "
+                  "patches x 1.2; gpt-6.1-sol not listed: rule unverified)",
+        "reasoning": "https://developers.openai.com/api/docs/guides/reasoning (reasoning billed as output; "
+                     "usage.output_tokens_details.reasoning_tokens; max_output_tokens includes reasoning; "
+                     "gpt-6-astra and gpt-6.1-sol do not accept effort 'none')",
+        "token_count": "POST /v1/responses/input_tokens (same body as Responses; free status not stated)",
+        "pointing": "no documented bounding-box output; guide says the model struggles with precise localization",
+    },
+    "google": {
+        "date": "2026-11-12",
+        "models": "https://aistudio.google.com/docs/models (gemini-4-carbon 'our strongest reasoning model', "
+                  "status label not shown; gemini-3.8-flash stable, 'most intelligent Flash')",
+        "pricing": "https://aistudio.google.com/docs/pricing (gemini-4-carbon $2/$10 to 2026-11-30, then $4/$20; "
+                   "gemini-3.8-flash $0.75/$3.75 to 2026-12-31; thinking billed as output)",
+        "vision": "https://aistudio.google.com/docs/media-resolution (per-image budgets on Gemini 3/4: low 280, "
+                  "medium 560, high 1120, ultra_high 2240 tokens; pixel size preserved at each level NOT documented); "
+                  "https://aistudio.google.com/docs/image-understanding (older 258 tokens per 768x768 tile rule)",
+        "pointing": "box_2d [ymin, xmin, ymax, xmax] normalised 0-1000 (image-understanding guide)",
+    },
+}
+
+VENDORS = {
+    "openai": {
+        "key_env": ["OPENAI_API_KEY"],
+        "adapter": OpenAIAdapter,
+        "models": {
+            "gpt-6-astra": {"price": {"in": 10.0, "out": 50.0}, "guard_price": {"in": 12.5, "out": 62.5},
+                            "patch": 32, "multiplier": 1.2, "max_side": 65535, "max_patches": 30000,
+                            "rule": "verified from docs; confirm with usage.input_tokens"},
+            "gpt-6.1-sol": {"price": {"in": 4.0, "out": 20.0}, "guard_price": {"in": 5.0, "out": 25.0},
+                            "patch": 32, "multiplier": 1.2, "max_side": 6000, "max_patches": 10000,
+                            "rule": "UNVERIFIED (not in the vision guide); gpt-5.5 'original' limits assumed"},
+        },
+    },
+    "google": {
+        "key_env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "adapter": GoogleAdapter,
+        "models": {
+            "gemini-4-carbon": {"price": {"in": 2.0, "out": 10.0}, "guard_price": {"in": 5.0, "out": 25.0},
+                                "fixed_tokens": 2240, "max_pixels": 5_100_000,
+                                "rule": "UNVERIFIED: fixed 2240-token budget per image at ultra_high; pixel "
+                                        "limit assumed from 258 tokens per 768x768 tile scaled to 2240"},
+            "gemini-3.8-flash": {"price": {"in": 0.75, "out": 3.75}, "guard_price": {"in": 1.5, "out": 7.5},
+                                 "fixed_tokens": 2240, "max_pixels": 5_100_000, "rule": "UNVERIFIED (as above)"},
+        },
+    },
+}
+
+
+def vendor_image_tokens(vendor: str, model: str, w: int, h: int) -> int:
+    m = VENDORS[vendor]["models"][model]
+    if vendor == "openai":
+        patches = -(-w // m["patch"]) * -(-h // m["patch"])
+        return math.ceil(patches * m["multiplier"])
+    return m["fixed_tokens"]
+
+
+def vendor_fits(vendor: str, model: str, w: int, h: int) -> bool:
+    """True if the vendor's documented rule keeps this image at its own size."""
+    if vendor == "anthropic":
+        tiers = config.IMAGE_TIERS if model.startswith(HIGH_RES_PREFIXES) else config.IMAGE_TIERS[1:]
+        return config._resized_size(w, h, *tiers[0]) == (w, h)
+    m = VENDORS[vendor]["models"][model]
+    if vendor == "openai":
+        patches = -(-w // m["patch"]) * -(-h // m["patch"])
+        return max(w, h) <= m["max_side"] and patches <= m["max_patches"]
+    return w * h <= m["max_pixels"]
+
+
+def vendor_cost(vendor: str, model: str, usage: dict) -> float:
+    p = VENDORS[vendor]["models"][model]["price"]
+    return usage.get("input_tokens", 0) / 1e6 * p["in"] + usage.get("output_tokens", 0) / 1e6 * p["out"]
 
 
 # ---------------------------------------------------------------------------
@@ -1256,8 +1633,25 @@ def per_line_errors(truth: list[Tok], hyp: list[Tok]) -> dict:
 # Arms
 # ---------------------------------------------------------------------------
 
+VENDOR_ARMS = {   # arm: (vendor, model, extra, max_output_tokens)
+    "oa_astra": ("openai", "gpt-6-astra", {"effort": "low"}, 10000),
+    "oa_sol": ("openai", "gpt-6.1-sol", {"effort": "low"}, 10000),
+    "gg_carbon": ("google", "gemini-4-carbon", {"thinking_level": "low"}, 10000),
+    "gg_flash": ("google", "gemini-3.8-flash", {"thinking_level": "low"}, 10000),
+}
+BAND_ARMS = ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus") + tuple(VENDOR_ARMS)
+
+
 def build_request(arm: str, pid: str, rep: int = 0) -> Request:
     slug, page = PAGES[pid]
+    if arm in VENDOR_ARMS:
+        vendor, model, extra, mx = VENDOR_ARMS[arm]
+        base = build_request("t1r", pid, 0)   # identical bands, prompt and schema
+        for c in base.content:
+            if isinstance(c, Image) and not vendor_fits(vendor, model, c.width, c.height):
+                raise ValueError(f"{arm} {pid}: {c.label} {c.width}x{c.height} would be resized by {vendor}")
+        return Request(arm, pid, model, base.system, base.content, BandsReading, rep=rep, max_tokens=mx,
+                       expected_out=4000, extra=extra, vendor=vendor)
     ut = user_text(slug, page)
     if arm == "current":
         return Request(arm, pid, config.MODEL_STRONG, llm.TRANSCRIBE_SYSTEM,
@@ -1292,7 +1686,7 @@ def build_request(arm: str, pid: str, rep: int = 0) -> Request:
     raise KeyError(arm)
 
 
-ARMS = ("current", "t1", "t4", "t1t4", "lines", "folded", "lines_haiku", "t1r", "t1r_think", "t1r_opus")
+ARMS = ("current", "t1", "t4", "t1t4", "lines", "folded", "lines_haiku", "t1r", "t1r_think", "t1r_opus") + tuple(VENDOR_ARMS)
 
 
 def output_of(rec: dict, arm: str) -> dict:
@@ -1304,7 +1698,7 @@ def output_of(rec: dict, arm: str) -> dict:
         return {"md": None, "lines": p["lines"]}
     if arm == "folded":
         return {"md": p["text_md"], "lines": p["printed_lines"], "confidence": p.get("confidence")}
-    if arm in ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus"):
+    if arm in BAND_ARMS:
         bands = sorted(p["bands"], key=lambda b: b["band_index"])
         lines, warns = stitch_bands([b["lines"] for b in bands])
         return {"md": None, "lines": lines, "band_warnings": warns,
@@ -1421,6 +1815,167 @@ def cmd_run(args) -> None:
                   f"${rec['cost']:.4f} stop={rec.get('stop_reason')}  ledger ${runner.ledger.total():.4f}")
 
 
+CAP_2B_USD = 3.00
+LEDGER_2B = "ledger_2b.jsonl"
+PLAN_2B = [  # (arm, pages, reps)
+    ("oa_astra", HADPI_PIDS, (0, 1)), ("oa_astra", ("c23", "c109"), (0,)),
+    ("oa_sol", HADPI_PIDS, (0,)),
+    ("gg_carbon", HADPI_PIDS, (0, 1)), ("gg_carbon", ("c23", "c109"), (0,)),
+    ("gg_flash", HADPI_PIDS, (0,)),
+]
+SMOKE_2B = {arm: VENDOR_ARMS[arm] for arm in VENDOR_ARMS}
+
+
+def runner_2b(**kw) -> "Runner":
+    return Runner(cap=CAP_2B_USD, ledger_name=LEDGER_2B, **kw)
+
+
+def cmd_plan2b(_args) -> None:
+    rows, exp, worst = [], 0.0, 0.0
+    for arm, pids, reps in PLAN_2B:
+        for pid in pids:
+            for rep in reps:
+                r = build_request(arm, pid, rep)
+                imgs = [c for c in r.content if isinstance(c, Image)]
+                exp += r.expected()
+                worst += r.worst_case()
+                fits = all(vendor_fits(r.vendor, r.model, i.width, i.height) for i in imgs)
+                rows.append(f"{arm:10s} {r.vendor:7s} {r.model:17s} {pid:5s} rep{rep} imgs={len(imgs)} "
+                            f"img_tok={sum(vendor_image_tokens(r.vendor, r.model, i.width, i.height) for i in imgs):6d} "
+                            f"in_est={r.input_est():6d} fits={fits} exp=${r.expected():.4f} worst=${r.worst_case():.4f}")
+    rows.append(f"smoke calls: {len(SMOKE_2B)} (text only, max 600 output tokens incl. reasoning)")
+    text = "\n".join(rows) + f"\n{len(rows) - 1} calls  expected ${exp:.3f}  sum of worst cases ${worst:.3f}  " \
+        f"(plan limit $2.50, cap ${CAP_2B_USD:.2f}); ledger_2b so far ${runner_2b().ledger.total():.4f}"
+    print(text)
+    (OUT / "plan_2b.txt").write_text(text + "\n")
+
+
+def cmd_smoke2b(args) -> None:
+    runner = runner_2b()
+    for arm in (args.arms or list(SMOKE_2B)):
+        vendor, model, extra, _ = SMOKE_2B[arm]
+        req = Request(f"smoke:{arm}", "-", model, "Answer with JSON only.", ["Set ok to true."], _Ok,
+                      max_tokens=600, expected_out=50, extra=extra, vendor=vendor)
+        try:
+            rec = runner.call(req)
+            print(f"{arm}: ok parsed={rec['parsed']} usage={rec['usage']} ${rec['cost']:.5f}")
+        except VendorSkipped as exc:
+            print(f"{arm}: SKIPPED: {exc}")
+        except (AccessError, BudgetExceeded, RuntimeError) as exc:
+            print(f"{arm}: STOP: {type(exc).__name__}: {redact(str(exc))}")
+    print(f"ledger_2b total ${runner.ledger.total():.5f}")
+
+
+def cmd_run2b(args) -> None:
+    runner = runner_2b()
+    pids = args.pages.split(",") if args.pages else ALL_PIDS
+    for arm in args.arms:
+        for pid in pids:
+            try:
+                rec = runner.call(build_request(arm, pid, args.rep))
+            except VendorSkipped as exc:
+                print(f"{arm}: SKIPPED: {exc}")
+                break
+            except AccessError as exc:
+                print(f"{arm}: STOP vendor: {redact(str(exc))}")
+                break
+            except BudgetExceeded as exc:
+                print(f"STOP: {exc}")
+                return
+            except RuntimeError as exc:
+                print(f"{arm} {pid}: FAILED: {redact(str(exc))}")
+                continue
+            print(f"{arm:10s} {pid:5s} rep{args.rep} hit={rec['cache_hit']} in={rec['usage']['input_tokens']} "
+                  f"(est {rec['input_est']}) out={rec['usage']['output_tokens']} "
+                  f"reasoning={rec['usage'].get('reasoning_tokens', 0)} ${rec['cost']:.4f}  "
+                  f"ledger_2b ${runner.ledger.total():.4f}", flush=True)
+
+
+READERS_2B = ("oa_astra", "oa_sol", "gg_carbon", "gg_flash", "t1r_opus", "t1r", "current")
+T2_2B = [
+    ("oa_astra vs t1r_opus (cross-vendor)", ("oa_astra", 0), ("t1r_opus", 0)),
+    ("gg_carbon vs t1r_opus (cross-vendor)", ("gg_carbon", 0), ("t1r_opus", 0)),
+    ("oa_astra vs gg_carbon (cross-vendor)", ("oa_astra", 0), ("gg_carbon", 0)),
+    ("oa_astra vs oa_astra(rep1) (same model)", ("oa_astra", 0), ("oa_astra", 1)),
+    ("gg_carbon vs gg_carbon(rep1) (same model)", ("gg_carbon", 0), ("gg_carbon", 1)),
+    ("oa_sol vs t1r_opus", ("oa_sol", 0), ("t1r_opus", 0)),
+    ("gg_flash vs t1r_opus", ("gg_flash", 0), ("t1r_opus", 0)),
+    ("oa_astra vs current (production Sonnet)", ("oa_astra", 0), ("current", 0)),
+    ("t1r_opus vs current (reference)", ("t1r_opus", 0), ("current", 0)),
+]
+
+
+def vendor_effective_px(pid: str, arm: str) -> dict:
+    """Line pitch / text height reaching the model, for band arms of any vendor."""
+    slug, page = PAGES[pid]
+    g = line_geometry(pid)
+    imgs, meta = band_images(slug, page)
+    if arm in VENDOR_ARMS:
+        vendor, model = VENDOR_ARMS[arm][:2]
+        fits = all(vendor_fits(vendor, model, i.width, i.height) for i in imgs)
+        verified = vendor == "openai" and "UNVERIFIED" not in VENDORS[vendor]["models"][model]["rule"]
+        scale = 1.0 if fits else None
+    else:
+        scale = min(api_size(i, config.MODEL_STRONG)[0] / i.width for i in imgs)
+        verified = True
+    if scale is None:
+        return {"pitch_px": None, "line_box_px": None, "verified": False}
+    return {"pitch_px": round(g["pitch_pt"] * meta["px_per_pt"] * scale, 1),
+            "line_box_px": round(g["box_h_pt"] * meta["px_per_pt"] * scale, 1), "verified": verified}
+
+
+def cmd_score2b(_args) -> None:
+    r1, r2 = Runner(), runner_2b()
+    rows, t2 = [], []
+    for pid in ALL_PIDS:
+        truth = truth_tokens(pid)
+        for arm in READERS_2B:
+            runner = r2 if arm in VENDOR_ARMS else r1
+            for rep, rec in _cached_runs(runner, arm, pid):
+                out = output_of(rec, arm)
+                hyp = hyp_tokens(out, "md" if out.get("md") is not None else "lines")
+                ep = vendor_effective_px(pid, arm) if arm in BAND_ARMS else effective_px(pid, arm)
+                rows.append({"page": pid, "arm": arm, "rep": rep, "vendor": rec.get("vendor", "anthropic"),
+                             "model": rec["model"], "cost": rec["cost"], "usage": rec["usage"],
+                             **{f: wer(truth, hyp, f) for f in FOLDINGS},
+                             "invented": len(invented_words(truth, hyp)), "markers": marker_stats(truth, hyp),
+                             "effective_px": ep})
+        for name, (pa, pr), (sa, sr) in T2_2B:
+            def toks(arm, rep):
+                runner = r2 if arm in VENDOR_ARMS else r1
+                rec = runner.cached(build_request(arm, pid, rep))
+                if rec is None:
+                    return None
+                o = output_of(rec, arm)
+                return hyp_tokens(o, "md" if o.get("md") is not None else "lines")
+            P, S = toks(pa, pr), toks(sa, sr)
+            if P is not None and S is not None:
+                t2.append({"pair": name, "page": pid, **t2_stats(truth, P, S)})
+    meta = {"vendor_sources": VENDOR_SOURCES,
+            "vendor_models": {v: {m: {k: x for k, x in d.items() if k != "guard_price"} for m, d in VENDORS[v]["models"].items()}
+                              for v in VENDORS},
+            "anthropic": {"claude-sonnet-5": config.PRICES[config.MODEL_STRONG], MODEL_OPUS: PRICES_EXTRA[MODEL_OPUS]},
+            "ledger_2b_total": r2.ledger.total()}
+    (OUT / "results_2b.json").write_text(json.dumps({"meta": meta, "rows": rows, "t2": t2}, ensure_ascii=False, indent=1))
+    lines = ["STEP 2b READERS (same native bands and prompt; lenient/strict WER as errors/words)",
+             "page  arm        vendor/model                    rep  strict  lenient (err/n)  inv  unk guess  cost     line px"]
+    for r in rows:
+        m = r["markers"]
+        lines.append(f"{r['page']:5s} {r['arm']:10s} {r['vendor'] + '/' + r['model']:31s} {r['rep']}  "
+                     f"{r['strict']['wer']:.3f}  {r['lenient']['wer']:.3f} ({r['lenient']['errors']:3d}/{r['lenient']['n_truth']})"
+                     f"  {r['invented']:3d}  {m['markers_unk']:3d} {m['markers_guess']:3d}  ${r['cost']:.4f}  "
+                     f"{r['effective_px'].get('line_box_px')}")
+    lines.append("")
+    lines.append("T2 cross-vendor pairs                           page  recall (caught/err)  flag rate")
+    for t in t2:
+        lines.append(f"{t['pair']:47s} {t['page']:5s} {t['recall']:.2f} ({t['caught']}/{t['errors']})   "
+                     f"{t['flag_rate']:.3f} ({t['flagged_words']}+{t['flagged_gaps']}/{t['primary_words']})")
+    lines.append(f"\nledger_2b total ${r2.ledger.total():.4f}")
+    text = "\n".join(lines)
+    print(text)
+    (OUT / "summary_2b.txt").write_text(text, encoding="utf-8")
+
+
 def cmd_runpl(args) -> None:
     runner = Runner()
     pids = args.pages.split(",") if args.pages else ALL_PIDS
@@ -1449,7 +2004,7 @@ def _cached_runs(runner: Runner, arm: str, pid: str) -> list[tuple[int, dict]]:
 def effective_px(pid: str, arm: str) -> dict:
     slug, page = PAGES[pid]
     g = line_geometry(pid)
-    if arm in ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus"):
+    if arm in BAND_ARMS:
         imgs, meta = band_images(slug, page)
         scale = min(api_size(i, config.MODEL_STRONG)[0] / i.width for i in imgs)
         ppt = meta["px_per_pt"]
@@ -1749,9 +2304,18 @@ def main(argv=None) -> None:
     pl.add_argument("--pages", default=None)
     pl.add_argument("--rep", type=int, default=0)
     sub.add_parser("score")
+    sub.add_parser("plan2b")
+    sm = sub.add_parser("smoke2b")
+    sm.add_argument("arms", nargs="*", choices=list(VENDOR_ARMS))
+    r2 = sub.add_parser("run2b")
+    r2.add_argument("arms", nargs="+", choices=list(VENDOR_ARMS))
+    r2.add_argument("--pages", default=None)
+    r2.add_argument("--rep", type=int, default=0)
+    sub.add_parser("score2b")
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
-    {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "runpl": cmd_runpl, "score": cmd_score}[args.cmd](args)
+    {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "runpl": cmd_runpl, "score": cmd_score,
+     "plan2b": cmd_plan2b, "smoke2b": cmd_smoke2b, "run2b": cmd_run2b, "score2b": cmd_score2b}[args.cmd](args)
 
 
 if __name__ == "__main__":
