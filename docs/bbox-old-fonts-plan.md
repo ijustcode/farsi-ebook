@@ -477,6 +477,24 @@ review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth dr
   1 wrong word per page left unflagged; real hadpi pages are visibly harder (stamp lines,
   margin specks, underlines). Not audited yet: no real-page number exists until the owner finishes.
 
+**Hard synthetic presets (2026-11-11).** §13's synthetic additions are built: `tw_photo_medium`
+and `tw_photo_hard` add margin specks, tight word spacing, multi-line overlays, per-line baselines
+and typewriter texture, on a flush-right memo layout with a large invented text pool. (v1's
+non-justified layouts turned out to be flush-left, because MuPDF mirrors `text-align` for RTL;
+fixed only in the new layout, so old hashes hold.) Typewriter, seeds 3–6, old photo → medium →
+hard:
+- current detector, largest merge: 7 → 10 → 10 lines (hadpi about 8). Most of this comes from the
+  memo layout itself (layout alone: 11), not from the new degradations.
+- draft splitter, words on the right ink: 97.7% → 85.3% → 67.7%; both edges within half a letter
+  (the agent's stand-in, not the audit criterion): 91.9% → 67.0% → 42.3%. The owner's audit left
+  62–77% of hadpi draft boxes unchanged; the two measures are different instruments.
+- O1 cascade lines: 0 → 4 → 21. O2 boundary errors: 1.5% → 4.3% → 12%, almost all at gaps no wider
+  than an in-word gap.
+Medium is the closer match to hadpi; hard is harder than the real pages for both the detector and
+the draft. Not built: kashida line filling, a real Persian typewriter face (Courier New is the
+only fixed-pitch face installed), the width-class pitch grid, paper texture. Real pages remain
+the gate.
+
 ### Step 2 — Transcription experiments (≤ $3 API)
 
 - Pages: hadpi p1–p2 (text truth), plus two clean control pages from another scanned book.

@@ -108,6 +108,8 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - Draft quality is availability, not truth: synthetic typewriter pages are much easier than the real ones, and `uncertain` flags only order the review. Grade later steps against the audited files only.
 - Test: `./venv/bin/python tests/box_audit_regression.py` (synthetic, no `books/`).
 
+- **Hard typewriter presets** (`tw_photo_medium`, `tw_photo_hard`; pipeline v2 in `tests/synth_pages.py`): margin specks at line starts (plan §13 O1), word gaps tightened to or below the letter gap (O2), multi-line stamps and signatures with per-word coverage, per-line baseline slope/jitter/curvature, typewriter texture and typed underlines, on a flush-right `memo` layout with invented pool text (`text_source="pool"`, or `"file:<path>"` at run time). Every v2 switch is off by default; v1 presets and their hashes are unchanged. Truth adds `word_gaps` (per boundary: gap, tightened, `o2_trigger`), speck/underline/overlay records with `text: false`, `covered_by`, per-line `slope_deg`. **MuPDF mirrors `text-align` under `dir="rtl"`: v1's non-justified layouts are flush-left, which is wrong for Persian** (fixed only in `memo`). `./venv/bin/python tests/synth_hard_eval.py` compares presets using the current detector and the box-audit draft splitter (O1/O2 counts). `tw_photo_medium` is the closer match to hadpi; `tw_photo_hard` is harder than the real pages.
+
 ## Placement engine (current code)
 
 `farsi2epub/placement.py` only re-exports `PlacementService`, `PlacementResult`, `PrintedWord`, `place`. The work is in:

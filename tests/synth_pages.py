@@ -215,6 +215,183 @@ def fa(n) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Larger invented text pool (text_source="pool"). Every template, filler and
+# sentence below was written for this file; none is copied from any book,
+# document or page under books/. Templates combine into millions of distinct
+# sentences, so a page drawn from the pool almost never repeats a phrase
+# longer than a few function words (the small embedded corpus above repeats
+# whole paragraphs on one page, which makes text alignment ambiguous in an
+# unrealistic way).
+# ---------------------------------------------------------------------------
+POOL_FILL: dict[str, list[str]] = {
+    "org": ["هیئت مدیره", "مدیر عامل", "بازرس قانونی", "مجمع عمومی", "واحد حسابداری", "کمیته فنی",
+            "اداره کارگزینی", "دفتر حقوقی", "شورای نظارت", "معاونت اداری", "مسئول انبار",
+            "نماینده فروشنده", "کارشناس رسمی دادگستری", "دبیرخانه", "واحد بازرگانی", "مدیر کارخانه",
+            "سرپرست کارگاه", "خزانه‌دار", "هیئت داوری", "کمیسیون معاملات", "واحد کنترل کیفیت",
+            "اداره تدارکات", "انجمن صنفی", "شورای کارگاه"],
+    "person": ["آقای رضایی", "خانم کاظمی", "آقای مهندس صالحی", "دکتر نوروزی", "آقای فرهادی",
+               "خانم امینی", "آقای حیدری", "خانم توکلی", "آقای جهانگیری", "آقای ملکی", "خانم یزدانی",
+               "آقای شریفی", "خانم دکتر بهرامی", "آقای قنبری", "آقای مهندس سلطانی", "خانم رحیمی",
+               "آقای عسگری", "خانم مرادی"],
+    "obj": ["گزارش مالی سال گذشته", "صورت‌حساب‌های معوق", "برنامه تعمیرات سالانه", "فهرست اموال منقول",
+            "طرح توسعه کارگاه", "قرارداد خرید مواد اولیه", "پرونده استخدام کارکنان جدید",
+            "آیین‌نامه انضباطی", "بودجه پیشنهادی سال آینده", "نتایج بازرسی دوره‌ای", "سند انتقال زمین مجاور",
+            "صورتجلسه نشست قبلی", "فهرست بدهکاران", "طرح بیمه تکمیلی کارکنان", "نقشه ساختمان اداری",
+            "گزارش مصرف سوخت", "پیشنهاد خرید دستگاه بسته‌بندی", "دفتر روزنامه حسابداری",
+            "فهرست قیمت‌های تازه", "برنامه نوبت‌کاری تابستان", "گزارش حوادث کارگاه", "پرونده مالیاتی شرکت"],
+    "verb": ["را بررسی و تصویب کرد", "را به مجمع عمومی ارائه خواهد داد",
+             "را برای اظهار نظر به کمیته فنی ارجاع داد", "را تا پایان ماه آینده تکمیل خواهد کرد",
+             "را رد کرد و اصلاح آن را خواستار شد", "را با چند اصلاح جزئی پذیرفت",
+             "را به اطلاع همه کارکنان رساند", "را در دستور کار جلسه بعد قرار داد",
+             "را برای امضا آماده کرد", "را به دقت بازبینی کرد و نکات مبهم آن را یادداشت کرد",
+             "را بایگانی کرد", "را با نسخه پیشین مقایسه کرد"],
+    "time": ["در جلسه مورخ {date}", "پس از بحث و تبادل نظر", "در پایان سال مالی", "طی نامه شماره {num}",
+             "بنا به پیشنهاد {person}", "با حضور اکثریت اعضا", "در مهلت مقرر", "پیش از برگزاری مجمع",
+             "در نخستین فرصت", "پس از دریافت نظر کارشناس", "در غیاب {person}", "روز {weekday} گذشته"],
+    "weekday": ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه"],
+    "period": ["ماه", "سه ماه", "شش ماه", "سال"],
+    "office": ["دبیرخانه مرکزی", "دفتر فنی", "امور مالی", "بایگانی اسناد", "دفتر مدیریت", "واحد حقوقی",
+               "انبار مرکزی", "دفتر نمایندگی تهران"],
+    "city": ["تبریز", "شیراز", "مشهد", "کرمان", "رشت", "یزد", "همدان", "اراک", "قزوین", "سمنان",
+             "اصفهان", "اهواز", "زنجان", "ساری", "بندرعباس"],
+    "street": ["بهار", "نسترن", "لاله", "فردوسی", "سعدی", "مولوی", "خیام", "نیما", "پروین", "سهروردی",
+               "بوعلی", "شهریار"],
+    "reason": ["کمبود قطعات یدکی", "تأخیر در پرداخت", "تعمیرات اساسی", "بارندگی شدید", "قطعی برق",
+               "نبود مجوز لازم", "اختلاف در محاسبات", "کمبود نیروی کار"],
+    "product": ["پارچه پنبه‌ای", "کاشی و سرامیک", "روغن نباتی", "قطعات خودرو", "کاغذ تحریر",
+                "لوله‌های فولادی", "کنسرو ماهی", "رنگ ساختمانی", "شیشه جام", "فرش ماشینی", "صابون",
+                "کفش چرمی"],
+    "season": ["بهار", "تابستان", "پاییز", "زمستان", "نیمه نخست سال", "سه ماهه سوم"],
+    "change": ["افزایش", "کاهش"],
+    "machine": ["دستگاه پرس", "کوره ذوب", "دیگ بخار", "نوار نقاله", "دستگاه برش", "ژنراتور برق",
+                "پمپ آب", "جرثقیل سقفی"],
+    "law": ["ماده {n} آیین‌نامه داخلی", "مصوبه هیئت مدیره", "بند {n} قرارداد اصلی", "مقررات ایمنی کار",
+            "دستورالعمل انبارداری"],
+    "topic": ["نرخ دستمزد", "ساعت کار زمستانی", "ایمنی کارگاه", "تأمین مواد اولیه", "فروش صادراتی",
+              "تعمیر ساختمان", "حمل و نقل کالا", "آموزش کارکنان", "پاداش پایان سال", "خرید زمین"],
+    "unit": ["واحد تولید", "انبار", "آزمایشگاه", "بخش اداری", "تعمیرگاه", "واحد فروش"],
+    "course": ["ایمنی و آتش‌نشانی", "حسابداری صنعتی", "نگهداری ماشین‌آلات", "کمک‌های اولیه", "انبارداری"],
+    "place": ["شهرک صنعتی", "بندر", "دفتر مرکزی", "انبار شماره دو", "اداره ثبت", "بانک ملی شعبه بازار",
+              "دادگستری", "گمرک"],
+    "vehicle": ["اتوبوس", "قطار", "خودروی شرکت", "کامیون باری", "تاکسی"],
+}
+POOL_TEMPLATES = [
+    "{org} {time} {obj} {verb}.",
+    "مقرر شد {obj} حداکثر ظرف {n} روز توسط {org} تهیه و برای امضا به {person} تحویل داده شود.",
+    "به موجب این ماده، {org} موظف است هر {period} یک بار {obj} را به {org2} گزارش دهد.",
+    "هرگونه تغییر در {obj} تنها با موافقت کتبی {org} و ثبت در دفاتر {office} معتبر است.",
+    "{person} ضمن تشکر از {org}، پیشنهاد کرد که {obj} با دقت بیشتری بازنگری شود.",
+    "مبلغ {amount} ریال بابت {obj} از محل اعتبارات {office} پرداخت و رسید آن ضمیمه پرونده شد.",
+    "نشانی دفتر شرکت در شهر {city}، خیابان {street}، پلاک {n} است و تغییر آن با تصمیم {org} ممکن خواهد بود.",
+    "در صورت غیبت {person}، وظایف وی موقتاً به {org} سپرده می‌شود تا تکلیف {obj} روشن شود.",
+    "{org} اعلام کرد که کار {machine} به دلیل {reason} تا اطلاع ثانوی متوقف می‌ماند.",
+    "صبح روز {weekday} {person} با {vehicle} به {place} رفت و {obj} را با خود برد.",
+    "کارکنان {unit} می‌توانند درخواست‌های خود را تا ساعت {hour} به {office} تحویل دهند.",
+    "گزارش {org} نشان می‌دهد که تولید {product} در {season} امسال {pct} درصد {change} یافته است.",
+    "لطفاً {obj} را پس از امضا در دو نسخه به نشانی {office} ارسال فرمایید.",
+    "{person} در پاسخ به پرسش {person2} گفت که {obj} هنوز به دست ما نرسیده است.",
+    "تعمیر {machine} کارگاه شماره {n} به علت {reason} {n2} هفته به تأخیر افتاد.",
+    "به استناد {law}، {org} حق دارد {unit} را بدون اخطار قبلی بازرسی کند.",
+    "یادداشت: {obj} باید پیش از {date} در {office} بایگانی شود.",
+    "در این نشست درباره {topic} و {topic2} گفتگو شد و تصمیم نهایی به جلسه آینده موکول گردید.",
+    "{person} پیشنهاد داد که {n} نفر از کارکنان {unit} به دوره آموزشی {course} فرستاده شوند.",
+    "محموله {product} که از {city} ارسال شده بود روز {weekday} با {n} ساعت تأخیر به {place} رسید.",
+    "با توجه به {reason}، {org} ناچار شد سفارش {product} را به نیمه نخست سال بعد موکول کند.",
+    "رونوشت این نامه برای آگاهی به {org} و {office} فرستاده می‌شود.",
+    "هزینه تعمیر {machine} برابر {amount} ریال برآورد شده و {org} با پرداخت آن موافقت کرده است.",
+    "{org2} یادآور شد که رعایت {law} برای همه کارکنان {unit} الزامی است.",
+]
+POOL_SENTENCES = [
+    "باران دیشب تا نزدیک صبح ادامه داشت و آب از زیر در انبار به داخل راه یافت.",
+    "نامه شما رسید و از اینکه در این مدت کوتاه پاسخ دادید سپاسگزاریم.",
+    "کلید قفسه اسناد نزد خزانه‌دار است و بدون اجازه کتبی به کسی داده نمی‌شود.",
+    "ساعت کار دفتر در ماه رمضان از هشت صبح تا دو بعد از ظهر خواهد بود.",
+    "چند نفر از کارگران قدیمی هنوز روش دستی بسته‌بندی را به دستگاه تازه ترجیح می‌دهند.",
+    "اگر قیمت مواد اولیه همچنان بالا برود، باید در نرخ فروش تجدید نظر کنیم.",
+    "سقف سالن شماره سه پیش از آغاز زمستان باید عایق‌کاری شود.",
+    "تلفن دفتر چند روز است قطع شده و نامه‌ها با پیک فرستاده می‌شوند.",
+    "در بازدید هفته گذشته چند کپسول آتش‌نشانی خالی پیدا شد که بی‌درنگ پر شدند.",
+    "از همکاران خواهشمندیم پیش از ترک محل کار چراغ‌ها و بخاری‌ها را خاموش کنند.",
+    "نمونه‌های رسیده از کارخانه جدید از نظر رنگ و دوام با سفارش ما همخوانی ندارد.",
+    "حساب جاری شرکت در پایان ماه مانده‌ای کمتر از حد انتظار نشان می‌داد.",
+    "قرار است دیوار جنوبی محوطه تا پایان تابستان بازسازی شود.",
+    "دفترچه‌های راهنمای دستگاه به زبان آلمانی است و هنوز ترجمه نشده است.",
+    "کامیون حامل بارها در گردنه به علت برف سنگین دو روز متوقف ماند.",
+    "پرداخت حقوق این ماه به سبب تعطیلی بانک‌ها یک روز دیرتر انجام خواهد شد.",
+    "نگهبان شب گزارش داد که در ورودی پشتی چند بار باز و بسته شده است.",
+    "آزمایش‌های تازه نشان داد که رطوبت انبار برای نگهداری کاغذ مناسب نیست.",
+    "به هر یک از کارکنان یک دست لباس کار و یک جفت دستکش تازه داده می‌شود.",
+    "برای جلسه آینده فهرست پرسش‌های خود را دست‌کم دو روز زودتر به دبیرخانه بدهید.",
+]
+
+
+def _pool_fill(key: str, rng: random.Random) -> str:
+    if key in ("org2",):
+        return rng.choice(POOL_FILL["org"])
+    if key in ("person2",):
+        return rng.choice(POOL_FILL["person"])
+    if key in ("topic2",):
+        return rng.choice(POOL_FILL["topic"])
+    if key in ("n", "n2"):
+        return fa(rng.randint(2, 48))
+    if key == "num":
+        return fa(rng.randint(100, 9999)) + "/" + fa(rng.randint(1, 99))
+    if key == "pct":
+        return fa(rng.randint(3, 40))
+    if key == "hour":
+        return fa(rng.randint(8, 16))
+    if key == "amount":
+        return fa(f"{rng.randint(12, 980) * 1000:,}").replace(",", "٬")
+    if key == "date":
+        return f"{fa(rng.randint(1335, 1360))}/{fa(rng.randint(1, 12))}/{fa(rng.randint(1, 29))}"
+    return POOL_FILL[key][rng.randrange(len(POOL_FILL[key]))]
+
+
+def pool_sentence(rng: random.Random) -> str:
+    """One invented sentence: 9 in 10 from a template, 1 in 10 a fixed sentence."""
+    if rng.random() < 0.10:
+        return POOL_SENTENCES[rng.randrange(len(POOL_SENTENCES))]
+    tpl = POOL_TEMPLATES[rng.randrange(len(POOL_TEMPLATES))]
+    out = tpl
+    for _ in range(3):   # fillers may contain placeholders ({date}, {person}, {n})
+        out = re.sub(r"\{(\w+)\}", lambda m: _pool_fill(m.group(1), rng), out)
+    return out
+
+
+def pool_paragraph(rng: random.Random, lo: int = 1, hi: int = 3) -> str:
+    return " ".join(pool_sentence(rng) for _ in range(rng.randint(lo, hi)))
+
+
+MEMO_TITLES = ["صورتجلسه هیئت مدیره", "آیین‌نامه داخلی کارگاه", "قرارداد همکاری فنی", "گزارش بازرسی سالانه",
+               "دستورالعمل انبارداری", "شرح وظایف کارکنان", "تفاهم‌نامه همکاری", "مقررات ایمنی کارگاه"]
+MEMO_SUBTITLES = ["شرکت صنایع نمونه‌سازان البرز", "کارخانه ریسندگی آفتاب", "مؤسسه حمل و نقل ستاره شمال",
+                  "شرکت تولیدی کاوش", "اتحادیه تعاونی روستایی دشت", "شرکت بازرگانی آینده‌نگر"]
+MEMO_SECTIONS = ["بخش اول - تعاریف", "بخش دوم - وظایف و اختیارات", "بخش سوم - امور مالی",
+                 "بخش چهارم - مقررات عمومی", "بخش پنجم - تعهدات طرفین", "بخش ششم - موارد پیش‌بینی نشده"]
+
+
+def file_paragraphs(path: str) -> list[str]:
+    """Paragraphs from a UTF-8 text/Markdown file given at run time. The text
+    is used to lay out the page only; it is never written to tracked files
+    (but it does appear in the generated truth JSON under out/synth/).
+    Files of private documents are refused."""
+    p = Path(path).expanduser().resolve()
+    for slug in PRIVATE_SLUGS:
+        if f"/books/{slug}/" in str(p) + "/":
+            raise ValueError(f"{p} belongs to a private document and may not be used as a text source")
+    paras = []
+    for block in re.split(r"\n\s*\n", p.read_text(encoding="utf-8")):
+        t = re.sub(r"^[#>*\-\s]+", "", block.strip(), flags=re.M)
+        t = re.sub(r"\[\^?\d+\]:?", "", t)
+        t = " ".join(t.replace("---", " ").replace("*", "").split())
+        if len(t.split()) >= 4:
+            paras.append(t)
+    if not paras:
+        raise ValueError(f"{p}: no paragraphs of >= 4 words")
+    return paras
+
+
+# ---------------------------------------------------------------------------
 # Small utilities
 # ---------------------------------------------------------------------------
 def sub_seed(seed: int, purpose: str) -> int:
@@ -293,6 +470,14 @@ def make_spec(font_class: str, *, preset: str = "clean", seed: int = 1,
         "degrade": dict(DEGRADE_PRESETS[preset]) if preset in DEGRADE_PRESETS else {},
     }
     d.pop("layout", None)
+    # v2 presets also fix layout / text source / leading (v1 presets do not,
+    # so their specs are unchanged).
+    for k, v in PRESET_SPEC.get(preset, {}).items():
+        if (k == "layout" and layout is not None) or k in over:
+            continue
+        spec[k] = v
+        if k == "layout" and name is None:
+            spec["name"] = f"{font_class}_{v}_{preset}_s{seed}"
     for k, v in over.items():
         if k == "degrade":
             spec["degrade"].update(v)
@@ -419,6 +604,20 @@ def _stream(spec: dict, rng: random.Random):
     prose = PROSE
     if src.startswith("book:"):
         prose = book_paragraphs(src.split(":", 1)[1]) or PROSE
+    if src == "pool" or src.startswith("file:"):
+        # Larger sources (added after generator v1; embedded output unchanged).
+        paras = None if src == "pool" else file_paragraphs(src.split(":", 1)[1])
+        fpool = TextPool(paras, rng) if paras else None
+
+        def nxt():
+            return fpool.next() if fpool else pool_paragraph(rng)
+        if lay in ("articles", "memo"):
+            n = rng.randint(1, 40)
+            while True:
+                yield f"ماده ({fa(n)}) - " + nxt()
+                n += 1
+        while True:
+            yield nxt()
     if lay == "mixed":
         pool = TextPool(MIXED, rng)
         while True:
@@ -569,6 +768,44 @@ def plan_page(spec: dict) -> list[dict]:
             blocks.append(dict(vb, rect=[r1.x0, y, r1.x1, y + u1 + FIT_SLACK], tokens=h1.split(), hemistich=1))
             blocks.append(dict(vb, rect=[r2.x0, y, r2.x1, y + u2 + FIT_SLACK], tokens=h2.split(), hemistich=2))
             y += u1 + size * 0.15
+    elif lay == "memo":
+        # Typewritten office document: centred title (+ subtitle), numbered
+        # articles, occasional centred section headings. One type size, as on
+        # a typewriter; headings are marked for typed underlining.
+        stream = _stream(spec, rng)
+        heads = [(MEMO_TITLES[rng.randrange(len(MEMO_TITLES))], True),
+                 (MEMO_SUBTITLES[rng.randrange(len(MEMO_SUBTITLES))], False)]
+        spool = TextPool(MEMO_SECTIONS, rng)
+        first = True
+        while y < ybot - size * lead:
+            if first or rng.random() < 0.22:
+                if not first:
+                    heads = [(spool.next(), True)]
+                for text, ul in heads:
+                    hb = dict(kind="heading", font=cls_font, size=size, leading=1.5, align="center",
+                              indent=0.0, underline=ul)
+                    toks = text.split()
+                    u = _fits(fitz.Rect(x0, y, x1, ybot), hb, toks)
+                    if u < 0:
+                        break
+                    hb.update(rect=[x0, y, x1, y + u + FIT_SLACK], tokens=toks)
+                    blocks.append(hb)
+                    y += u + gap
+                y += gap
+            first = False
+            # MuPDF mirrors text-align for dir="rtl": "right" gives flush-LEFT
+            # lines (what v1's non-justified layouts get), "start" gives the
+            # flush-right, ragged-left lines of a Persian typewriter.
+            b = body_block(font=cls_font, indent=0.0, al="justify" if spec["justify"] else "start")
+            toks = next(stream).split()
+            n, u = _fit_prefix(fitz.Rect(x0, y, x1, ybot), b, toks)
+            if n == 0:
+                break
+            b.update(rect=[x0, y, x1, y + u + FIT_SLACK], tokens=toks[:n])
+            blocks.append(b)
+            y += u + gap * 0.5
+            if n < len(toks):
+                break
     else:
         stream = _stream(spec, rng)
         hpool = TextPool(HEADINGS, rng)
@@ -681,6 +918,7 @@ def extract_words(page: fitz.Page, blocks: list[dict]) -> tuple[list[dict], dict
                      origins=[round(c["origin"][1], 1) for c in ink],
                      fonts=sorted({c["font"] for c in ink}), missing=False,
                      extracted=" ".join("".join(c["c"] for c in chars).split()),
+                     glyphs=[(c["c"], list(c["bbox"])) for c in ink],   # internal (not in truth)
                      _ink=ink)
         words.append(w)
     _visual_segments(words)
@@ -1082,6 +1320,923 @@ def ink_bboxes(idmap: np.ndarray, ntok: int, W: int, H: int) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Pipeline v2: degradations aimed at the hard typewritten-photo profile
+# (plan §13 O1/O2, Step 1 results). Every parameter is off by default; a spec
+# that enables none of them takes the v1 path, byte-identical to before.
+#
+# v2 renders the text alone, edits it in pixel space (word spacing, per-glyph
+# typewriter texture, filled counters) moving the word-id map with it, then
+# composites a separately rendered non-text layer (rules, v1 overlays, typed
+# underlines, large stamps and signatures, specks) by multiplication, and
+# inserts a per-line baseline warp before the v1 page transform. Every move of
+# text pixels is an integer pixel move applied identically to the id map, and
+# the layout rectangles are moved by the same amount, so truth stays exact.
+# ---------------------------------------------------------------------------
+V2_DEFAULTS: dict = {
+    # 1. stray ink specks (O1 trigger: just beyond the line START = right end)
+    "specks": 0, "specks_start_frac": 0.5, "specks_end_frac": 0.15,
+    "specks_size": 1.6, "specks_size_sigma": 0.45, "specks_dist_pt": [1.0, 9.0],
+    "specks_ink": [0.05, 0.45],
+    # 2. tight word spacing (O2 trigger)
+    "tight_frac": 0.0, "tight_to": [0.0, 1.0],
+    # 3. large overlays covering several lines
+    "stamps_big": 0, "stamp_radius_pt": [55.0, 80.0], "stamp_opacity": 0.9,
+    "signatures_big": 0, "signature_lines": [3, 6], "signature_width_pt": [140.0, 260.0],
+    "signature_stroke_pt": [1.2, 2.2],
+    # 4. uneven baselines (per line, before the v1 page warp)
+    "baseline_jitter_px": 0.0, "baseline_slope_deg": 0.0, "baseline_slope_rho": 0.6,
+    "baseline_curve_px": 0.0,
+    # 5. typewriter texture
+    "tw_ink_var": 0.0, "tw_halfstrike": 0.0, "tw_halfstrike_depth": 0.7,
+    "tw_jitter_px": 0.0, "tw_key_bias_px": 0.0, "tw_fill_counters": 0.0,
+    "typed_underlines": False, "typed_underline_body": 0,
+}
+DEGRADE_KEYS.update(V2_DEFAULTS)
+_V2_SWITCHES = ("specks", "tight_frac", "stamps_big", "signatures_big", "baseline_jitter_px",
+                "baseline_slope_deg", "baseline_curve_px", "tw_ink_var", "tw_halfstrike", "tw_jitter_px",
+                "tw_key_bias_px", "tw_fill_counters", "typed_underlines", "typed_underline_body")
+PIPELINE_V2 = 2
+
+# Hard typewritten-photo profile (plan §13): the v1 "photo" geometry pushed a
+# little further (top/mid/bottom slope 0.2/2.4/3.6 deg), heavier type (ink
+# spread 2 px), plus every v2 degradation. Aimed at the failure profile
+# described in the plan, not fitted to any real page image.
+DEGRADE_PRESETS["tw_photo_hard"] = dict(
+    warp_top_deg=0.2, warp_mid_deg=2.4, warp_bottom_deg=3.6, warp_bow_px=8.0,
+    rotate_deg=0.5, perspective=0.01,
+    ink_spread_px=2, ink_dropout=0.15,
+    light_gradient=0.4, blur_sigma_px=1.2, noise_sigma=0.035, jpeg_quality=65,
+    margin_marks=2,
+    specks=45, specks_start_frac=0.5, specks_end_frac=0.15, specks_size=1.8, specks_size_sigma=0.5,
+    specks_dist_pt=[1.0, 9.0],
+    tight_frac=0.3, tight_to=[0.0, 1.0],
+    stamps_big=1, signatures_big=2,
+    baseline_jitter_px=3.0, baseline_slope_deg=0.5, baseline_curve_px=3.0,
+    tw_ink_var=0.45, tw_halfstrike=0.1, tw_jitter_px=0.7, tw_key_bias_px=0.7, tw_fill_counters=0.4,
+    typed_underlines=True, typed_underline_body=2)
+# Same family at roughly half strength, on the v1 photo geometry.
+DEGRADE_PRESETS["tw_photo_medium"] = dict(
+    warp_top_deg=0.1, warp_mid_deg=2.2, warp_bottom_deg=3.3, warp_bow_px=6.0,
+    rotate_deg=0.4, perspective=0.008,
+    ink_spread_px=2, ink_dropout=0.12,
+    light_gradient=0.35, blur_sigma_px=1.1, noise_sigma=0.03, jpeg_quality=70,
+    margin_marks=2,
+    specks=25, specks_start_frac=0.5, specks_end_frac=0.15, specks_size=1.5, specks_size_sigma=0.45,
+    specks_dist_pt=[1.5, 10.0],
+    tight_frac=0.12, tight_to=[0.2, 1.2],
+    stamps_big=1, signatures_big=1,
+    baseline_jitter_px=2.0, baseline_slope_deg=0.3, baseline_curve_px=2.0,
+    tw_ink_var=0.3, tw_halfstrike=0.05, tw_jitter_px=0.5, tw_key_bias_px=0.5, tw_fill_counters=0.25,
+    typed_underlines=True, typed_underline_body=1)
+PRESET_SPEC: dict[str, dict] = {
+    "tw_photo_hard": dict(layout="memo", text_source="pool", leading=1.75),
+    "tw_photo_medium": dict(layout="memo", text_source="pool", leading=1.75),
+}
+
+
+def v2_enabled(deg: dict) -> bool:
+    return any(bool(deg.get(k)) for k in _V2_SWITCHES)
+
+
+def _dilate_bool(m: np.ndarray, r: int) -> np.ndarray:
+    out = m.copy()
+    for _ in range(r):
+        o = out.copy()
+        o[1:] |= out[:-1]; o[:-1] |= out[1:]; o[:, 1:] |= out[:, :-1]; o[:, :-1] |= out[:, 1:]
+        out = o
+    return out
+
+
+def _run_lengths(m: np.ndarray) -> np.ndarray:
+    """Lengths of True runs along axis 1."""
+    p = np.pad(m.astype(np.int8), ((0, 0), (1, 1)))
+    d = np.diff(p, axis=1)
+    s = np.nonzero(d == 1)[1]
+    e = np.nonzero(d == -1)[1]
+    return e - s
+
+
+def stroke_width_px(idmap: np.ndarray) -> float:
+    """Typical stroke thickness of the text ink: min of the median horizontal
+    and median vertical ink run lengths."""
+    m = idmap > 0
+    h = _run_lengths(m)
+    v = _run_lengths(m.T)
+    if not len(h) or not len(v):
+        return 1.0
+    return float(min(np.median(h), np.median(v)))
+
+
+def word_extents_px(idmap: np.ndarray, ntok: int) -> list:
+    """Per token ink extent in clean pixels [x0, y0, x1, y1] (x1/y1 exclusive)."""
+    return [None if b is None else [int(round(v)) for v in b] for b in ink_bboxes(idmap, ntok, 1, 1)]
+
+
+def inner_gaps_px(idmap: np.ndarray, ext: list) -> list:
+    """Per token: widths of empty-column runs strictly inside its own ink
+    x-extent (column projection of that word's ink only), i.e. the gaps a
+    gap-based splitter sees inside the word (after non-joining letters)."""
+    out = []
+    for tid, e in enumerate(ext):
+        if e is None:
+            out.append([]); continue
+        col = (idmap[e[1]:e[3], e[0]:e[2]] == tid + 1).any(0)
+        out.append([int(r) for r in _run_lengths(~col[None, :])])
+    return out
+
+
+def _owner_map(idmap: np.ndarray, inkmask: np.ndarray, iters: int = 3) -> np.ndarray:
+    """Word id (+1) for every ink pixel: the exact id map, extended into the
+    anti-aliased fringe from the nearest id pixel."""
+    own = idmap.copy()
+    for _ in range(iters):
+        need = (own == 0) & inkmask
+        if not need.any():
+            break
+        nb = np.zeros_like(own)
+        nb[1:] = np.maximum(nb[1:], own[:-1]); nb[:-1] = np.maximum(nb[:-1], own[1:])
+        nb[:, 1:] = np.maximum(nb[:, 1:], own[:, :-1]); nb[:, :-1] = np.maximum(nb[:, :-1], own[:, 1:])
+        own = np.where(need, nb, own)
+    return own
+
+
+def plan_tightening(words, lines, ext, ltr, deg, letter_gap, seed):
+    """Choose word boundaries to tighten and the horizontal shift of every
+    word. Within a line (visual order right->left), closing boundary j by d
+    pixels moves every word left of it right by d, so the line start (right
+    edge) stays put. Lines with a discontiguous or left-to-right word are not
+    touched."""
+    rng = random.Random(sub_seed(seed, "tighten"))
+    frac = float(deg.get("tight_frac", 0.0))
+    lo, hi = deg.get("tight_to", [0.0, 1.0])
+    dx = np.zeros(len(words) + 1, np.int64)      # indexed by token id + 1
+    recs = []
+    for ln in lines:
+        ws = sorted((words[i] for i in ln["word_ids"]), key=lambda w: w["visual_index"])
+        ok_line = all(not w["missing"] and len(w["segments"]) == 1 and ext[w["id"]] is not None
+                      and not ltr[w["id"]] for w in ws)
+        cum = 0
+        for j in range(len(ws) - 1):
+            r, l = ws[j], ws[j + 1]
+            er, el = ext[r["id"]], ext[l["id"]]
+            gap0 = None if (er is None or el is None) else er[0] - el[2]
+            elig = ok_line and r["block"] == l["block"] and gap0 is not None and gap0 > 0
+            u, v = rng.random(), rng.random()
+            target = None
+            if elig and frac > 0 and u < frac:
+                target = int(max(0, math.floor((lo + (hi - lo) * v) * letter_gap + 0.5)))
+                if target >= gap0:
+                    target = None
+            d = (gap0 - target) if target is not None else 0
+            cum += d
+            dx[l["id"] + 1] = cum
+            recs.append(dict(line=ln["index"], right_id=r["id"], left_id=l["id"],
+                             gap_px_before=gap0, tightened=target is not None,
+                             target_px=target, eligible=bool(elig)))
+        if ws:
+            # words after the last boundary already carry cum; the first has 0
+            pass
+    return dx, recs
+
+
+def plan_glyph_texture(words, deg, seed):
+    """Per glyph: vertical misalignment (integer px), ink density factor and
+    optional half-strike gradient. Key bias is a per-character constant (the
+    same letter is always a little high or low), jitter is per strike."""
+    rng = np.random.default_rng(sub_seed(seed, "tw_texture"))
+    var = float(deg.get("tw_ink_var", 0.0)); hsp = float(deg.get("tw_halfstrike", 0.0))
+    depth = float(deg.get("tw_halfstrike_depth", 0.7))
+    jit = float(deg.get("tw_jitter_px", 0.0)); kb = float(deg.get("tw_key_bias_px", 0.0))
+    bias_cache: dict = {}
+
+    def bias(ch):
+        if ch not in bias_cache:
+            r = np.random.default_rng(sub_seed(seed, f"key:{ord(ch)}"))
+            bias_cache[ch] = float(r.normal(0, kb)) if kb > 0 else 0.0
+        return bias_cache[ch]
+    out = {}
+    for w in words:
+        if w["missing"]:
+            continue
+        gl = []
+        for ch, _bb in w["glyphs"]:
+            j = float(rng.normal(0, jit)) if jit > 0 else 0.0
+            dy = int(np.clip(round(bias(ch) + j), -4, 4))
+            dens = 1.0 - var * float(rng.random()) if var > 0 else 1.0
+            hs = depth * float(rng.uniform(0.5, 1.0)) if (hsp > 0 and rng.random() < hsp) else 0.0
+            hdir = 1 if rng.random() < 0.5 else -1
+            gl.append((dy, dens, hs, hdir))
+        out[w["id"]] = gl
+    return out
+
+
+def move_text(T: np.ndarray, idmap: np.ndarray, words, dx: np.ndarray, glyph_tex: dict):
+    """Apply per-word horizontal shifts and per-glyph vertical shifts/density
+    to the text layer T (1 = paper) and the id map. Returns (T', idmap',
+    per-word (dy_min, dy_max))."""
+    H, W = T.shape
+    ink = 1.0 - T
+    own = _owner_map(idmap, ink > 0.004)
+    ys, xs = np.nonzero(own)
+    tid = own[ys, xs] - 1
+    dyp = np.zeros(len(ys), np.int64)
+    fac = np.ones(len(ys), np.float32)
+    dy_rng = {}
+    if glyph_tex:
+        order = np.argsort(tid, kind="stable")
+        cuts = np.flatnonzero(np.diff(tid[order])) + 1
+        for grp in np.split(order, cuts):
+            if not len(grp):
+                continue
+            t = int(tid[grp[0]])
+            w = words[t]
+            gl = glyph_tex.get(t)
+            if not gl:
+                continue
+            gx0 = np.array([bb[0] for _c, bb in w["glyphs"]]) * ZOOM
+            gx1 = np.array([bb[2] for _c, bb in w["glyphs"]]) * ZOOM
+            cx = xs[grp].astype(np.float64) + 0.5
+            mid = (gx0 + gx1) / 2
+            inside = (cx[:, None] >= gx0[None, :] - 0.5) & (cx[:, None] < gx1[None, :] + 0.5)
+            dist = np.abs(cx[:, None] - mid[None, :])
+            dist = dist + np.where(inside.any(1)[:, None], 1e6 * (~inside), 0.0)
+            g = np.argmin(dist, axis=1)
+            dys = np.array([p[0] for p in gl]); dens = np.array([p[1] for p in gl], np.float32)
+            hs = np.array([p[2] for p in gl], np.float32); hd = np.array([p[3] for p in gl])
+            wy0, wy1 = w["rect"][1] * ZOOM, w["rect"][3] * ZOOM
+            fy = np.clip((ys[grp] + 0.5 - wy0) / max(1.0, wy1 - wy0), 0, 1).astype(np.float32)
+            fy = np.where(hd[g] > 0, fy, 1 - fy)
+            dyp[grp] = dys[g]
+            fac[grp] = dens[g] * (1 - hs[g] * fy)
+            dy_rng[t] = (int(dys.min()), int(dys.max()))
+    ny = np.clip(ys + dyp, 0, H - 1)
+    nx = np.clip(xs + dx[tid + 1], 0, W - 1)
+    new_ink = np.where(own == 0, ink, 0).astype(np.float32)
+    np.maximum.at(new_ink, (ny, nx), (ink[ys, xs] * fac).astype(np.float32))
+    new_id = np.zeros_like(idmap)
+    isid = idmap[ys, xs] > 0
+    new_id[ny[isid], nx[isid]] = idmap[ys[isid], xs[isid]]
+    return (1.0 - new_ink).astype(np.float32), new_id, dy_rng
+
+
+def shift_word_geometry(words, lines, dx: np.ndarray, dy_rng: dict) -> None:
+    """Move layout rectangles by the same pixel shifts (pt = px / ZOOM)."""
+    for w in words:
+        if w["missing"]:
+            continue
+        sx = float(dx[w["id"] + 1]) / ZOOM
+        lo, hi = dy_rng.get(w["id"], (0, 0))
+        ey0, ey1 = min(0, lo) / ZOOM, max(0, hi) / ZOOM
+
+        def mv(r):
+            return [r[0] + sx, r[1] + ey0, r[2] + sx, r[3] + ey1]
+        w["rect"] = mv(w["rect"])
+        w["segments"] = [mv(r) for r in w["segments"]]
+        w["main_rect"] = mv(w["main_rect"])
+        w["glyphs"] = [(c, [bb[0] + sx, bb[1], bb[2] + sx, bb[3]]) for c, bb in w["glyphs"]]
+    for ln in lines:
+        ws = [words[i] for i in ln["word_ids"]]
+        ln["rect"] = [min(w["rect"][0] for w in ws), min(w["rect"][1] for w in ws),
+                      max(w["rect"][2] for w in ws), max(w["rect"][3] for w in ws)]
+
+
+def fill_counters(T: np.ndarray, idmap: np.ndarray, ext: list, size_px: float, prob: float, seed: int) -> int:
+    """Fill enclosed counters (holes in a word's ink) with ink, as clogged
+    type does. A hole is background not 4-connected to the border of the
+    word's ink box, bounded mostly by that word's own ink. Modifies T and
+    idmap in place (filled pixels become ink of that word). Returns count."""
+    rng = random.Random(sub_seed(seed, "counters"))
+    if prob <= 0:
+        return 0
+    H, W = T.shape
+    max_area = (0.45 * size_px) ** 2
+    n = 0
+    for tid, e in enumerate(ext):
+        if e is None:
+            continue
+        x0, y0, x1, y1 = max(0, e[0] - 1), max(0, e[1] - 1), min(W, e[2] + 1), min(H, e[3] + 1)
+        inkc = T[y0:y1, x0:x1] < 0.55
+        bg = ~inkc
+        reach = np.zeros_like(bg)
+        reach[0, :] = bg[0, :]; reach[-1, :] = bg[-1, :]; reach[:, 0] = bg[:, 0]; reach[:, -1] = bg[:, -1]
+        while True:
+            nr = reach.copy()
+            nr[1:] |= reach[:-1]; nr[:-1] |= reach[1:]; nr[:, 1:] |= reach[:, :-1]; nr[:, :-1] |= reach[:, 1:]
+            nr &= bg
+            if (nr == reach).all():
+                break
+            reach = nr
+        holes = bg & ~reach
+        if not holes.any():
+            continue
+        # label holes (4-connected), small: plain BFS
+        lab = np.zeros(holes.shape, np.int32)
+        comps = []
+        for sy, sx in zip(*np.nonzero(holes)):
+            if lab[sy, sx]:
+                continue
+            k = len(comps) + 1
+            stack = [(sy, sx)]; lab[sy, sx] = k; pix = []
+            while stack:
+                cy, cx = stack.pop(); pix.append((cy, cx))
+                for ny_, nx_ in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
+                    if 0 <= ny_ < lab.shape[0] and 0 <= nx_ < lab.shape[1] and holes[ny_, nx_] and not lab[ny_, nx_]:
+                        lab[ny_, nx_] = k; stack.append((ny_, nx_))
+            comps.append(pix)
+        idc = idmap[y0:y1, x0:x1]
+        for k, pix in enumerate(comps, 1):
+            decide = rng.random()
+            if len(pix) > max_area:
+                continue
+            m = lab == k
+            ring = _dilate_bool(m, 1) & ~m
+            owners = idc[ring]
+            if not len(owners) or (owners == tid + 1).mean() < 0.6:
+                continue
+            if decide >= prob:
+                continue
+            level = 0.12 + 0.25 * rng.random()
+            sub = T[y0:y1, x0:x1]
+            sub[m] = np.minimum(sub[m], level)
+            idc[m] = tid + 1
+            n += 1
+    return n
+
+
+def draw_typed_underlines(page, deg, words, lines, blocks, seed) -> list[dict]:
+    """Typed underscores: under memo headings marked for underlining, and
+    under a few random body phrases. Not text: recorded as overlays."""
+    rng = random.Random(sub_seed(seed, "typed_underlines"))
+    targets = []
+    if deg.get("typed_underlines"):
+        for ln in lines:
+            ws = [words[i] for i in ln["word_ids"]]
+            if ws and all(w["kind"] == "heading" and blocks[w["block"]].get("underline") for w in ws):
+                targets.append((ln, ws, "heading"))
+    body = [ln for ln in lines if ln["kind"] == "body" and len(ln["word_ids"]) >= 4]
+    for _ in range(int(deg.get("typed_underline_body", 0))):
+        if not body:
+            break
+        ln = rng.choice(body)
+        ws = sorted((words[i] for i in ln["word_ids"]), key=lambda w: w["visual_index"])
+        k = rng.randint(2, min(4, len(ws)))
+        s = rng.randint(0, len(ws) - k)
+        targets.append((ln, ws[s:s + k], "body"))
+    out = []
+    for ln, ws, why in targets:
+        x0 = min(w["rect"][0] for w in ws); x1 = max(w["rect"][2] for w in ws)
+        size = ws[0]["size"]
+        y = ws[0]["line_baseline"] + 0.20 * size
+        thick = 0.075 * size
+        cell = 0.6 * size
+        ext0, ext1 = x0 - 0.15 * cell, x1 + 0.15 * cell
+        ncell = max(1, int(math.ceil((ext1 - ext0) / cell)))
+        right = ext1
+        ymin, ymax = y, y
+        for c in range(ncell):
+            a, b = right - (c + 1) * cell, right - c * cell
+            g = rng.uniform(0.02, 0.07) * size
+            if rng.random() < 0.5:
+                a += g
+            else:
+                b -= g
+            j = rng.gauss(0, 0.035 * size)
+            gray = rng.uniform(0.0, 0.3)
+            page.draw_rect(fitz.Rect(a, y + j, b, y + j + thick), color=None, fill=(gray, gray, gray), width=0)
+            ymin, ymax = min(ymin, y + j), max(ymax, y + j + thick)
+        out.append(dict(kind="typed_underline", text=False, under=why, line=ln["index"],
+                        word_ids=[w["id"] for w in ws],
+                        rect_pt=[right - ncell * cell, ymin, right, ymax]))
+    return out
+
+
+def _render_layer(draw) -> np.ndarray:
+    d = fitz.open()
+    p = d.new_page(width=PAGE_W, height=PAGE_H)
+    draw(p)
+    a = render_gray(p).astype(np.float32) / 255.0
+    d.close()
+    return a
+
+
+def _draw_big_stamp(page, c: fitz.Point, r: float, rng: random.Random) -> None:
+    col = (0.22, 0.28, 0.62)
+    page.draw_circle(c, r, color=col, width=2.4)
+    page.draw_circle(c, r * 0.93, color=col, width=1.0)
+    page.draw_circle(c, r * 0.60, color=col, width=1.3)
+    # illegible ring lettering: short strokes, hooks and dots between the rings
+    gap0 = rng.uniform(0, 2 * math.pi)
+    n = int(r * 0.9)
+    for k in range(n):
+        t = gap0 + 2 * math.pi * k / n
+        if (k / n) > 0.86:
+            continue                      # small gap in the ring text
+        rr = r * rng.uniform(0.68, 0.74)
+        hgt = r * rng.uniform(0.08, 0.18)
+        p0 = c + (math.cos(t) * rr, math.sin(t) * rr)
+        p1 = c + (math.cos(t) * (rr + hgt), math.sin(t) * (rr + hgt))
+        kind = rng.random()
+        if kind < 0.55:
+            page.draw_line(p0, p1, color=col, width=rng.uniform(0.7, 1.3))
+        elif kind < 0.8:
+            t2 = t + rng.uniform(0.03, 0.08)
+            p2 = c + (math.cos(t2) * rr, math.sin(t2) * rr)
+            page.draw_polyline([p1, p0, p2], color=col, width=0.9)
+        else:
+            page.draw_circle(p1, 0.6, color=col, fill=col, width=0)
+    # emblem and two rows of illegible central lettering
+    star = []
+    for k in range(10):
+        t = -math.pi / 2 + math.pi * k / 5
+        rr = r * (0.30 if k % 2 == 0 else 0.13)
+        star.append(c + (math.cos(t) * rr, math.sin(t) * rr - r * 0.12))
+    page.draw_polyline(star + [star[0]], color=col, width=1.1)
+    for row in (0.22, 0.38):
+        y = c.y + r * row
+        half = r * (0.42 - 0.25 * row)
+        x = c.x - half
+        while x < c.x + half:
+            w = rng.uniform(1.5, 5.0)
+            page.draw_line((x, y), (x + w, y - rng.uniform(0, 2.5)), color=col, width=1.0)
+            x += w + rng.uniform(1.0, 3.0)
+
+
+def _draw_big_signature(page, x0: float, y0: float, w: float, h: float, stroke: float, rng: random.Random):
+    """Handwriting-like scribble: 2-3 pen strokes, each a prolate cycloid
+    (loops where the circular speed exceeds the forward speed) with slowly
+    varying loop size, plus a long closing sweep; pen pressure varies along
+    the stroke."""
+    col = (0.06, 0.06, 0.18)
+    xs_all, ys_all = [], []
+    nstrokes = rng.randint(2, 3)
+    cur = x0
+    for s_ in range(nstrokes):
+        sw = w * rng.uniform(0.3, 0.55)
+        loops = rng.randint(1, 4)
+        a_amp = sw / loops * rng.uniform(0.08, 0.3)
+        b_amp = h * rng.uniform(0.2, 0.45)
+        slant = rng.uniform(-0.2, 0.6)
+        yc = y0 + h * rng.uniform(0.35, 0.65)
+        ph = rng.uniform(0, 2 * math.pi)
+        n = 30 * loops
+        mod_a = [rng.uniform(0.4, 1.6) for _ in range(loops + 2)]
+        mod_b = [rng.uniform(0.2, 1.2) for _ in range(loops + 2)]
+        pts = []
+        for i in range(n + 1):
+            t = i / n
+            k = t * loops
+            ia = int(k); fr = k - ia
+            ma = mod_a[ia] * (1 - fr) + mod_a[ia + 1] * fr
+            mb = mod_b[ia] * (1 - fr) + mod_b[ia + 1] * fr
+            ang = 2 * math.pi * k + ph
+            x = cur + sw * t + a_amp * ma * math.cos(ang)
+            y = yc + b_amp * mb * math.sin(ang) + h * 0.15 * math.sin(math.pi * t)
+            pts.append(fitz.Point(x + slant * (yc - y), y))
+        width = stroke * rng.uniform(0.8, 1.2)
+        for i in range(0, len(pts) - 1, 6):
+            seg = pts[i:i + 7]
+            page.draw_polyline(seg, color=col, width=max(0.5, width * rng.uniform(0.6, 1.25)))
+        xs_all += [p.x for p in pts]; ys_all += [p.y for p in pts]
+        cur += sw * rng.uniform(0.55, 0.95)
+    # closing sweep under / through the name
+    a = fitz.Point(x0 - w * 0.05, y0 + h * rng.uniform(0.7, 1.0))
+    b = fitz.Point(x0 + w * rng.uniform(0.85, 1.1), y0 + h * rng.uniform(0.2, 0.6))
+    c1 = a + (w * 0.35, h * rng.uniform(0.1, 0.4)); c2 = b - (w * 0.3, -h * rng.uniform(0.0, 0.3))
+    page.draw_bezier(a, c1, c2, b, color=col, width=stroke * 0.8)
+    xs_all += [a.x, b.x, c1.x, c2.x]; ys_all += [a.y, b.y, c1.y, c2.y]
+    m = stroke + 4.0
+    return [min(xs_all) - m, min(ys_all) - m, max(xs_all) + m, max(ys_all) + m]
+
+
+def big_overlays(N: np.ndarray, words, lines, deg, seed, idmap) -> list[dict]:
+    """Large stamps and signatures covering several lines, each rendered on
+    its own layer (uneven rubber-stamp ink for stamps), composited into N,
+    and measured against every word's ink: ``ink_overlap`` = share of the
+    word's ink pixels touched by overlay ink (dilated 1 px), ``in_extent`` =
+    share inside the overlay's extent (stamp disc / signature box). Measured
+    in clean (pre-warp) pixels."""
+    rng = random.Random(sub_seed(seed, "big_overlays"))
+    H, W = N.shape
+    body = [ln for ln in lines if ln["kind"] in ("body", "verse")] or lines
+    if not body:
+        return []
+    bx0 = min(ln["rect"][0] for ln in body); bx1 = max(ln["rect"][2] for ln in body)
+    pitch = float(np.median(np.diff([ln["baseline"] for ln in body]))) if len(body) > 1 else 20.0
+    totals = np.bincount(idmap.ravel(), minlength=len(words) + 1)
+    out = []
+    jobs = [("stamp", i) for i in range(int(deg.get("stamps_big", 0)))] + \
+           [("signature", i) for i in range(int(deg.get("signatures_big", 0)))]
+    for kind, i in jobs:
+        if kind == "stamp":
+            r = rng.uniform(*deg.get("stamp_radius_pt", [55.0, 80.0]))
+            ln = body[min(len(body) - 1, int(len(body) * rng.uniform(0.40, 0.95)))]
+            c = fitz.Point(rng.uniform(bx0 + 0.3 * r, bx1 - 0.3 * r), (ln["rect"][1] + ln["rect"][3]) / 2)
+            lay = _render_layer(lambda p: _draw_big_stamp(p, c, r, rng))
+            tex_rng = np.random.default_rng(sub_seed(seed, f"stamp_tex:{i}"))
+            f = _smooth_field(lay.shape, (36, 26), tex_rng)
+            tex = np.clip(0.15 + 1.1 * f, 0, 1) ** 0.8
+            tex *= (tex_rng.random(lay.shape, dtype=np.float32) > 0.08)
+            lay = 1.0 - (1.0 - lay) * tex.astype(np.float32) * float(deg.get("stamp_opacity", 0.9))
+            rect = [c.x - r, c.y - r, c.x + r, c.y + r]
+            rec = dict(kind="stamp_big", text=False, rect_pt=rect, radius_pt=round(r, 2))
+        else:
+            nl = rng.randint(*[int(v) for v in deg.get("signature_lines", [3, 6])])
+            w = rng.uniform(*deg.get("signature_width_pt", [140.0, 260.0]))
+            stroke = rng.uniform(*deg.get("signature_stroke_pt", [1.2, 2.2]))
+            k0 = int(len(body) * rng.uniform(0.55, 1.0))
+            k0 = min(len(body) - 1, k0)
+            ya = body[max(0, k0 - nl + 1)]["rect"][1]
+            h = max(pitch * nl, body[k0]["rect"][3] - ya)
+            xa = rng.uniform(bx0, max(bx0 + 1, bx0 + (bx1 - bx0) * 0.6 - w * 0.3))
+            holder = {}
+            lay = _render_layer(lambda p: holder.setdefault("r", _draw_big_signature(p, xa, ya, w, h, stroke, rng)))
+            rect = holder["r"]
+            rec = dict(kind="signature_big", text=False, rect_pt=rect, lines_spanned=nl)
+        N *= lay
+        mask = lay < 0.8
+        x0 = max(0, int(rect[0] * ZOOM) - 2); x1 = min(W, int(math.ceil(rect[2] * ZOOM)) + 2)
+        y0 = max(0, int(rect[1] * ZOOM) - 2); y1 = min(H, int(math.ceil(rect[3] * ZOOM)) + 2)
+        md = _dilate_bool(mask[y0:y1, x0:x1], 1)
+        idc = idmap[y0:y1, x0:x1]
+        hit = np.bincount(idc[md].ravel(), minlength=len(words) + 1)
+        if kind == "stamp":
+            yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float64)
+            disc = (xx + 0.5 - c.x * ZOOM) ** 2 + (yy + 0.5 - c.y * ZOOM) ** 2 <= (r * ZOOM) ** 2
+            ext = np.bincount(idc[disc].ravel(), minlength=len(words) + 1)
+        else:
+            ext = np.bincount(idc.ravel(), minlength=len(words) + 1)
+        covers = []
+        for t in np.flatnonzero(ext[1:]):
+            tot = max(1, int(totals[t + 1]))
+            covers.append(dict(word_id=int(t), line=words[t]["line"],
+                               ink_overlap=round(float(hit[t + 1]) / tot, 4),
+                               in_extent=round(float(ext[t + 1]) / tot, 4)))
+        rec["covers"] = covers
+        rec["lines_covered"] = sorted({cv["line"] for cv in covers if cv["in_extent"] > 0})
+        out.append(rec)
+    return out
+
+
+def draw_specks(N: np.ndarray, idmap: np.ndarray, words, lines, ext, deg, seed, stroke: float) -> list[dict]:
+    """Stray ink specks drawn into the non-text layer N (never on text ink).
+
+    Categories: ``line_start`` -- at line height just beyond the START of a
+    line (its right end: Persian runs right to left), the O1 trigger;
+    ``line_end`` -- just beyond its left end; ``margin`` -- anywhere outside
+    the text block. Size: diameter = stroke * lognormal(log(specks_size),
+    specks_size_sigma), clipped to 0.6..8 strokes. Shape: union of 1-3
+    ellipses, anti-aliased by 3x3 supersampling."""
+    rng = np.random.default_rng(sub_seed(seed, "specks"))
+    H, W = N.shape
+    n = int(deg.get("specks", 0))
+    fs, fe = float(deg.get("specks_start_frac", 0.5)), float(deg.get("specks_end_frac", 0.15))
+    dlo, dhi = deg.get("specks_dist_pt", [1.0, 9.0])
+    ilo, ihi = deg.get("specks_ink", [0.05, 0.45])
+    forbid = _dilate_bool(idmap > 0, 3)
+    tl = []
+    for ln in lines:
+        es = [ext[i] for i in ln["word_ids"] if ext[i] is not None]
+        if not es:
+            continue
+        w0 = words[ln["word_ids"][0]]
+        tl.append(dict(index=ln["index"], x0=min(e[0] for e in es), x1=max(e[2] for e in es),
+                       base=ln["baseline"] * ZOOM, size=w0["size"] * ZOOM))
+    if not tl:
+        return []
+    allx0 = min(t["x0"] for t in tl); allx1 = max(t["x1"] for t in tl)
+    ally0 = min(e[1] for e in ext if e is not None); ally1 = max(e[3] for e in ext if e is not None)
+    out = []
+    for _ in range(n):
+        u = rng.random()
+        cat = "line_start" if u < fs else ("line_end" if u < fs + fe else "margin")
+        d = float(np.clip(stroke * math.exp(math.log(float(deg.get("specks_size", 1.6)))
+                                            + float(deg.get("specks_size_sigma", 0.45)) * rng.normal()),
+                          0.6 * stroke, 8 * stroke))
+        placed = None
+        for _try in range(30):
+            ln = tl[int(rng.integers(len(tl)))]
+            dist = rng.uniform(dlo, dhi) * ZOOM
+            if cat == "line_start":
+                cx = ln["x1"] + dist + d / 2
+                cy = ln["base"] - rng.uniform(0.05, 0.55) * ln["size"]
+            elif cat == "line_end":
+                cx = ln["x0"] - dist - d / 2
+                cy = ln["base"] - rng.uniform(0.05, 0.55) * ln["size"]
+            else:
+                cx = rng.uniform(0.03 * W, 0.97 * W); cy = rng.uniform(0.03 * H, 0.97 * H)
+                if allx0 - 20 < cx < allx1 + 20 and ally0 - 20 < cy < ally1 + 20:
+                    continue
+            m = int(rng.integers(1, 4))
+            ells = []
+            for k in range(m):
+                ox, oy = (rng.uniform(-d / 3, d / 3), rng.uniform(-d / 3, d / 3)) if k else (0.0, 0.0)
+                a = d / 2 * rng.uniform(0.5, 1.0); b = d / 2 * rng.uniform(0.5, 1.0)
+                ells.append((cx + ox, cy + oy, max(a, 0.6), max(b, 0.6), rng.uniform(0, math.pi)))
+            R = int(math.ceil(d)) + 2
+            x0, x1 = int(cx) - R, int(cx) + R + 1
+            y0, y1 = int(cy) - R, int(cy) + R + 1
+            if x0 < 0 or y0 < 0 or x1 > W or y1 > H:
+                continue
+            cov = np.zeros((y1 - y0, x1 - x0), np.float32)
+            yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float64)
+            for sy in (1 / 6, 0.5, 5 / 6):
+                for sx in (1 / 6, 0.5, 5 / 6):
+                    inside = np.zeros(cov.shape, bool)
+                    for ex, ey, a, b, th in ells:
+                        X = xx + sx - ex; Y = yy + sy - ey
+                        c_, s_ = math.cos(th), math.sin(th)
+                        inside |= ((X * c_ + Y * s_) / a) ** 2 + ((-X * s_ + Y * c_) / b) ** 2 <= 1
+                    cov += inside / 9.0
+            if (forbid[y0:y1, x0:x1] & (cov > 0.05)).any():
+                continue
+            placed = (cov, x0, y0, x1, y1, ln, cx, cy)
+            break
+        if placed is None:
+            continue
+        cov, x0, y0, x1, y1, ln, cx, cy = placed
+        g = rng.uniform(ilo, ihi)
+        N[y0:y1, x0:x1] *= 1.0 - cov * (1.0 - g)
+        sy_, sx_ = np.nonzero(cov > 0.5)
+        if not len(sx_):
+            sy_, sx_ = np.nonzero(cov > 0)
+        bx0, bx1 = x0 + int(sx_.min()), x0 + int(sx_.max()) + 1
+        by0, by1 = y0 + int(sy_.min()), y0 + int(sy_.max()) + 1
+        rec = dict(kind="speck", text=False, category=cat, o1_trigger=cat == "line_start",
+                   diameter_px=round(d, 2), stroke_px=round(stroke, 2), size_strokes=round(d / stroke, 3),
+                   area_px=int((cov > 0.5).sum()), ink_level=round(float(g), 3),
+                   center_px=[round(cx, 1), round(cy, 1)],
+                   rect_pt=[bx0 / ZOOM, by0 / ZOOM, bx1 / ZOOM, by1 / ZOOM])
+        if cat != "margin":
+            rec.update(line=ln["index"], side="right" if cat == "line_start" else "left",
+                       gap_px=int(bx0 - ln["x1"]) if cat == "line_start" else int(ln["x0"] - bx1),
+                       at_line_height=bool(ln["base"] - ln["size"] <= cy <= ln["base"] + 0.3 * ln["size"]))
+        else:
+            rec.update(line=None, side=None)
+        out.append(rec)
+    return out
+
+
+class LineWarp:
+    """Per-line baseline deformation in clean pixel space (applied before the
+    v1 PageTransform): line l gets dy_l(x) = offset_l + tan(slope_l)*(x - cx)
+    + curve_l * clip(u, -1.3, 1.3)^2 with u = (x - cx)/half_width. dy is
+    constant on a plateau of +-0.15 pitch around each line centre and
+    interpolated linearly between plateaus, so it is continuous and, after
+    the monotonicity guard (dy/dy >= -0.7, else every deviation is scaled
+    down; the scale is recorded), invertible column by column."""
+
+    def __init__(self, width, height, centres, cx, hw, offs, slopes, curves):
+        self.W, self.H = float(width), float(height)
+        self.cx, self.hw = float(cx), max(1.0, float(hw))
+        c = np.asarray(centres, float)
+        self.n = len(c)
+        pitch = np.diff(c) if self.n > 1 else np.array([60.0])
+        core = np.empty(self.n)
+        for i in range(self.n):
+            nb = [pitch[i - 1]] if i > 0 else []
+            nb += [pitch[i]] if i < self.n - 1 else []
+            core[i] = 0.15 * min(nb) if nb else 10.0
+        self.knots = np.empty(2 * self.n)
+        self.knots[0::2] = c - core
+        self.knots[1::2] = c + core
+        self.o = np.asarray(offs, float); self.t = np.tan(np.radians(np.asarray(slopes, float)))
+        self.k = np.asarray(curves, float)
+        self.scale = 1.0
+        xs = np.linspace(0, self.W, 65)
+        G = self._g_all(xs)                    # n x len(xs)
+        if self.n > 1:
+            ramp = self.knots[2::2] - self.knots[1:-1:2]
+            dmin = float(((G[1:] - G[:-1]) / ramp[:, None]).min())
+            if dmin < -0.7:
+                self.scale = 0.7 / -dmin
+        self.o *= self.scale; self.t *= self.scale; self.k *= self.scale
+        self.maxabs = float(np.abs(self._g_all(xs)).max()) + 2.0
+        self.identity = False
+
+    def _g_all(self, x):
+        u = np.clip((np.asarray(x, float) - self.cx) / self.hw, -1.3, 1.3)
+        return self.o[:, None] + self.t[:, None] * (np.asarray(x, float) - self.cx)[None, :] + self.k[:, None] * u[None, :] ** 2
+
+    def _g(self, l, x):
+        u = np.clip((x - self.cx) / self.hw, -1.3, 1.3)
+        return self.o[l] + self.t[l] * (x - self.cx) + self.k[l] * u ** 2
+
+    def _dy_d(self, x, y):
+        """dy and d(dy)/dy at (x, y)."""
+        j = np.searchsorted(self.knots, y, side="right")   # 0..2n
+        la = np.clip((j - 1) // 2, 0, self.n - 1)
+        lb = np.clip(j // 2, 0, self.n - 1)
+        ramp = (j % 2 == 0) & (j > 0) & (j < 2 * self.n)
+        ka = self.knots[np.clip(j - 1, 0, 2 * self.n - 1)]
+        kb = self.knots[np.clip(j, 0, 2 * self.n - 1)]
+        span = np.maximum(kb - ka, 1e-9)
+        tt = np.where(ramp, (y - ka) / span, 0.0)
+        ga = self._g(la, x)
+        gb = np.where(ramp, self._g(lb, x), ga)
+        return ga * (1 - tt) + gb * tt, np.where(ramp, (gb - ga) / span, 0.0)
+
+    def dy(self, x, y):
+        return self._dy_d(np.asarray(x, float), np.asarray(y, float))[0]
+
+    def forward(self, x, y):
+        x = np.asarray(x, float); y = np.asarray(y, float)
+        return x, y + self.dy(x, y)
+
+    def inverse(self, x, y):
+        """Solve v + dy(x, v) = y (increasing in v): Newton on the piecewise
+        linear function, then bisection for any point not converged."""
+        x = np.asarray(x, float); y = np.asarray(y, float)
+        v = y - self.dy(x, y)
+        for _ in range(6):
+            f, d = self._dy_d(x, v)
+            v = v - (v + f - y) / (1.0 + d)
+        bad = np.abs(v + self.dy(x, v) - y) > 1e-6
+        if bad.any():
+            xb, yb = x[bad], y[bad]
+            lo = yb - self.maxabs; hi = yb + self.maxabs
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                big = mid + self.dy(xb, mid) > yb
+                hi = np.where(big, mid, hi); lo = np.where(big, lo, mid)
+            v = v.copy(); v[bad] = (lo + hi) / 2
+        return x, v
+
+
+class ComposedTransform:
+    """first, then second (both with forward/inverse in pixel space)."""
+
+    def __init__(self, first, second):
+        self.first, self.second = first, second
+        self.identity = bool(getattr(first, "identity", False) and getattr(second, "identity", False))
+
+    def forward(self, x, y):
+        return self.second.forward(*self.first.forward(x, y))
+
+    def inverse(self, x, y):
+        return self.first.inverse(*self.second.inverse(x, y))
+
+
+def make_line_warp(lines, words, deg, seed, W, H):
+    """Seeded per-line baseline parameters (None if all zero)."""
+    js, ss, cs = (float(deg.get("baseline_jitter_px", 0.0)), float(deg.get("baseline_slope_deg", 0.0)),
+                  float(deg.get("baseline_curve_px", 0.0)))
+    if not (js or ss or cs) or not lines:
+        return None, []
+    rng = np.random.default_rng(sub_seed(seed, "baselines"))
+    rho = float(deg.get("baseline_slope_rho", 0.6))
+    cen = [(ln["rect"][1] + ln["rect"][3]) / 2 * ZOOM for ln in lines]
+    order = np.argsort(cen, kind="stable")
+    offs, slopes, curves = [], [], []
+    s_prev = 0.0
+    for _ in lines:
+        offs.append(float(rng.normal(0, js)) if js else 0.0)
+        s = rho * s_prev + math.sqrt(max(0.0, 1 - rho * rho)) * float(rng.normal(0, ss)) if ss else 0.0
+        s_prev = s
+        slopes.append(s)
+        curves.append(float(rng.normal(0, cs)) if cs else 0.0)
+    x0 = min(ln["rect"][0] for ln in lines) * ZOOM; x1 = max(ln["rect"][2] for ln in lines) * ZOOM
+    c_sorted = [cen[i] for i in order]
+    # de-duplicate equal centres (should not happen: lines are distinct rows)
+    for i in range(1, len(c_sorted)):
+        if c_sorted[i] <= c_sorted[i - 1] + 1:
+            c_sorted[i] = c_sorted[i - 1] + 1
+    lw = LineWarp(W, H, c_sorted, (x0 + x1) / 2, (x1 - x0) / 2,
+                  [offs[i] for i in order], [slopes[i] for i in order], [curves[i] for i in order])
+    params = []
+    for rank, i in enumerate(order):
+        params.append(dict(line=lines[i]["index"], offset_px=round(offs[i] * lw.scale, 3),
+                           extra_slope_deg=round(math.degrees(math.atan(math.tan(math.radians(slopes[i])) * lw.scale)), 4),
+                           curve_px=round(curves[i] * lw.scale, 3)))
+    params.sort(key=lambda p: p["line"])
+    return lw, params
+
+
+def _line_slope_deg(baseline_norm, W, H) -> float:
+    p = np.array(baseline_norm, float) * [W, H]
+    if len(p) < 2 or np.ptp(p[:, 0]) < 1:
+        return 0.0
+    k = np.polyfit(p[:, 0], p[:, 1], 1)[0]
+    return round(math.degrees(math.atan(k)), 3)
+
+
+def generate_v2(spec: dict, deg: dict, *, keep_arrays: bool = False) -> dict:
+    seed = int(spec["seed"])
+    blocks = plan_page(spec)
+    black = render_plan(blocks)
+    words, notes = extract_words(black[0], blocks)
+    lines = group_lines(words, blocks)
+    ntok = len(words)
+    ltr_all: list[bool] = []
+    for b in blocks:
+        ltr_all += ltr_flags(b["tokens"])
+
+    idmap0 = render_idmap(black[0])
+    T = render_gray(black[0]).astype(np.float32) / 255.0        # text only
+    H, W = T.shape
+    if idmap0.shape != T.shape:
+        raise RuntimeError("identity and image renders differ in size")
+    stroke = stroke_width_px(idmap0)
+    ext0 = word_extents_px(idmap0, ntok)
+    inner0 = inner_gaps_px(idmap0, ext0)
+    allg = [g for gs in inner0 for g in gs]
+    letter_gap = float(np.median(allg)) if allg else stroke
+
+    # 2 + 5: word spacing and per-glyph texture, one pixel move
+    dx, gap_recs = plan_tightening(words, lines, ext0, ltr_all, deg, letter_gap, seed)
+    tex = None
+    if any(deg.get(k) for k in ("tw_ink_var", "tw_halfstrike", "tw_jitter_px", "tw_key_bias_px")):
+        tex = plan_glyph_texture(words, deg, seed)
+    if dx.any() or tex:
+        T, idmap1, dy_rng = move_text(T, idmap0, words, dx, tex or {})
+        shift_word_geometry(words, lines, dx, dy_rng)
+    else:
+        idmap1 = idmap0.copy()
+    ext1 = word_extents_px(idmap1, ntok)
+    n_filled = fill_counters(T, idmap1, ext1, words[0]["size"] * ZOOM if words else 30.0,
+                             float(deg.get("tw_fill_counters", 0.0)), seed)
+    inner1 = inner_gaps_px(idmap1, ext1)
+
+    # non-text layer
+    def draw_nontext(p):
+        draw_rules(p, blocks)
+        holder["v1"] = draw_overlays(p, deg, words, lines, seed)
+        holder["tu"] = draw_typed_underlines(p, deg, words, lines, blocks, seed)
+    holder: dict = {}
+    N = _render_layer(draw_nontext)
+    overlays = holder["v1"] + holder["tu"]
+    bigs = big_overlays(N, words, lines, deg, seed, idmap1)
+    specks = draw_specks(N, idmap1, words, lines, ext1, deg, seed, stroke)
+    overlays += bigs + specks
+
+    clean_u8 = np.clip(np.rint(T * N * 255.0), 0, 255).astype(np.uint8)
+    img = clean_u8.astype(np.float32) / 255.0
+    img = print_side(img, deg, seed)
+    lw, lw_params = make_line_warp(lines, words, deg, seed, W, H)
+    ptf = PageTransform(W, H, deg, seed)
+    tf = ComposedTransform(lw, ptf) if lw is not None else ptf
+    img = warp_image(img, tf, fill=1.0)
+    idmap = warp_image(idmap1, tf, fill=0, nearest=True)
+    img = camera_side(img, deg, seed)
+    u8 = np.clip(np.rint(img * 255.0), 0, 255).astype(np.uint8)
+    if int(deg.get("jpeg_quality", 0)) > 0:
+        u8 = jpeg_roundtrip(u8, int(deg["jpeg_quality"]))
+
+    truth = build_truth(spec, blocks, words, lines, overlays, tf, idmap, u8, notes)
+    # ---- v2 truth additions ----
+    truth["pipeline"] = PIPELINE_V2
+    for o in truth["overlays"]:
+        o.setdefault("text", False)
+    inks_img = [None if b is None else [b[0] * W, b[1] * H, b[2] * W, b[3] * H] for b in ink_bboxes(idmap, ntok, W, H)]
+    word_gaps = []
+    for g in gap_recs:
+        r, l = g["right_id"], g["left_id"]
+        er, el = ext1[r], ext1[l]
+        gap = None if (er is None or el is None) else er[0] - el[2]
+        mi = max(inner1[r] + inner1[l] + [0])
+        ir, il = inks_img[r], inks_img[l]
+        word_gaps.append(dict(g, gap_px=gap, max_inner_gap_px=mi,
+                              o2_trigger=bool(gap is not None and gap <= mi),
+                              gap_px_image=None if (ir is None or il is None) else round(ir[0] - il[2], 2)))
+    truth["word_gaps"] = word_gaps
+    covered: dict = {}
+    for oi, o in enumerate(truth["overlays"]):
+        for cv in o.get("covers", []):
+            covered.setdefault(cv["word_id"], []).append(dict(overlay=oi, kind=o["kind"], ink_overlap=cv["ink_overlap"],
+                                                              in_extent=cv["in_extent"]))
+    for tw in truth["words"]:
+        tw["covered_by"] = covered.get(tw["id"], [])
+        tw["inner_gaps_px"] = inner1[tw["id"]]
+    for tl in truth["lines"]:
+        tl["slope_deg"] = _line_slope_deg(tl["baseline"], W, H)
+    truth["line_warp"] = lw_params
+    truth["line_warp_scale"] = round(lw.scale, 4) if lw is not None else None
+    sl = [tl["slope_deg"] for tl in truth["lines"]]
+    k3 = max(1, len(sl) // 3)
+    truth["notes"].update(
+        stroke_px=round(stroke, 2), letter_gap_px=round(letter_gap, 2),
+        n_specks=len(specks), n_specks_o1=sum(1 for s in specks if s["o1_trigger"]),
+        n_boundaries=len(word_gaps), n_tightened=sum(1 for g in word_gaps if g["tightened"]),
+        n_o2_trigger=sum(1 for g in word_gaps if g["o2_trigger"]),
+        n_counters_filled=n_filled,
+        n_typed_underlines=sum(1 for o in overlays if o["kind"] == "typed_underline"),
+        n_big_overlays=len(bigs),
+        n_words_covered=sum(1 for v in covered.values() if any(c["in_extent"] > 0 for c in v)),
+        slope_deg_top_mid_bottom=[round(float(np.median(sl[:k3])), 3) if sl else None,
+                                  round(float(np.median(sl[len(sl) // 2 - k3 // 2:len(sl) // 2 + k3 // 2 + 1])), 3) if sl else None,
+                                  round(float(np.median(sl[-k3:])), 3) if sl else None],
+        slope_deg_range=[min(sl), max(sl)] if sl else None,
+    )
+    seal_truth(truth)
+    res = dict(image=u8, truth=truth, blocks=blocks)
+    if keep_arrays:
+        res.update(clean=clean_u8, idmap=idmap, idmap_clean=idmap1, idmap_layout=idmap0, transform=tf,
+                   doc=black, text_layer=T, nontext_layer=N)
+    else:
+        black.close()
+    return res
+
+
+# ---------------------------------------------------------------------------
 # Main entry: generate one page
 # ---------------------------------------------------------------------------
 def render_gray(page: fitz.Page) -> np.ndarray:
@@ -1108,6 +2263,8 @@ def generate(spec: dict, *, keep_arrays: bool = False) -> dict:
     spec = copy.deepcopy(spec)
     deg = dict(DEGRADE_KEYS)
     deg.update(spec.get("degrade", {}))
+    if v2_enabled(deg):
+        return generate_v2(spec, deg, keep_arrays=keep_arrays)
     seed = int(spec["seed"])
     blocks = plan_page(spec)
     black = render_plan(blocks)
@@ -1133,6 +2290,25 @@ def generate(spec: dict, *, keep_arrays: bool = False) -> dict:
     if int(deg.get("jpeg_quality", 0)) > 0:
         u8 = jpeg_roundtrip(u8, int(deg["jpeg_quality"]))
 
+    truth = build_truth(spec, blocks, words, lines, overlays, tf, idmap, u8, notes)
+    seal_truth(truth)
+    res = dict(image=u8, truth=truth, blocks=blocks)
+    if keep_arrays:
+        res.update(clean=clean_u8, idmap=idmap, idmap_clean=idmap_clean, transform=tf,
+                   doc=black)
+    else:
+        black.close()
+    return res
+
+
+def seal_truth(truth: dict) -> None:
+    truth["truth_sha256"] = hashlib.sha256(canonical_json({k: v for k, v in truth.items() if k != "truth_sha256"}).encode()).hexdigest()
+
+
+def build_truth(spec, blocks, words, lines, overlays, tf, idmap, u8, notes) -> dict:
+    """Truth dict shared by both pipelines (unchanged from generator v1)."""
+    H, W = u8.shape
+    ntok = len(words)
     inks = ink_bboxes(idmap, ntok, W, H)
     ltr_all: list[bool] = []
     for b in blocks:
@@ -1185,7 +2361,7 @@ def generate(spec: dict, *, keep_arrays: bool = False) -> dict:
     fonts = []
     for role, p in (("font", spec["font"]), ("body_font", spec["body_font"])):
         fonts.append(dict(role=role, path=p, sha256=sha256_file(_abs(p)), name=font_status(_abs(p))["name"]))
-    truth = dict(
+    return dict(
         generator_version=GENERATOR_VERSION, spec=spec, pymupdf=fitz.VersionBind,
         fonts=fonts, page_pt=[PAGE_W, PAGE_H], zoom=ZOOM,
         coords="normalised to the degraded image: x 0..1 left->right, y 0..1 top->bottom",
@@ -1195,14 +2371,6 @@ def generate(spec: dict, *, keep_arrays: bool = False) -> dict:
                    n_discontiguous=sum(1 for w in words if not w["missing"] and len(w["segments"]) > 1),
                    kashida="MuPDF justifies by widening spaces only; no tatweel is inserted"),
     )
-    truth["truth_sha256"] = hashlib.sha256(canonical_json({k: v for k, v in truth.items() if k != "truth_sha256"}).encode()).hexdigest()
-    res = dict(image=u8, truth=truth, blocks=blocks)
-    if keep_arrays:
-        res.update(clean=clean_u8, idmap=idmap, idmap_clean=idmap_clean, transform=tf,
-                   doc=black)
-    else:
-        black.close()
-    return res
 
 
 def save_page(res: dict, out_dir: Path = OUT_DIR) -> tuple[Path, Path]:
@@ -1286,6 +2454,10 @@ def standard_specs() -> tuple[list[dict], list[str]]:
     for lay in LAYOUTS:
         specs.append(make_spec("modern_naskh", layout=lay, preset="clean", seed=23,
                                name=f"layout_{lay}_clean_s23"))
+    # pipeline v2 presets (added after v1; the entries above are unchanged)
+    if resolve_class_font("typewriter") is not None:
+        for preset in ("tw_photo_medium", "tw_photo_hard"):
+            specs.append(make_spec("typewriter", preset=preset, seed=11))
     return specs, gaps
 
 
@@ -1326,9 +2498,10 @@ def main(argv=None) -> int:
     g = sub.add_parser("generate", help="generate one page into out/synth/")
     g.add_argument("--class", dest="font_class", required=True, choices=list(FONT_CANDIDATES))
     g.add_argument("--preset", default="clean", choices=list(DEGRADE_PRESETS))
-    g.add_argument("--layout", choices=LAYOUTS)
+    g.add_argument("--layout", choices=LAYOUTS + ("memo",))
     g.add_argument("--seed", type=int, default=1)
-    g.add_argument("--text-source", default="embedded", help="'embedded' or 'book:<slug>'")
+    g.add_argument("--text-source", default=None,
+                   help="'embedded', 'pool' (large invented pool), 'book:<slug>' or 'file:<path>' (default: the preset's, else embedded)")
     g.add_argument("--degrade", default="{}", help="JSON overrides for degradation params")
     sub.add_parser("manifest", help="regenerate the standard set and rewrite tests/data/synth_manifest.json")
     r = sub.add_parser("regen", help="regenerate one manifest entry by name")
@@ -1343,8 +2516,9 @@ def main(argv=None) -> int:
             print(f"{row['font_class']:13s} {row['font']:28s} exists={row['exists']!s:5s} "
                   f"persian={row['persian_letters']!s:5s} missing={row.get('missing')!r} {row['path']}")
     elif a.cmd == "generate":
+        kw = {} if a.text_source is None else dict(text_source=a.text_source)
         spec = make_spec(a.font_class, preset=a.preset, seed=a.seed, layout=a.layout,
-                         text_source=a.text_source, degrade=json.loads(a.degrade))
+                         degrade=json.loads(a.degrade), **kw)
         png, tj = save_page(generate(spec))
         print(png); print(tj)
     elif a.cmd == "manifest":

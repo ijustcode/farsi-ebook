@@ -103,16 +103,29 @@ def run_font(cls: str, rows: list, overlay_photo: bool = True) -> None:
         rows.append(dict(font_class=cls, mode="photo(e18+all)", slope_bottom_deg=3.3,
                          **summarise(detect(res["image"]), res["truth"], ref_h)))
         S.save_page(res, S.OUT_DIR / "1b")
+    if cls == "typewriter":
+        # pipeline v2 presets (memo layout, invented pool text, their own
+        # leading); reported beside the old photo row, not part of the verdict
+        for preset, bottom in (("tw_photo_medium", 3.3), ("tw_photo_hard", 3.6)):
+            for sd in (5, 6):
+                spec = S.make_spec(cls, preset=preset, seed=sd, name=f"1b_{cls}_{preset}_s{sd}")
+                res = S.generate(spec)
+                rows.append(dict(font_class=cls, mode=f"{preset}_s{sd}", slope_bottom_deg=bottom,
+                                 **summarise(detect(res["image"]), res["truth"], ref_h)))
+                S.save_page(res, S.OUT_DIR / "1b")
+
+
+REAL_PAGES = (1, 2)   # hadpi p3-p5 are held out (plan §6.2): never read here
 
 
 def real_hadpi() -> list:
-    """Same numbers on the real photographed pages (read-only)."""
+    """Same numbers on the real photographed pages p1-p2 (read-only)."""
     pdf = ROOT / "books" / "hadpi-articles" / "source.pdf"
     out = []
     if not pdf.exists():
         return out
     with fitz.open(str(pdf)) as d:
-        for pn in range(len(d)):
+        for pn in [p - 1 for p in REAL_PAGES if p <= len(d)]:
             L = locate._scan_page_lines(d[pn])
             hs = sorted(ln.rect.height for ln in L)
             out.append(dict(page=pn + 1, detected=len(L), tallest=round(hs[-1], 1),
@@ -141,10 +154,10 @@ def main() -> int:
         if S.resolve_class_font(cls):
             run_font(cls, rows)
     print(f"{'class':13s} {'mode':22s} {'slope':>5s} {'det':>4s} {'true':>4s} {'tallest':>7s} "
-          f"{'median':>6s} {'tall':>4s} {'merged':>6s} {'maxL/blk':>8s}")
+          f"{'median':>6s} {'tall':>4s} {'merged':>6s} {'maxL/blk':>8s} {'inMerged':>8s}")
     for r in rows:
         print(f"{r['font_class']:13s} {r['mode']:22s} {r['slope_bottom_deg']:5.1f} {r['detected']:4d} {r['true']:4d} "
-              f"{r['tallest']:7.1f} {r['median_h']:6.1f} {r['tall_blocks']:4d} {r['merged_blocks']:6d} {r['max_lines_in_block']:8d}")
+              f"{r['tallest']:7.1f} {r['median_h']:6.1f} {r['tall_blocks']:4d} {r['merged_blocks']:6d} {r['max_lines_in_block']:8d} {r['lines_in_merged']:8d}")
     real = real_hadpi()
     if real:
         print("\nreal books/hadpi-articles (same detector):")
@@ -152,7 +165,7 @@ def main() -> int:
             print(f"  p{r['page']}: detected={r['detected']:3d} tallest={r['tallest']:6.1f} "
                   f"median={r['median_h']:5.1f} blocks>30pt={r['blocks_over_30']}")
     for cls in ("modern_naskh", "typewriter"):
-        for m in ("ramp_0.0", "ramp_3.3", "rotate_2.0", "e18", "photo"):
+        for m in ("ramp_0.0", "ramp_3.3", "rotate_2.0", "e18", "photo", "tw_photo_hard_s5"):
             overlay_png(cls, m)
     # Verdict, three separate criteria (all reported):
     #  (a) clean page: detected == true, no multi-line block;

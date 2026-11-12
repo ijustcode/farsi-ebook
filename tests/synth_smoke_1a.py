@@ -298,6 +298,18 @@ def main() -> int:
             print(f"{'  (alt)':13s} {name:28s} {cc['n_words']:5d} {100 * cc['agree_frac']:6.2f}% {oo['n_violations']:5d} "
                   f"{cc['mean_cov2']:6.3f} {cc['mean_cov_eroded']:6.3f} {cc['image_dark_unexplained']:9d}")
             zoom_crop(r, out / f"zoom_1a_{cls}_{name.replace(' ', '')}_clean.png", boxes=False)
+    print("\npipeline v2 presets (typewriter, memo layout, pool text):")
+    for preset in ("tw_photo_medium", "tw_photo_hard"):
+        if S.resolve_class_font("typewriter") is None:
+            break
+        clean = S.generate(S.make_spec("typewriter", preset="clean", seed=SEED, layout="memo", text_source="pool",
+                                       leading=1.75, name=f"memo_clean_s{SEED}"), keep_arrays=True)
+        hard = S.generate(S.make_spec("typewriter", preset=preset, seed=SEED), keep_arrays=True)
+        c = check_clean(clean); o = check_order(clean["truth"]); d = check_degraded(hard)
+        report["classes"][f"typewriter/{preset}"] = dict(clean=c, order=o, degraded=d, notes=hard["truth"]["notes"])
+        print(f"  {preset:16s} memo clean agree={100 * c['agree_frac']:6.2f}% order_violations={o['n_violations']} "
+              f"| {preset} warped ink inside polygon={100 * d['frac']:5.1f}%")
+        contact_sheet(clean, hard, out / f"contact_1a_{preset}.png", f"typewriter memo: clean vs {preset}")
     print("\nlayout classes (modern_naskh default face, clean):")
     for lay in S.LAYOUTS:
         r = S.generate(S.make_spec("modern_naskh", layout=lay, preset="clean", seed=23,

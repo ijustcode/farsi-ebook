@@ -879,6 +879,172 @@
    ],
    "n_words": 323,
    "n_lines": 28
+  },
+  {
+   "name": "typewriter_memo_tw_photo_medium_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "typewriter_memo_tw_photo_medium_s11",
+    "font_class": "typewriter",
+    "font_name": "Courier New",
+    "font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "body_font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "layout": "memo",
+    "justify": false,
+    "size": 11.5,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "pool",
+    "seed": 11,
+    "preset": "tw_photo_medium",
+    "degrade": {
+     "warp_top_deg": 0.1,
+     "warp_mid_deg": 2.2,
+     "warp_bottom_deg": 3.3,
+     "warp_bow_px": 6.0,
+     "rotate_deg": 0.4,
+     "perspective": 0.008,
+     "ink_spread_px": 2,
+     "ink_dropout": 0.12,
+     "light_gradient": 0.35,
+     "blur_sigma_px": 1.1,
+     "noise_sigma": 0.03,
+     "jpeg_quality": 70,
+     "margin_marks": 2,
+     "specks": 25,
+     "specks_start_frac": 0.5,
+     "specks_end_frac": 0.15,
+     "specks_size": 1.5,
+     "specks_size_sigma": 0.45,
+     "specks_dist_pt": [
+      1.5,
+      10.0
+     ],
+     "tight_frac": 0.12,
+     "tight_to": [
+      0.2,
+      1.2
+     ],
+     "stamps_big": 1,
+     "signatures_big": 1,
+     "baseline_jitter_px": 2.0,
+     "baseline_slope_deg": 0.3,
+     "baseline_curve_px": 2.0,
+     "tw_ink_var": 0.3,
+     "tw_halfstrike": 0.05,
+     "tw_jitter_px": 0.5,
+     "tw_key_bias_px": 0.5,
+     "tw_fill_counters": 0.25,
+     "typed_underlines": true,
+     "typed_underline_body": 1
+    }
+   },
+   "image_sha256": "fc88a452e5ad81d59714076ed083d743eace194e0d63197a626110eebc714e13",
+   "truth_sha256": "34a122ca0f54f9f41b88cccd3cb3fb48f74f05982bcece3dbe034720b0dbc967",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    }
+   ],
+   "n_words": 344,
+   "n_lines": 32
+  },
+  {
+   "name": "typewriter_memo_tw_photo_hard_s11",
+   "spec": {
+    "generator_version": 1,
+    "name": "typewriter_memo_tw_photo_hard_s11",
+    "font_class": "typewriter",
+    "font_name": "Courier New",
+    "font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "body_font": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+    "layout": "memo",
+    "justify": false,
+    "size": 11.5,
+    "leading": 1.75,
+    "margins": [
+     62.0,
+     62.0,
+     64.0,
+     64.0
+    ],
+    "text_source": "pool",
+    "seed": 11,
+    "preset": "tw_photo_hard",
+    "degrade": {
+     "warp_top_deg": 0.2,
+     "warp_mid_deg": 2.4,
+     "warp_bottom_deg": 3.6,
+     "warp_bow_px": 8.0,
+     "rotate_deg": 0.5,
+     "perspective": 0.01,
+     "ink_spread_px": 2,
+     "ink_dropout": 0.15,
+     "light_gradient": 0.4,
+     "blur_sigma_px": 1.2,
+     "noise_sigma": 0.035,
+     "jpeg_quality": 65,
+     "margin_marks": 2,
+     "specks": 45,
+     "specks_start_frac": 0.5,
+     "specks_end_frac": 0.15,
+     "specks_size": 1.8,
+     "specks_size_sigma": 0.5,
+     "specks_dist_pt": [
+      1.0,
+      9.0
+     ],
+     "tight_frac": 0.3,
+     "tight_to": [
+      0.0,
+      1.0
+     ],
+     "stamps_big": 1,
+     "signatures_big": 2,
+     "baseline_jitter_px": 3.0,
+     "baseline_slope_deg": 0.5,
+     "baseline_curve_px": 3.0,
+     "tw_ink_var": 0.45,
+     "tw_halfstrike": 0.1,
+     "tw_jitter_px": 0.7,
+     "tw_key_bias_px": 0.7,
+     "tw_fill_counters": 0.4,
+     "typed_underlines": true,
+     "typed_underline_body": 2
+    }
+   },
+   "image_sha256": "931aeedcdcc012f2fecb412e503cf21f9bb7c2028e7b05a8bd1c15cb19c5b5ad",
+   "truth_sha256": "24409c933fc68c5fe7463ba634b9fd48cff9c9c070347e4f016313cbce35e00d",
+   "fonts": [
+    {
+     "role": "font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    },
+    {
+     "role": "body_font",
+     "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+     "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247",
+     "name": "Courier New Regular"
+    }
+   ],
+   "n_words": 344,
+   "n_lines": 32
   }
  ]
 }
