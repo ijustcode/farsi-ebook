@@ -692,6 +692,59 @@ rectification; consensus text-block edge fit), `tests/line_finder_eval.py`,
   that C passes, C becomes required for that class and the torch dependency question goes to the
   owner with numbers.
 
+**Step 4 result, arm G (2026-11-12, $0; `tests/word_placer.py`, `word_placer_eval.py`,
+`word_placer_regression.py`).** Built: arm G (exact DP aligning text pieces to ink runs in each
+rectified line, with "not text" skip, split, fuse and word-deletion moves; a per-page
+(letter, joining form) width table learned by align → re-estimate; confidence from the margin
+between best and second-best; boxes snapped to the word's own ink), and §4.2 line-text assignment
+(by length, with an unbroken-text variant). **Arm R was not built; arms C and V were not run.**
+All rates use the strict scorer ("located and correct" over all graded words).
+
+| Experiment | hadpi p1–p2 (729) | majid p23, p109 (632) | p66 (356, agent-audited) |
+|---|---|---|---|
+| A: truth lines + truth text, G | 40.3%, precision 87.2% | 64.1%, 98.3% | 71.3%, 100% |
+| A, G without "not text" | 43.9%, 86.0% | 83.1%, 98.1% | 96.1%, 99.7% |
+| A, every G box shown (no threshold) | 70%, 77% | 95.4%, 97.9% | – |
+| B: L1 lines + truth text, G (end to end) | 26.3%, 83.8% | 63.0%, 97.3% | 69.7%, 98.4% |
+| Draft splitter (always shows a box) | 70.8% | 97.2% | – |
+| D: stored text, not line-broken, G | 2/729; 239 `line` boxes on the wrong line | 30/632; 213 on the wrong line | 48.0%, 93.4% |
+
+- **Kill criterion triggered for G on hard pages** (no arm reaches 70% with truth line text: best
+  43.9%). Showing every G box gives 70% at 77% precision, the same as the draft splitter. The
+  boxes themselves are wrong, not only the threshold. Synthetic untouched seeds agree: hard 48%
+  at 94.8%; nastaliq 25% at 79%.
+- On printed pages G's boxes are good (95% correct at 98% precision unthresholded); recall is
+  lost to a threshold chosen on synthetic pages, and to the "not text" state, which lowers
+  margins on clean lines. Targets (≥ 95% at ≥ 98%) are missed, by calibration rather than by the
+  aligner.
+- Wrong line: 0 on every real page in A and B (target met). Run time ≤ 3.9 s per page.
+- "Not text" state: fixes the constructed O1 case (5/5 lines) and lowers cascades and raises
+  precision on hard pages (hadpi B: 15 cascades vs 19; precision 83.8% vs 81.4%), but costs recall
+  on clean pages. It should be applied by page condition, not everywhere.
+- Width model: the learned table is essential (uniform widths: hadpi ceiling 270/729 instead of
+  512). Width classes never helped. Measured on the audited hadpi boxes: three classes at about
+  1 : 1.5 : 2 on a common pitch fit almost as well as a free table, **but the per-word residual
+  is about 12 px, 0.7 of a letter, which is larger than the scorer's half-letter tolerance.**
+  Typewriter in-word and word gap distributions coincide. So geometry alone cannot resolve these
+  boundaries: §13's "width leads" is necessary and not sufficient.
+- §4.4 robustness **fails**: with 15% of words corrupted, 56% of intact words stay correct on
+  clean synthetic pages (target 90%) and 7% on hadpi; a corrupted word lowers margins across its
+  whole line. Corrupted positions do end up not located (82–94%), so it fails safe.
+- Unbroken text distributed over lines (D) fails on justified pages, where every line has the
+  same width. **Line structure must come from the line-faithful reading (§4.2), never from
+  distributing Markdown.** The `line` status must require a trusted line assignment.
+- Line-text assignment with truth lines of text: 2 of 33 non-text detected lines on hadpi
+  received text; 2 of 60 text lines went to the wrong detected line, both flagged untrusted.
+- Two-fold check: a `located` threshold chosen on hadpi p1 does not transfer to p2 and the
+  reverse. The margin is not a calibrated confidence on typewriter photos; thresholds need
+  spot-check records per page type (§6.3).
+- 57 free parameters; two were searched, on synthetic development seeds only. Real pages were
+  scored twice (`out/word_placer/run_log.txt`).
+- **Open, in order of cost:** (1) arm R, $0, not built; (2) arm V on line crops (the plan's ≤ $1),
+  now a real candidate rather than a control, since Step 2 showed a stronger model reads these
+  lines at 2–5% error; (3) arm C (kraken/torch, D5), the published answer, an install and an
+  unverified Persian model. D5 goes back to the owner with these numbers after (1) and (2).
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases

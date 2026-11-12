@@ -9,7 +9,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## Box placement: current state and plan
 
 - **Current engine (experimental, never promoted):** two geometry sources only, `match` (embedded PDF text) then `scan` (image evidence through `scan.PlacementService`). Contracts, limits and history: `docs/bbox-consolidation.md`, `docs/geometry-best-attempt.md` (current coverage-first policy), `docs/page-geometry-coverage-status.md` (superseded strict-evidence experiment). The old `layout`/`scan_vlm` tiers, the QC-coordinate "model" fallback, `context_anchor_v1`/`legacy_v1` selection and the `locate_vlm*.json` caches are **removed from production**; they survive only as frozen evaluation snapshots under `tests/historical/`. Never restore them as live fallbacks.
-- **Approved plan for the next engine:** `docs/bbox-old-fonts-plan.md` (v2, owner decisions in §10). Status 2026-11-12: Step 0 is in production (below). Steps 1–3 are done as instruments and research code under `tests/` (sections below); Step 4 (word placement) is in progress. **Nothing from Steps 2–4 is wired into production**; integration is Step 6 and needs the owner.
+- **Approved plan for the next engine:** `docs/bbox-old-fonts-plan.md` (v2, owner decisions in §10). Status 2026-11-12: Step 0 is in production (below). Steps 1–3 are done as instruments and research code under `tests/` (sections below); Step 4 (word placement): arm G built and measured, it fails on hard pages; further arms pending. **Nothing from Steps 2–4 is wired into production**; integration is Step 6 and needs the owner.
 - **Box counts are availability, not accuracy.** No audited held-out comparison has run. Do not call a box count accuracy or an instrument change a locator improvement.
 
 ## Commands
@@ -75,6 +75,7 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/real_truth_eval_regression.py        # real-page truth scorer: metrics, freeze/held-out refusals, exclusions
 ./venv/bin/python tests/transcription_experiments_regression.py # Step 2 scorer: WER foldings, T2 flags, band stitching, spend guard
 ./venv/bin/python tests/line_finder_regression.py            # Step 3 line finder (research): recall, masking, rectification, determinism
+./venv/bin/python tests/word_placer_regression.py            # Step 4 word placer (research): O1/O2 cases, statuses, determinism
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -124,6 +125,11 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - `tests/line_finder.py` (arm L1, numpy only): finds text lines by following them locally, with adaptive binarisation, conservative non-text masking, a text-block edge fit and per-line rectification. `tests/line_finder_eval.py {synth,real,overlay-real}` scores four arms (current detector, current + mask, L1, L1 + mask) with `real_truth_eval.grade_lines`; results under `out/line_finder/`.
 - Result (2026-11-12): clean one-to-one line recall on hadpi p1–p2 is 60/60 with 0 merges (current `_scan_page_lines`: 25/60, 10 merges); majid 54/54; p66 32/32; synthetic untouched seeds 98.8% (current 51.0%). **It over-detects on hadpi: 20 spurious lines, almost all on signatures, handwriting, the stamp and the scanner logo below the text**, so the plan's "≤ 1 spurious per page" criterion fails as written (owner decision open). Marks just past a line's end are absorbed into the line, so a line's ink extent is not a trustworthy line start. hadpi p1–p2 were looked at during development; only held-out p3–p5 are an untouched test.
 - Production still uses `locate._scan_page_lines`. Do not wire L1 in before plan Step 6.
+
+## Word placer (plan Step 4; research code, not wired in)
+
+- `tests/word_placer.py` (arm G, numpy only) aligns known line text to ink in each rectified line (learned per-page letter-width table, "not text" skip state, statuses `located` / `line` / `unresolved`, never an approximate guess) and assigns text lines to detected lines; `tests/word_placer_eval.py` runs experiments A (truth lines + truth text), B (L1 lines + truth text), C (corrupted text), D (stored, unbroken text); results under `out/word_placer/`.
+- Result (2026-11-12): **arm G fails on the typewritten photo pages and triggers the plan's kill criterion there**: at best 44% of hadpi words located and correct with truth lines and text, 26% end to end, precision 84–87%; showing every box gives 70% at 77%, no better than the audit tool's draft splitter. On printed pages its boxes are 95% correct at 98% precision unthresholded, but the chosen threshold keeps only 63–83%. Wrong-line rate is 0 on real pages. Robustness to text errors fails (a wrong word lowers confidence across its whole line). Distributing unbroken Markdown over lines fails on justified pages. Geometry alone cannot place typewriter word boundaries (width residual 0.7 letter; word and in-word gaps coincide). Next candidates, not yet run: arm R (render and warp), arm V on line crops, arm C (kraken, owner decision D5).
 
 ## Transcription experiments (plan Step 2)
 
