@@ -11,6 +11,11 @@ absence does not; O2 (word gaps no wider than a letter gap) placed by width;
 fused word pairs (zero gap) never located on the wrong ink; error injection
 leaving uncorrupted words in place; non-text detected lines receiving no text;
 statuses never including an approximate guess; determinism.
+Arm T (tests/word_placer_t.py, section 9): templates learned from a synthetic
+typewriter photo page with no face rendered, a tight-gap (O2) page resolved by
+appearance where G fails, the O1 marks, substituted words flagged with their
+neighbours kept, a monotone objective after round 1 without collapse or drift,
+determinism. Arm S and the agreement rules (section 10).
 
 Floors are set below the values measured when the test was written (listed
 beside each), so they catch regressions, not noise.
@@ -277,10 +282,153 @@ def main() -> int:
     check(statuses(arms_r["R"]) <= ALLOWED and statuses(arms_r["RG"]) <= ALLOWED, "R statuses only located/line/unresolved")
     check(smR["located_correct"]["rate"] >= 0.0, f"R located&correct {smR['located_correct']['k']}/{smR['located_correct']['n']} (reported, no floor)")
 
+    arm_t_checks()
+    arm_s_checks()
+
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
         print("  - " + f)
     return 1 if FAILS else 0
+
+
+def _ok_map(page, pw):
+    wrows, sm = score(page, pw)
+    return {tuple(r["target"][0]): r["status"] == "located" and r["correct"] for r in wrows}, wrows, sm
+
+
+def _add_marks(page, chosen, ev0):
+    """The section-2 construction: a narrow mark at line height beyond a word
+    gap right of each chosen line's start."""
+    gray = page["gray"].copy()
+    tp = page["truth_page"]
+    for n_, li in enumerate(chosen):
+        w0 = tp.lines[li].words[0]
+        xs = [p[0] for p in w0.quad]; ys = [p[1] for p in w0.quad]
+        letter = (max(xs) - min(xs)) / max(1.0, w0.letters)
+        cx = max(xs) + (2.5 + 0.9 * (n_ % 3)) * letter
+        cy = (min(ys) + max(ys)) / 2
+        r = max(2.0, 1.3 * ev0.sw)
+        Y, X = np.ogrid[:gray.shape[0], :gray.shape[1]]
+        gray[((X - cx) / (0.8 * r)) ** 2 + ((Y - cy) / (1.6 * r)) ** 2 <= 1.0] = 20.0
+    return dict(page, gray=gray)
+
+
+def arm_t_checks():
+    """Arm T (tests/word_placer_t.py): page-trained templates. Run without
+    arm R (with_R=False), so nothing is rendered from any font: the shapes
+    come from the page alone."""
+    import word_placer_t as T
+    print("9. arm T: templates learned from the page")
+    # ---- 9a. floors on a typewriter photo page; no font rendered ----
+    page = page_of("typewriter", 211, preset="tw_photo_medium")
+    ev = WP.page_evidence(page["gray"])
+    arms, info = E.run_T(page, "A", ev=ev, with_R=False)
+    check("font" not in info and not (set(arms) & set(E.R_DEP)), "no face rendered (arm R off): no R-dependent arms")
+    okT, wT, smT = _ok_map(page, arms["T"])
+    lc, pr = smT["located_correct"], smT["located_precision"]
+    check(lc["rate"] >= T_FLOORS["photo_rate"], f"tw_photo_medium A: T located&correct {lc['k']}/{lc['n']} = {lc['rate']:.3f} >= {T_FLOORS['photo_rate']}")
+    check((pr["rate"] or 0) >= T_FLOORS["photo_prec"], f"tw_photo_medium A: T precision {pr['k']}/{pr['n']} >= {T_FLOORS['photo_prec']}")
+    pwG, _ = E.run_G(page, "A", ev=ev)
+    _, _, smG = _ok_map(page, pwG)
+    check(lc["k"] >= smG["located_correct"]["k"] + 0.05 * lc["n"],
+          f"T beats G on this page by >= 5 points ({lc['k']} vs {smG['located_correct']['k']} of {lc['n']})")
+    allst = set().union(*[statuses(p) for p in arms.values()])
+    check(allst <= ALLOWED, f"T statuses {sorted(allst)} only located/line/unresolved")
+    bypass_box = sum(1 for p in arms["T"].values() if "bypassed" in p.get("reason", "") and p["status"] == "located")
+    check(bypass_box == 0, "a bypassed word is never located")
+    # ---- 9b. convergence: monotone objective, no collapse, no drift ----
+    hist = info["history"]
+    objs = [h["objective"] for h in hist[1:]]          # round 0 precedes the one-time unit-length re-estimate
+    worst_up = max([b - a for a, b in zip(objs, objs[1:])] or [0.0])
+    check(worst_up <= 1e-4 * abs(objs[0]), f"objective non-increasing after round 1 (largest rise {worst_up:.2f}; rounds {len(hist)})")
+    m = info["_model"]
+    gm = E.run_G(page, "A", ev=ev)[1]["_r"]["model"]
+    ratios = [len(m.tmpl[k]) * m.cs / max(1.0, T.g_width(gm, k)) for k in m.tmpl if m.occ.get(k, 0) >= 5]
+    check(ratios and 0.5 <= min(ratios) and max(ratios) <= 2.0,
+          f"frequent units keep a plausible width: template / G width in [{min(ratios):.2f}, {max(ratios):.2f}] within [0.5, 2]")
+    arms0, _ = E.run_T(page, "A", ev=ev, with_R=False, iters=0)
+    ok0, w0, sm0 = _ok_map(page, arms0["Tall"])
+    _, wA, smA = _ok_map(page, arms["Tall"])
+    check(smA["located_correct"]["k"] >= sm0["located_correct"]["k"] - 0.01 * len(wA),
+          f"no collapse: every-box correct {smA['located_correct']['k']} after training vs {sm0['located_correct']['k']} with the initial templates (>= minus 1%)")
+    shifted = sum(1 for r in wA if r.get("outcome") == "shifted")
+    check(shifted <= 0.02 * len(wA), f"no one-word drift: shifted boxes {shifted} <= 2% of words")
+    # ---- 9c. determinism ----
+    arms2, _ = E.run_T(page, "A", ev=ev, with_R=False)
+    same = all(arms["T"][k]["status"] == arms2["T"][k]["status"] and arms["T"][k]["segments"] == arms2["T"][k]["segments"]
+               for k in arms["T"]) and arms["T"].keys() == arms2["T"].keys()
+    check(same, "T: two runs give identical statuses and boxes")
+    # ---- 9d. O2: tight word gaps resolved by appearance where G fails ----
+    page = page_of("typewriter", 215, preset="clean", degrade=dict(tight_frac=0.5, tight_to=[0.0, 1.0]))
+    ev = WP.page_evidence(page["gray"])
+    idpos = {wid: (L.index, wi) for L in page["truth_page"].lines for wi, wid in enumerate(L.src["word_ids"])}
+    o2 = set()
+    for g in page["truth"]["word_gaps"]:
+        if g.get("o2_trigger"):
+            o2 |= {idpos[w] for w in (g["right_id"], g["left_id"]) if w in idpos}
+    okG, _, _ = _ok_map(page, E.run_G(page, "A", ev=ev)[0])
+    arms, _ = E.run_T(page, "A", ev=ev, with_R=False)
+    okT, wT, _ = _ok_map(page, arms["T"])
+    nT, nG = sum(okT.get(k, False) for k in o2), sum(okG.get(k, False) for k in o2)
+    badT = sum(1 for r in wT if tuple(r["target"][0]) in o2 and r["status"] == "located" and not r["correct"])
+    check(nT >= T_FLOORS["o2_rate"] * len(o2) and nT >= nG + 0.2 * len(o2),
+          f"O2 words located&correct: T {nT}/{len(o2)} (G {nG}); T >= {T_FLOORS['o2_rate']:.0%} and >= G + 20 points")
+    check(badT <= 0.05 * max(1, nT + badT), f"O2 words located but wrong (T) {badT} <= 5% of located")
+    # ---- 9e. O1: stray mark before the line start ----
+    page = page_of("typewriter", 214, preset="clean")
+    tp = page["truth_page"]
+    ev0 = WP.page_evidence(page["gray"])
+    chosen = [L.index for L in tp.lines if len(L.words) >= 4 and L.words[0].letters >= 3][:5]
+    page2 = _add_marks(page, chosen, ev0)
+    arms, _ = E.run_T(page2, "A", ev=WP.page_evidence(page2["gray"]), with_R=False)
+    okT, _, _ = _ok_map(page2, arms["T"])
+    first = sum(bool(okT.get((li, 0))) for li in chosen)
+    check(first >= len(chosen) - 1, f"O1: first word of {first}/{len(chosen)} marked lines located and correct (mark left as not text)")
+    # ---- 9f. a substituted word is flagged; its neighbours keep their boxes ----
+    page = page_of("typewriter", 211, preset="tw_photo_medium")
+    ev = WP.page_evidence(page["gray"])
+    texts = [list(t) for t in page["texts"]]
+    src = [[(li, wi) for wi in range(len(t))] for li, t in enumerate(texts)]
+    lines_ = [li for li, t in enumerate(texts) if len(t) >= 6][:8]
+    pool = [w for t in texts for w in t if len(w) >= 4]
+    subs = []
+    for n_, li in enumerate(lines_):
+        old = texts[li][3]
+        cand = [w for w in pool if abs(len(w) - len(old)) <= 1 and not (set(w) & set(old) - set("اوی"))]
+        if cand:
+            texts[li][3] = cand[n_ % len(cand)]
+            subs.append(li)
+    armsC, _ = E.run_T(page, "A", ev=ev, texts=texts, src=src, with_R=False)
+    armsU, _ = E.run_T(page, "A", ev=ev, with_R=False)
+    okC, _, _ = _ok_map(page, armsC["T"])
+    okU, _, _ = _ok_map(page, armsU["T"])
+    flagged = sum(armsC["T"][(li, 3)]["status"] != "located" for li in subs)
+    nb = [(li, w) for li in subs for w in (2, 4) if okU.get((li, w))]
+    kept = sum(bool(okC.get(k)) for k in nb)
+    check(len(subs) >= 6, f"{len(subs)} lines with a substituted word (letters disjoint from the original)")
+    check(flagged >= len(subs) - 1, f"substituted words not located: {flagged}/{len(subs)}")
+    check(kept >= 0.8 * len(nb), f"their neighbours keep correct located boxes: {kept}/{len(nb)} (>= 80%)")
+
+
+def arm_s_checks():
+    """Arm S (the audit draft's splitter in external lines) and the
+    agreement rules, on a clean synthetic page (own face excluded from R)."""
+    print("10. arm S and agreement rules")
+    page = page_of("book_naskh", 211, preset="clean")
+    ev = WP.page_evidence(page["gray"])
+    arms, info = E.run_T(page, "A", ev=ev)
+    _, _, smS = _ok_map(page, arms["S"])
+    check(smS["located_correct"]["rate"] >= 0.6, f"S located&correct {smS['located_correct']['k']}/{smS['n']} >= 60% (measured 78% at writing)")
+    for nm in ("SR", "SG", "ST", "M2", "M3"):
+        _, _, sm = _ok_map(page, arms[nm])
+        check(statuses(arms[nm]) <= ALLOWED, f"{nm} statuses only located/line/unresolved")
+        check((sm["located_precision"]["rate"] or 0) >= 0.97, f"{nm} precision {sm['located_precision']['k']}/{sm['located_precision']['n']} >= 97%")
+    n2 = sum(p["status"] == "located" for p in arms["M2"].values())
+    n3 = sum(p["status"] == "located" for p in arms["M3"].values())
+    check(n2 >= n3, f"M2 locates at least as many words as M3 ({n2} >= {n3})")
+
+
+T_FLOORS = dict(photo_rate=0.70, photo_prec=0.93, o2_rate=0.70)
 
 
 if __name__ == "__main__":

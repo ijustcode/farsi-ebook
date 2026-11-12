@@ -375,6 +375,25 @@ def within_one_letter(tp, key, placed, row) -> bool:
     return abs(fb[0] - w.fbox[0]) <= letter and abs(fb[2] - w.fbox[2]) <= letter
 
 
+def within_half_letter(tp, key, placed, row) -> bool:
+    """DIAGNOSTIC (arm T continuation; not the headline): as within_one_letter
+    with the strict rule's own horizontal tolerance (half a letter) and no
+    vertical test. Separates horizontal placement from the vertical extent
+    of the truth box (on hadpi many audited boxes reach well above the
+    word's ink, so an ink-tight box with both edges right can miss the 90%
+    area cover)."""
+    if not placed or placed.get("status") != "located" or not placed.get("segments"):
+        return False
+    if row.get("outcome") in ("shifted", "wrong_line", "off_text", "no_box"):
+        return False
+    w = tp.word(*key)
+    L = tp.lines[key[0]]
+    pts = [p for sgm in placed["segments"] for p in rt.region_poly(sgm, tp.W, tp.H)]
+    fb = ba.quad_to_frame_box(L.frame, pts)
+    letter = (w.fbox[2] - w.fbox[0]) / max(1.0, w.letters)
+    return abs(fb[0] - w.fbox[0]) <= 0.5 * letter and abs(fb[2] - w.fbox[2]) <= 0.5 * letter
+
+
 def grade_page(page, per_word, seed=7, n_spans=60):
     tp = page["truth_page"]
     words, spans = rt.build_targets(tp, seed, n_spans)
@@ -383,6 +402,7 @@ def grade_page(page, per_word, seed=7, n_spans=60):
         pl = per_word.get(tg.words[0])
         row = dict(rt.grade_target(tp, tg.words, pl), tid=tg.tid)
         row["within1"] = bool(within_one_letter(tp, tg.words[0], pl, row))
+        row["withinhalf"] = bool(within_half_letter(tp, tg.words[0], pl, row))
         wrows.append(row)
     for tg in spans:
         srows.append(dict(rt.grade_target(tp, tg.words, span_placed([per_word.get(k) for k in tg.words])), tid=tg.tid))
@@ -512,11 +532,33 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
                 continue
             if arm == "R" and exp not in ("A", "B", "C5"):
                 continue
+            if arm == "T" and exp not in ("A", "B", "C5", "C15"):
+                continue
             if arm == "draft" and exp == "B":
                 continue      # the draft has its own lines: reported once, under A and B alike
             t0 = time.perf_counter()
             status = None
             info = {}
+            if arm == "T":
+                texts = src = None
+                if exp in ("C5", "C15"):
+                    texts, src, status, _ = corrupt_lines(page["texts"], 0.05 if exp == "C5" else 0.15,
+                                                          seed=hash_seed(page["name"], exp))
+                arms_t, tinfo = run_T(page, exp, ev=ev, texts=texts, src=src, init=T_OPTS["init"],
+                                      with_R=T_OPTS["with_R"])
+                secs = time.perf_counter() - t0
+                slim = {k: v for k, v in tinfo.items() if not k.startswith("_")}
+                g2b = slim.pop("g2_boxes_on_nontext", None)
+                for nm, pw_ in arms_t.items():
+                    row = _score_arm(page, exp, nm, pw_, slim, status, secs, verbose)
+                    if g2b is not None:
+                        row["g2"] = dict(text_lines_on_nontext=slim.get("g2_text_lines_on_nontext"),
+                                         boxes_on_nontext=g2b.get(nm))
+                    row["cand"] = candidate_table(page, pw_) if nm == "T" else None
+                    rows.append(row)
+                if T_OPTS.get("keep"):
+                    T_OPTS["keep"][(page["name"], exp)] = (arms_t, tinfo)
+                continue
             if arm == "R":
                 texts = src = None
                 if exp == "C5":
@@ -548,7 +590,7 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
             sw_ = rt.summarize_targets([(tp, wrows)], True)
             ss_ = rt.summarize_targets([(tp, srows)], False)
             row = dict(page=page["name"], exp=exp, arm=arm, words=_slim(sw_), spans=_slim(ss_),
-                       within1=sum(r_["within1"] for r_ in wrows),
+                       within1=sum(r_["within1"] for r_ in wrows), withinhalf=sum(r_["withinhalf"] for r_ in wrows),
                        seconds=round(secs + (ev.seconds if arm != "draft" else 0.0), 2),
                        info={k: v for k, v in info.items() if k not in ("rounds", "_r")})
             if status is not None:
@@ -578,7 +620,8 @@ def _score_arm(page, exp, name, pw, info, status, secs, verbose):
     sw_ = rt.summarize_targets([(tp, wrows)], True)
     ss_ = rt.summarize_targets([(tp, srows)], False)
     row = dict(page=page["name"], exp=exp, arm=name, words=_slim(sw_), spans=_slim(ss_),
-               within1=sum(r_["within1"] for r_ in wrows), seconds=round(secs, 2), info=info,
+               within1=sum(r_["within1"] for r_ in wrows), withinhalf=sum(r_["withinhalf"] for r_ in wrows),
+               seconds=round(secs, 2), info=info,
                outcomes_located_wrong=rt._count(x["outcome"] for x in wrows if x["status"] == "located" and not x["correct"]))
     if status is not None:
         row["corruption"] = corruption_metrics(wrows, status)
@@ -615,10 +658,12 @@ def aggregate(rows, key):
                                                                           line=0, unresolved=0, seconds=[],
                                                                           span_n=0, span_loc_correct=0, span_located=0,
                                                                           kept=0, kept_correct=0, corrupted=0, within1=0,
-                                                                          corrupted_not_located=0, sub=0, sub_not_located=0))
+                                                                          corrupted_not_located=0, sub=0, sub_not_located=0,
+                                                                          withinhalf=0))
         w = r["words"]
         d["pages"] += 1
         d["within1"] += r.get("within1", 0)
+        d["withinhalf"] += r.get("withinhalf", 0)
         d["n"] += w["n"]
         d["loc_correct"] += w["located_correct"]["k"]
         d["located"] += w["located_precision"]["n"]
@@ -652,7 +697,8 @@ def fmt_agg(agg):
             s = (f"    {ea:10s} loc&corr {d['loc_correct']:5d}/{d['n']:<5d} = {d['loc_correct'] / n:6.1%}"
                  f"  prec {d['loc_correct'] if False else ''}{_prec(d)}  wrong-line {d['wrong_line']}/{d['n']}"
                  f"  O1 {d['o1']} ({d['o1_words']} w)  O2 {d['o2']}  line {d['line']}  unres {d['unresolved']}"
-                 f"  [diag: located&within-1-letter {d['within1']}/{d['n']} = {d['within1'] / n:.1%}]"
+                 f"  [diag: located&within-1-letter {d['within1']}/{d['n']} = {d['within1'] / n:.1%}"
+                 f"; within-half-letter, horizontal only {d['withinhalf']}/{d['n']} = {d['withinhalf'] / n:.1%}]"
                  f"  spans {d['span_loc_correct']}/{d['span_n']}")
             if d["kept"]:
                 s += (f"  | kept correct {d['kept_correct']}/{d['kept']} = {d['kept_correct'] / d['kept']:.1%}"
@@ -697,12 +743,17 @@ def main(argv=None) -> int:
     s.add_argument("--arms", nargs="*", default=list(ARMS))
     s.add_argument("--configs", nargs="*", default=None)
     s.add_argument("--out", default=None)
+    s.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
+    s.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
+    s.add_argument("--seeds", nargs="*", type=int, default=None, help="override the seed set")
     r = sub.add_parser("real")
     r.add_argument("--exps", nargs="*", default=list(EXPS))
     r.add_argument("--arms", nargs="*", default=list(ARMS))
     r.add_argument("--keys", nargs="*", default=None, help="slug/page subset")
     r.add_argument("--note", required=True, help="why this real-page scoring is run (logged)")
     r.add_argument("--out", default=None)
+    r.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
+    r.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
     v = sub.add_parser("vrun")
     v.add_argument("--mode", choices=("mark", "coord"), default="mark")
     v.add_argument("--model", choices=("sonnet", "opus"), default="sonnet")
@@ -715,15 +766,24 @@ def main(argv=None) -> int:
     v.add_argument("--note", default="")
     t2 = sub.add_parser("twofold")
     t2.add_argument("results")
+    tx = sub.add_parser("tx", help="arm T: template transfer between two pages, and pooling")
+    tx.add_argument("--keys", nargs="*", default=["hadpi-articles/1", "hadpi-articles/2"])
+    tx.add_argument("--synth", default=None, help="class/preset: use two synthetic pages instead")
+    tx.add_argument("--seeds", nargs="*", type=int, default=[201, 202])
+    tx.add_argument("--sheets", default=None, help="directory for template contact sheets (scratch)")
+    tx.add_argument("--note", default="")
     o = sub.add_parser("overlay-real")
     o.add_argument("--out", required=True)
     o.add_argument("--exp", default="B")
     o.add_argument("--arm", default="G")
+    o.add_argument("--keys", nargs="*", default=None)
     a = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
+    if getattr(a, "tinit", None):
+        T_OPTS.update(init=a.tinit, with_R=not a.no_tr)
     if a.cmd == "synth":
         cfgs = [c for c in synth_configs() if a.configs is None or c[0] in a.configs]
-        rows = eval_synth(SEEDS[a.set], cfgs, a.exps, a.arms)
+        rows = eval_synth(a.seeds or SEEDS[a.set], cfgs, a.exps, a.arms)
         agg_cfg = aggregate(rows, lambda r: r["config"])
         agg_cls = aggregate(rows, lambda r: "hard" if r["hard"] else "clean")
         print("\nBY CONFIG\n" + fmt_agg(agg_cfg))
@@ -744,6 +804,8 @@ def main(argv=None) -> int:
         return cmd_real(a)
     if a.cmd == "overlay-real":
         return cmd_overlay_real(a)
+    if a.cmd == "tx":
+        return cmd_tx(a)
     if a.cmd == "vrun":
         return cmd_vrun(a)
     if a.cmd == "twofold":
@@ -773,10 +835,15 @@ def _np(o):
     return str(o)
 
 
+def _tp_digest():
+    import word_placer_t as T
+    return ",".join(f"{k}={v}" for k, v in T.TP.items())
+
+
 def code_fingerprint():
     import hashlib
     h = hashlib.sha256()
-    for f in ("word_placer.py", "word_placer_eval.py", "line_finder.py"):
+    for f in ("word_placer.py", "word_placer_eval.py", "line_finder.py", "word_placer_t.py"):
         h.update((HERE / f).read_bytes())
     return h.hexdigest()[:12]
 
@@ -816,7 +883,8 @@ def cmd_real(a):
                               ensure_ascii=False, indent=1, default=_np), encoding="utf-8")
     log = OUT / "run_log.txt"
     with log.open("a", encoding="utf-8") as f:
-        f.write(f"\n[{now()}] real scoring -> {out.name}  code {code_fingerprint()}  exps {a.exps} arms {a.arms}\n")
+        f.write(f"\n[{now()}] real scoring -> {out.name}  code {code_fingerprint()}  exps {a.exps} arms {a.arms}"
+                + (f"  T init {T_OPTS['init']} TP {_tp_digest()}" if "T" in a.arms else "") + "\n")
         f.write(f"  pages: {[m['key'] for m in pages_meta]}\n  note: {a.note}\n")
         for g in sorted(agg):
             for ea in sorted(agg[g]):
@@ -1082,14 +1150,320 @@ def run_R(page, exp, *, ev, texts=None, src=None):
     return arms, dict(font=os.path.basename(font) if font else None, font_costs=fcosts)
 
 
+T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3")
+R_DEP = ("TR", "Rc", "RcG", "R", "RG", "SR", "M2", "M3")
+T_OPTS = dict(init="G", with_R=True, keep=None)     # set from the command line (--tinit, --no-tr)
+
+
+def _todo_lines(r, texts_used, gexp):
+    todo = []
+    for i, toks in enumerate(texts_used):
+        if not toks:
+            continue
+        if gexp == "A":
+            j, trusted = i, True
+        else:
+            j = r["assign"][i]
+            trusted = j is not None and r["la"]["margin"][i] >= WP.P["LA_MARGIN"]
+        if j is None or not trusted or not r["inks"][j].M:
+            continue
+        todo.append((i, r["inks"][j], list(toks)))
+    return todo
+
+
+def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=None, learn=True, iters=None):
+    """Arm T (page-trained template aligner) and its agreement variants, plus
+    Rc (arm R rendered from glyphs cut out of the page). $0.
+
+    init: initial word positions for the templates: "G" (arm G's best
+    alignment), "R" (arm R's warp) or "flat" (line extent split by G widths).
+    model: a trained TModel to decode with (template transfer); learn=False
+    decodes with it unchanged."""
+    import copy
+    import word_placer_r as Rr
+    import word_placer_t as T
+    import word_placer_v as V
+    gexp = "A" if exp == "A" else ("C" if exp.startswith("C") else "B")
+    pwG, ginfo = run_G(page, gexp, texts=texts, src=src, ev=ev)
+    r = ginfo["_r"]
+    texts_used = texts if texts is not None else page["texts"]
+    todo = _todo_lines(r, texts_used, gexp)
+    W, H = page["truth_page"].W, page["truth_page"].H
+    gm = r["model"]
+    unit = gm.unit
+    info = dict(init=init)
+    # arm R (font render) for TR, Rc and the R init
+    rv_by, rg_by, riv_by = {}, {}, {}
+    if with_R or init == "R":
+        t0 = time.perf_counter()
+        own = (page.get("spec") or {}).get("font")
+        font, _fc = Rr.choose_font([(li, t) for _, li, t in todo], ev.sw, exclude=own)
+        for i, li, toks in todo:
+            iv, _c = Rr.align_line_r(li, toks, font, ev.sw) if font else (None, None)
+            g_line = r["results"][i]
+            lq = next((x.get("line_quad") for x in g_line if x.get("line_quad")), None)
+            ans = [dict(interval=x, present=True, why="" if x else "no rendered span") for x in (iv or [None] * len(toks))]
+            rv = V.v_results(li, toks, ans, ev.sw, unit, ev.hc, lq)
+            rv_by[i] = [dict(x, reason=x["reason"].replace("V", "R", 1)) for x in rv]
+            rg_by[i] = V.vg_results(li, rv_by[i], g_line, unit)
+            riv_by[i] = iv
+        info["font"] = os.path.basename(font) if font else None
+        info["seconds_R"] = round(time.perf_counter() - t0, 2)
+    t0 = time.perf_counter()
+    cs = None
+    if model is not None:                    # transfer: same columns per letter as the model's page
+        cs = model.cs * unit / model.n_hint_unit
+    lines = [T.make_line(li, toks, ev.hc, ev.sw, cs=cs) for _, li, toks in todo]
+    ivs = []
+    for (i, li, toks), L in zip(todo, lines):
+        if init == "R" and riv_by.get(i):
+            ivs.append([riv_by[i][ti] for ti in L.order])
+        elif init == "flat":
+            ivs.append(None)
+        else:
+            al = r["diag"]["aligns"][i]
+            ivs.append([None if d["deleted"] else (d["s0"], d["s1"]) for d in al.words])
+    if init == "flat":
+        ivs = flat_intervals(lines, gm, r)
+    gw = lambda k: T.g_width(gm, k)  # noqa: E731
+    if model is None:
+        m = T.initial_model(lines, ivs, gw, unit)
+    else:
+        m = copy.deepcopy(model)
+        for L in lines:                       # unseen units: G width hints
+            for k in L.ukeys:
+                m.n_hint.setdefault(k, int(np.clip(round(gw(k) / m.cs), T.TP["N_MIN"], 99)))
+    aligns, hist = T.train(lines, m, unit, iters=iters, learn=learn)
+    info["seconds_T"] = round(time.perf_counter() - t0, 2)
+    info["history"] = hist
+    info["units"] = len(m.tmpl)
+    info["unit_occ"] = sorted(m.occ.values(), reverse=True)
+    info["_model"] = m
+    info["_lines"] = lines
+    info["_aligns"] = aligns
+    info["_todo_idx"] = [i for i, _, _ in todo]
+    # Rc: templates from words where R and G agree, one shot, warped like R
+    rc_by = {}
+    if with_R:
+        rc_iv = []
+        for (i, li, toks), L in zip(todo, lines):
+            v = [None] * L.nwords
+            for w, ti in enumerate(L.order):
+                if rg_by[i][ti]["status"] == "located" and riv_by[i] and riv_by[i][ti] is not None:
+                    v[w] = riv_by[i][ti]
+            rc_iv.append(v)
+        mrc = T.initial_model(lines, rc_iv, gw, unit)
+        gsnap = gm.snapshot()["gap"]
+        gap_cols = {T.JOIN: 0.0, T.PIECE: max(0.0, gsnap[0][0]) / lines[0].cs if lines else 0.0,
+                    T.WORD: max(0.0, gsnap[1][0]) / lines[0].cs if lines else 0.0, T.EDGE: 0.0}
+        for (i, li, toks), L in zip(todo, lines):
+            iv = T.rc_align(L, mrc, gap_cols, ev.sw)
+            g_line = r["results"][i]
+            lq = next((x.get("line_quad") for x in g_line if x.get("line_quad")), None)
+            ans = [dict(interval=x, present=True, why="" if x else "no span") for x in (iv or [None] * len(toks))]
+            rc = V.v_results(li, toks, ans, ev.sw, unit, ev.hc, lq)
+            rc = [dict(x, reason=x["reason"].replace("V", "Rc", 1)) for x in rc]
+            rc_by[i] = (rc, V.vg_results(li, rc, g_line, unit))
+    # arm S: the audit draft's word splitter inside the same lines, same text
+    import word_placer_s as Ss
+    t0 = time.perf_counter()
+    squads = Ss.s_page(page["gray"], [(i, li.geom, toks) for i, li, toks in todo], ev.S)
+    info["seconds_S"] = round(time.perf_counter() - t0, 2)
+    arms = {k: {} for k in T_ARMS}
+    done = {}
+    for (i, li, toks), L, al in zip(todo, lines, aligns):
+        tres, _ = T.word_results(L, al, ev.sw, unit, ev.hc)
+        g_line = r["results"][i]
+        lq = next((x.get("line_quad") for x in g_line if x.get("line_quad")), None)
+        tall = T.every_box(tres)
+        sres = Ss.s_results(squads[i], lq)
+        d = {"T": tres, "Tall": tall, "TG": T.agree(li, tall, g_line, unit), "S": sres}
+        per = {"T": tall, "G": g_line, "S": sres}
+        if with_R:
+            d["TR"] = T.agree(li, tall, rv_by[i], unit)
+            d["Rc"], d["RcG"] = rc_by[i]
+            d["R"], d["RG"] = rv_by[i], rg_by[i]
+            per["R"] = rv_by[i]
+        for name, rule in (("SR", ("S", "R")), ("SG", ("S", "G")), ("ST", ("S", "T")), ("M2", ("M", 2)), ("M3", ("M", 3))):
+            if (rule[0] == "M" and with_R) or (rule[0] != "M" and all(a in per for a in rule)):
+                d[name] = Ss.agreement_line(li, {k: per[k] for k in (rule if rule[0] != "M" else per)}, unit, rule)
+        done[i] = d
+    for i, toks in enumerate(texts_used):
+        g_line = r["results"][i]
+        for name in T_ARMS:
+            res = done.get(i, {}).get(name)
+            if res is None:
+                if name in R_DEP and not with_R:
+                    continue
+                res = [dict(x) if x["status"] == "unresolved" else dict(x, status="line") for x in g_line]
+            for ti, x in enumerate(res):
+                key = src[i][ti] if src is not None else (i, ti)
+                if key is not None:
+                    arms[name][key] = to_placed(x, W, H)
+    if not with_R:
+        for k in R_DEP:
+            arms.pop(k, None)
+    # G2 (D6): text lines on non-text detected lines, boxes shown there
+    la = ginfo.get("line_assignment")
+    if la is not None:
+        under = la["under"]
+        bad_lines = {i for i, j in enumerate(r["assign"]) if j is not None and under[j] is None}
+        info["g2_text_lines_on_nontext"] = len(bad_lines)
+        g2 = {}
+        for name, pw in arms.items():
+            n = 0
+            for i in bad_lines:
+                for ti in range(len(texts_used[i])):
+                    key = src[i][ti] if src is not None else (i, ti)
+                    x = pw.get(key) if key is not None else None
+                    n += bool(x and x["status"] in ("located", "line") and x["segments"])
+            g2[name] = n
+        info["g2_boxes_on_nontext"] = g2
+    return arms, info
+
+
+def run_T_pooled(pages, exp="A"):
+    """Arm T with templates learned jointly over several pages of one book
+    (pooled), each page's columns scaled to a common letter pitch.
+    pages: [(page, ev)] -> {page name: {arm: per_word}}, info."""
+    import word_placer_t as T
+    ctx = []
+    allL, allI = [], []
+    ref = None
+    for page, ev in pages:
+        pwG, ginfo = run_G(page, exp, ev=ev)
+        r = ginfo["_r"]
+        todo = _todo_lines(r, page["texts"], exp)
+        gm = r["model"]
+        if ref is None:
+            ref = (max(1.0, T.TP["COL_SW"] * ev.sw), gm.unit)
+        cs = ref[0] * gm.unit / ref[1]
+        lines = [T.make_line(li, toks, ev.hc, ev.sw, cs=cs) for _, li, toks in todo]
+        ivs = [[None if d["deleted"] else (d["s0"], d["s1"]) for d in r["diag"]["aligns"][i].words] for i, _, _ in todo]
+        ctx.append((page, ev, r, todo, lines, gm))
+        allL += lines
+        allI += ivs
+    gm0 = ctx[0][5]
+    m = T.initial_model(allL, allI, lambda k: T.g_width(gm0, k) * 1.0, ref[1])
+    t0 = time.perf_counter()
+    aligns, hist = T.train(allL, m, ref[1])
+    out = {}
+    k = 0
+    for page, ev, r, todo, lines, gm in ctx:
+        W, H = page["truth_page"].W, page["truth_page"].H
+        arms = {"T": {}, "Tall": {}}
+        for (i, li, toks), L in zip(todo, lines):
+            tres, _ = T.word_results(L, aligns[k], ev.sw, gm.unit, ev.hc)
+            k += 1
+            for name, res in (("T", tres), ("Tall", T.every_box(tres))):
+                for ti, x in enumerate(res):
+                    arms[name][(i, ti)] = to_placed(x, W, H)
+        out[page["name"]] = arms
+    return out, dict(history=hist, seconds=round(time.perf_counter() - t0, 2), units=len(m.tmpl), _model=m)
+
+
+def cmd_tx(a):
+    """Arm T template transfer and pooling on two pages of one book (real
+    keys, or synthetic seeds of one config): (1) per page; (2) templates
+    learned on one page, applied to the other with no re-estimation, both
+    ways; (3) templates pooled over both pages. Contact sheets of the learned
+    templates go to --sheets (scratch; templates are page images)."""
+    import word_placer_t as T
+    if a.synth:
+        cls, preset = a.synth.split("/")
+        pages = [synth_page(cls, dict(preset=preset), sd) for sd in a.seeds]
+    else:
+        pages = [real_page(*k) for k in real_keys(a.keys)]
+    evs = [WP.page_evidence(p["gray"]) for p in pages]
+    rows = []
+
+    def score(page, pw, mode, arm, extra=None):
+        wrows, _ = grade_page(page, pw)
+        sm = rt.summarize_targets([(page["truth_page"], wrows)], True)
+        row = dict(page=page["name"], mode=mode, arm=arm, n=sm["n"], correct=sm["located_correct"]["k"],
+                   located=sm["located_precision"]["n"], within1=sum(r_["within1"] for r_ in wrows), **(extra or {}))
+        rows.append(row)
+        print(f"  {page['name'][:34]:34s} {mode:14s} {arm:5s} loc&corr {row['correct']}/{row['n']}  prec {row['correct']}/{row['located']}"
+              f"  within1 {row['within1']}", flush=True)
+
+    models = []
+    for p, ev in zip(pages, evs):
+        arms, info = run_T(p, "A", ev=ev, with_R=False)
+        models.append(info["_model"])
+        for nm in ("T", "Tall"):
+            score(p, arms[nm], "own", nm, dict(seconds=info["seconds_T"]))
+        if a.sheets:
+            Path(a.sheets).mkdir(parents=True, exist_ok=True)
+            keys = T.contact_sheet(info["_model"], str(Path(a.sheets) / f"templates_{p['name'].replace('/', '_')}.png"))
+            print(f"    templates: {len(keys)} units; occurrences {sorted(info['_model'].occ.values(), reverse=True)[:12]} ...")
+    for i, j in ((0, 1), (1, 0)):
+        arms, info = run_T(pages[j], "A", ev=evs[j], with_R=False, model=models[i], learn=False)
+        seen = sum(1 for L in info["_lines"] for k in L.ukeys if k in models[i].tmpl)
+        tot = sum(len(L.ukeys) for L in info["_lines"])
+        for nm in ("T", "Tall"):
+            score(pages[j], arms[nm], f"from {i + 1}", nm, dict(units_seen=seen, units=tot))
+    out, info = run_T_pooled(list(zip(pages, evs)), "A")
+    for p in pages:
+        for nm in ("T", "Tall"):
+            score(p, out[p["name"]][nm], "pooled", nm)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = OUT / f"tx_{'synth' if a.synth else 'real'}_{stamp}.json"
+    path.write_text(json.dumps(dict(created_at=now(), code=code_fingerprint(), note=a.note, tp=_tp_digest(), rows=rows),
+                               ensure_ascii=False, indent=1, default=_np), encoding="utf-8")
+    if not a.synth:
+        with (OUT / "run_log.txt").open("a", encoding="utf-8") as f:
+            f.write(f"\n[{now()}] arm T transfer/pooling real scoring -> {path.name}  code {code_fingerprint()}  TP {_tp_digest()}\n"
+                    f"  pages: {[p['name'] for p in pages]}\n  note: {a.note}\n")
+            for r_ in rows:
+                f.write(f"  {r_['page']:24s} {r_['mode']:8s} {r_['arm']:5s} loc&corr {r_['correct']}/{r_['n']}  prec {r_['correct']}/{r_['located']}\n")
+    print(f"wrote {path}")
+    return 0
+
+
+def flat_intervals(lines, gm, r):
+    """Flat start: each line's core ink extent split over its words by G
+    width (plus one in-word gap per piece and a word gap per word)."""
+    import word_placer_t as T
+    gs = gm.snapshot()["gap"]
+    out = []
+    for L in lines:
+        li = L.li
+        if not li.M:
+            out.append(None); continue
+        a, b = float(li.s0[0]), float(li.s1[-1])
+        wsum = []
+        for w in range(L.nwords):
+            ks = [k for k in range(len(L.ukeys)) if L.uword[k] == w]
+            wsum.append(sum(T.g_width(gm, L.ukeys[k]) for k in ks) +
+                        sum(max(0.0, gs[0][0]) for k in ks[:-1] if L.btype[k] == T.PIECE))
+        gapw = max(0.0, gs[1][0])
+        tot = sum(wsum) + gapw * (len(wsum) - 1)
+        sc = (b - a) / max(1.0, tot)
+        x = a
+        iv = []
+        for w, ww in enumerate(wsum):
+            iv.append((x, x + ww * sc))
+            x += (ww + gapw) * sc
+        out.append(iv)
+    return out
+
+
 def cmd_overlay_real(a):
     """Overlays of placed boxes on each real page (scratch only)."""
     outdir = Path(a.out)
     outdir.mkdir(parents=True, exist_ok=True)
-    for slug, pg in real_keys():
+    for slug, pg in real_keys(a.keys):
         page = real_page(slug, pg)
         ev = WP.page_evidence(page["gray"])
-        if a.arm == "draft":
+        if a.arm in T_ARMS:
+            texts = src = None
+            if a.exp in ("C5", "C15"):
+                texts, src, _st, _ = corrupt_lines(page["texts"], 0.05 if a.exp == "C5" else 0.15,
+                                                   seed=hash_seed(page["name"], a.exp))
+            arms_t, _ = run_T(page, a.exp, ev=ev, texts=texts, src=src, init=T_OPTS["init"],
+                              with_R=a.arm in ("TR", "Rc", "RcG"))
+            pw = arms_t[a.arm]
+        elif a.arm == "draft":
             pw, _ = run_draft(page)
         else:
             exp = "B" if a.exp == "B" else a.exp

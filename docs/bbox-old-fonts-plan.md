@@ -784,6 +784,60 @@ candidates): clean R 97.5%, R∧G 91.7% at 99.6%; hard R 61.2%; nastaliq R 84.4%
   alignment. This is the recogniser-based alignment of the literature (§13.3) without an
   external model or install. If it fails, D5 (kraken/torch) goes to the owner.
 
+**Step 4 continuation: arm T, arm S and agreement rules (2026-11-12, $0; `tests/word_placer_t.py`,
+`tests/word_placer_s.py`).** T = page-trained template aligner: letter-form templates learned
+from the page itself by forced alignment of the known text (no font, no external model). S = the
+audit tool's draft word splitter run inside the same lines as the other arms (owner's suggestion).
+Agreement, defined once beforehand: two arms agree when both box edges along the line are within
+half a letter. Strict scorer; A = audited lines + truth text, B = L1 lines + truth text.
+
+| Arm | hadpi A: correct, precision | hadpi B | majid A | majid B | p66 A |
+|---|---|---|---|---|---|
+| S | 68.3%, 68.3% | 53.9%, 66.8% | 98.3%, 98.3% | 83.5%, 97.2% | 94.9%, 94.9% |
+| R∧G (previous best) | 49.0%, 85.0% | 35.7%, 83.3% | 91.9%, 98.1% | 79.6%, 97.7% | 89.0%, 99.4% |
+| **T** | **74.3%, 80.1%** | 63.6%, 81.3% | 96.8%, 98.4% | 82.6%, 98.1% | 96.6%, 98.6% |
+| **S∧T** | **63.5%, 95.3%** | 51.9%, 94.3% | 97.8%, 99.0% | 83.2%, 98.5% | 96.3%, 98.8% |
+| Majority ≥ 3 of {S, R, G, T} | 65.0%, 89.3% | 53.6%, 89.9% | 97.8%, 98.6% | 84.0%, 98.0% | 96.9%, 98.9% |
+| Majority ≥ 2 | 77.1%, 82.0% | 61.7%, 81.4% | 98.3%, 98.3% | 84.2%, 98.0% | 98.6%, 98.9% |
+
+- **No arm meets the hard-page targets (≥ 85% at ≥ 97%).** The kill line (70% with truth lines and
+  text) is no longer triggered: T 74.3%, majority ≥ 2 77.1%. S∧T is the first rule near usable
+  precision on hadpi (95.3%; 97.4% on p1, 92.7% on p2) while keeping 106 more words than R∧G.
+- **T places hadpi words horizontally within half a letter for 88.2% of words** (precision about
+  95%); S∧T is about 99.6% precise horizontally at 66.4%; majority ≥ 3 about 98.3% at 71.6%. Of
+  T's 135 strict failures under A, 79 have both horizontal edges within half a letter and fail
+  only on vertical extent, 26 fall short of 90% area cover, 30 are horizontally wrong. The
+  implementer attributes the vertical failures to the audited boxes being taller than the ink.
+  **The planner's check does not support that as stated:** sampled in each line's own frame,
+  ink spans the full height of the audited box for nearly all hadpi words, and an overlay shows
+  the audited boxes close to ink-tight. The likelier cause is the arms' own vertical extent
+  (the detached-ink gate dropping dots and marks). To be settled by giving every arm's box the
+  full ink extent of its horizontal span within the line band, with no scorer change.
+- **Gate G1 (printed pages):** T, S∧T and both majority rules beat R∧G on majid in recall at equal
+  or better precision; on p66 and synthetic clean pages they gain 5–7 points of recall for about
+  0.5 point of precision (p66: 4 wrong boxes against 2). R∧G is not replaced on printed pages
+  without the owner accepting that trade.
+- **Gate G2 (extra lines):** boxes shown on a non-text detected line: 0 for every arm on every
+  page. One text line per page (hadpi p1, p2, majid p23) was assigned to a non-text line, fell
+  below the trust margin, and its words are unresolved.
+- End to end (B), 141 hadpi words and 89 majid p23 words are unresolved because their line-text
+  assignment is not trusted, for every arm. Line-text assignment is now the largest single loss.
+- Text errors (C5): T on hadpi keeps 61.5% of intact words (2 points below its own B result, so
+  a wrong word no longer spreads along the line) and leaves 17 of 18 corrupted positions not
+  located; p66 and synthetic clean meet both §4.4 targets; majid just misses (80.4%, 75%).
+- Templates learned on one hadpi page work on the other (p2's on p1: 293 against 294 correct), so
+  they capture the typewriter, not the page. Pool over a book when several pages exist.
+- T's own margin is not a calibrated confidence (two-fold: no threshold transfers). **Agreement
+  between independent arms is the confidence for `located`.** A page-condition selector is
+  proposed, not validated beyond these books: the share of words where R and T agree (hadpi 59%,
+  majid 97%, p66 97%).
+- Glyph-cut-out R (Rc) helps R on hadpi (61.6% against 55.0%) but stays far below T.
+- Synthetic untouched seeds, hard pages: T 80.7% at 93.9% (R 61.2%); T renders no font.
+- Run time: T 1.1–2.5 s per page; all arms together on a hadpi page about 12–14 s, over the 10 s
+  target.
+- D5 (kraken): not asked yet. A recogniser would help the about 30 horizontally wrong boxes and
+  the missing confidence, not the vertical issue or line-text assignment.
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases
