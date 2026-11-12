@@ -849,6 +849,40 @@ for pn in range(len(d)):
 | D4 | Owner time for truth | **The full ~3 hours**: correct the text of hadpi p1–p2 and audit word boxes on all five geometry pages. **Review-time feedback capture (§6.3) is an owner priority** and is expanded beyond drag-to-fix, on the condition that what it records benefits all future books. |
 | D5 | kraken/torch; Tesseract Persian data | **Deferred, not asked.** Comes back to the owner with step 4 numbers only if arm C proves necessary. Tesseract baseline stays optional. |
 
+### Decisions of 2026-11-12 (owner, after Steps 2–4)
+
+| # | Question | Decision |
+|---|---|---|
+| D6 | **Extra "lines" from the Step 3 line finder** (signatures, handwriting, stamp, scanner logo below the text; 11 and 9 on hadpi p1, p2) | **Count spurious lines only inside the fitted text block** (the Step 3 criterion "≤ 1 per page" is read that way; L1 passes with 1 per page). **Condition: box accuracy must not be put at risk by the extra lines.** Enforced as gate G2 below. |
+| D7 | Stronger model for hard pages | **Approved in principle:** pages that trip the review gate (confidence < 0.70 or `illegible`) are re-read by the strongest reader on native-resolution bands; clean pages stay on the cheaper model. **Not limited to Anthropic models:** for the hardest pages use the best model from any vendor, unless it costs about 3× or more than the alternative for a comparable result. Requires a cross-vendor comparison first (Step 2b). |
+| D8 | Held-out test on hadpi p3–p5 | **Approved**, owner time and API spend included. The owner corrects text for p3–p5; the draft must not favour one contender (see Step 2b). |
+| D9 | Image resolution reaching the model (E25) | **Must be under our control.** No image we send may be resized by a vendor without our knowing: send sizes the vendor does not shrink, and use bands or tiles when more detail is needed. |
+| D10 | Putting anything into the app | **Owner approval is asked for each integration**, before production code changes. |
+| D5 | kraken/torch (arm C) | Still open. Not asked until arm T (page-trained aligner), the draft-splitter arms and a cross-vendor pointing test are measured. |
+
+**Standing gates from these decisions (apply to every later step and to integration):**
+
+- **G1, no regression on printed book pages.** Every word-placement or transcription change is
+  reported on the printed-book truth (majid p23, p109; p66 separately) beside the hard pages, and
+  is rejected for printed pages if it is worse there than the best printed-page configuration so
+  far (word placement: R∧G, 91.9% at 98.1% with truth lines, 79.6% at 97.7% end to end;
+  transcription: Sonnet 5 whole page, 0–1% lenient WER). The engine may use different arms for
+  different page conditions; a hard-page improvement never replaces a better printed-page arm.
+- **G2, extra lines must not cost box accuracy.** Reported for every arm on every page: text
+  lines assigned to a non-text detected line, and word boxes placed on a non-text detected line.
+  Both must be zero for any box shown as `located` or `line`. Measured so far (Step 4, truth line
+  text): 2 of 33 non-text lines on hadpi received text and both were flagged untrusted, so no box
+  was shown on them; wrong-line boxes 0 of 729 (hadpi) and 0 of 632 (majid).
+
+**Step 2b, cross-vendor reader comparison (new, from D7 and D8).** Same scorer, cache, ledger and
+spend guard as Step 2. Contenders: the strongest vision model of each major vendor, with Opus 5.5
+and Sonnet 5 as references, each given images at a size it does not downscale. Tune prompts and
+banding on hadpi p1–p2 only, freeze, then run the frozen configurations once on held-out p3–p5.
+The p3–p5 truth draft handed to the owner is the contenders' majority reading with **every
+disagreement marked**, so that no single model's errors are favoured. Also re-test word pointing
+(arm V) with any model documented to return bounding boxes: arm V was closed on Anthropic models
+only. Needs the owner's API keys for the other vendors.
+
 ---
 
 ## 11. Answers to v1's open questions
