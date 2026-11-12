@@ -189,6 +189,14 @@ PDF page
 - **Mask non-text ink**: components far larger than a glyph (stamps, signatures), long thin
   horizontal strokes (underlines), isolated margin marks. Masked ink is excluded from line
   finding but kept for display.
+  - Masking is a hard yes/no decision taken before any text is matched, so it must be
+    **conservative**: mask only what is safe by size and isolation alone. A mark at line height,
+    near the text block and about the size of a dot or a narrow letter is *not* masked here
+    (the same rule would delete punctuation and letters such as «ا»). Those marks are left for
+    arm G to explain or skip (§4.3, §13 O1).
+- **Estimate the text block's edges** (added, §13): fit the right and left edges of the block from
+  all lines together, robustly, allowing indented and short lines. Each line's expected start and
+  end come from this fit, not from its first and last ink.
 - **Find lines by following them locally**, not by one global projection. Candidate arms, to be
   measured in step 3:
   - (L1) strip-wise projection: cut the page into vertical strips, find row runs per strip, link
@@ -227,13 +235,21 @@ PDF page
 - Inputs: a rectified line strip, its ink runs and gaps, and the line's character sequence with
   word boundaries.
 - Model: each character has an expected width. Start from a uniform width, then learn a per-book
-  per-character width table by iterating: align → re-estimate widths → align. A typewriter face
-  converges to "all equal" at once.
+  per-character width table by iterating: align → re-estimate widths → align.
+  - **Typewriter faces (corrected, §13):** do not assume "all equal". Arabic-script typewriters
+    are described as using two or three width classes on a common pitch. Constrain the table to
+    a small number of width classes that are multiples of one pitch, and measure the classes on
+    hadpi p1–p2 truth before relying on them.
 - Optimization: dynamic programming over the line. Choose a cut for each word boundary so that
   segment widths match expected widths, cuts fall in gaps, and wider gaps are preferred.
   - A word boundary may have no gap (fused in print, E23). The cut is then placed by expected
     width and the pair is marked as fused.
   - A gap inside a word is free after a non-joining letter and penalized elsewhere.
+  - **Ink may belong to no word (added, §13 O1).** Any ink run may be skipped as "not text" at a
+    cost that falls with its size and density and rises inside the fitted text block (§4.1).
+    Without this, a surviving speck must be given to a word and can shift the rest of the line.
+  - On typewritten and other tight-set pages **width leads and gaps only refine**: a cut is never
+    moved into a gap that makes the neighbouring segments' widths implausible (§13 O2).
 - Output: box edges snapped to ink. Confidence from the margin between the best and second-best
   segmentation, and from the width residual.
 
@@ -247,6 +263,12 @@ PDF page
 
 **Use of both:** where G and C agree on a boundary, confidence is high. Where they disagree, the
 word falls back to `line`. Step 4 decides whether C is needed at all for the corpus we have.
+
+**Arm R — render and warp (optional candidate, added §13).** Render the known line in a similar
+face with the synthetic generator, align its column ink profile to the strip by one-dimensional
+dynamic time warping, and read word boundaries off the warp. numpy only, no model. Published for
+manuscripts (Hassner, Wolf, Dershowitz 2013); unproven on Persian. Tried in step 4 beside G; it
+is dropped without replacement if it does not beat G on any class.
 
 **Arm V — direct model grounding (control only).** Ask the model for the box on the whole page;
 grade deterministically. Kept only to measure whether it beats G/C. It never grades itself.
@@ -309,6 +331,9 @@ resolution from the first, so that their errors are less correlated.
 - **Degradations**, with truth boxes passed through the same geometric transform: smooth warp
   with slope varying 0–3.5° down the page (matching E18), blur, ink spread and dropout, uneven
   lighting, JPEG, overlaid stamps, signatures and underlines.
+  - Added (§13): margin specks near line starts and ends, recorded in truth as non-text marks;
+    word spacing reduced to the within-word gap for a set fraction of boundaries, with the true
+    gap recorded per boundary. Without these the synthetic set cannot show O1 or O2.
 - **Text-error injection**: substitute, delete and insert words in the text given to the aligner
   (not in the image), at 5% and 15%.
 - Deterministic by seed. Stored as a manifest plus seeds, not as images.
@@ -472,6 +497,9 @@ review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth dr
 
 - Data: synthetic warped set (all font classes), hadpi p1–p2, majid ×2, p66.
 - Arms: current detector; L1; L2; L3; each with and without masking.
+- Also measured here (§13): text-block edge fit (error of each line's fitted start and end against
+  audited line outlines), and how many truth words lose ink to masking (must be zero on real
+  pages; report per page).
 - **PASS (best arm):**
   - Hard real pages: clean one-to-one recall ≥ 95%, zero merges of two or more truth lines,
     ≤ 1 spurious line per page.
@@ -485,8 +513,13 @@ review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth dr
 
 - Inputs: step 3 lines; line text from truth first (isolates the aligner), then from step 2's
   line-faithful reading (end to end).
-- Arms: G; C (kraken Persian model, zero-shot); G+C agreement; V (control). Optional: Tesseract
-  `fas` + text alignment, only if the owner installs the language data.
+- Arms: G; C (kraken Persian model, zero-shot); G+C agreement; V (control). Optional: R
+  (render and warp); Tesseract `fas` + text alignment, only if the owner installs the language data.
+- Reported separately for every arm (§13): **O1 cascades** (runs of consecutive words each placed
+  on a neighbour's ink) and **O2 boundary errors** (right word, an edge off by a letter or more),
+  on real pages and on the synthetic speck and tight-spacing sets. G is run with and without the
+  "not text" state so its effect is measured, not assumed. Touching-word cases are included so
+  the numbers can settle D5.
 - **PASS (some arm, end to end):** the §1 targets, i.e.
   - clean (p66 + synthetic clean): ≥ 95% words `located` and correct;
   - hard (hadpi + synthetic degraded): ≥ 85%;
@@ -547,6 +580,8 @@ for pn in range(len(d)):
 | Both readings share the same error, so T2 misses it | Medium | Vary model or resolution between readings; T6 geometry check is independent of both |
 | Arm G fails on nastaliq and heavily kerned faces | High for nastaliq | Arm C; reported per class; honest `line` fallback meanwhile |
 | kraken's Persian model is poor on typewriter print | Medium | G does not need it; per-book fine-tuning as escalation |
+| Stray marks shift a line's boxes (§13 O1) | High on photographed pages | Conservative masking (§4.1) + text-block edges + "not text" state in G (§4.3); measured in steps 3–4 |
+| Word gap no wider than a letter gap (§13 O2) | High on typewriter print | Width-led cuts with width classes (§4.3); arm C or R if G's O2 rate stays high |
 | Synthetic pages are easier than real ones | Medium | Smoke test 1b; real truth gates every step; held-out hadpi pages |
 | torch is too heavy for the CLI | Medium | Only needed if C proves necessary; optional extra |
 | The unreadable marker complicates the EPUB build | Low | Contract test in T4; marker stripped or rendered at build |
@@ -589,3 +624,82 @@ for pn in range(len(d)):
 - Freely usable typewriter-style and nastaliq Persian fonts.
 - Whether `insert_htmlbox` shapes nastaliq correctly (smoke test 1a).
 - Whether Surya supports Persian recognition (only its line detection is used here).
+
+## 13. Owner's audit observations: what the plan already covered, and what changed (2026-11-11)
+
+**Source.** While auditing word boxes on hadpi p1–p2, the owner reported two repeating error
+patterns. The boxes came from the audit tool's draft splitter (`tests/box_audit_draft.py`, a
+simple text-constrained gap method), **not** from arm G, which is not built. So these are not
+measurements of the planned engine. They are evidence of what a gap-led method does on this print,
+and a test of whether the plan's design would have avoided it. Neither pattern is specific to
+Persian or to typewriting.
+
+- **O1, stray ink at the line start.** A speck in the margin receives the first word's box; every
+  later box on the line is then off by that many words.
+- **O2, word gap no wider than a letter gap.** The cut lands inside a neighbouring word: a box
+  takes the next word's first letters, or loses its own last letters.
+
+Measured on the draft against the audited boxes: 15 of 61 hadpi lines have three or more
+consecutive wrong boxes, against 1 of 54 on the printed book pages.
+
+### 13.1 O1 against the plan's existing measures
+
+| Existing measure | What it does for O1 | Where it stops |
+|---|---|---|
+| §4.1 masking of "isolated margin marks" | Removes marks that are clearly isolated and small | A yes/no decision before any text is matched. A mark at line height, near the block, the size of a dot or narrow letter cannot be masked safely |
+| §4.3 arm G expected widths | A speck is too narrow to be a word, so a full cascade is less likely than in the draft | G must still assign every ink run to some word: the first box stretches to the speck, and several specks can still shift the line |
+| §4.4 insertions and deletions | Lets a *word* be missing or extra | Nothing lets *ink* be extra |
+| §4.2 line-to-text check by length | Allows a detected line with no text (stamp, underline) | Works on whole lines, not on marks inside a line |
+
+Verdict: partly covered; the hard case (a speck that survives masking) was not. Changes made:
+conservative-masking rule and text-block edge fit in §4.1; "not text" state in arm G (§4.3); the
+edge fit and masking damage measured in step 3; G measured with and without the new state in
+step 4.
+
+### 13.2 O2 against the plan's existing measures
+
+| Existing measure | What it does for O2 | Where it stops |
+|---|---|---|
+| §4.3 arm G: cuts placed by expected width, gaps preferred | This is the designed answer: the boundary comes from letter widths, not from white space | Only as good as the width table |
+| §4.3 fused boundaries (E23) | Covers a word pair with no gap at all | Same dependence on widths |
+| §4.3 "typewriter converges to all equal" | Was meant to make typewriter pages the easy case | Probably wrong: sources describe two or three width classes on Arabic-script typewriters. With wrong widths a width-placed cut lands part of a letter off, which is O2 in a milder form |
+| §4.3 arm C (forced alignment), deferred by D5 | The published answer to this exact problem: boundaries from where characters are | Needs kraken/torch; its Persian model is unverified on typewriter print (§12) |
+
+Verdict: covered by design, with one wrong assumption. Changes made: width classes on a common
+pitch replace "all equal", and "width leads, gaps refine" is stated as a rule (§4.3); O2 errors
+are counted separately and touching-word cases are included in step 4 so that D5 is decided on
+numbers. D5 itself is unchanged.
+
+### 13.3 What the literature adds (searched 2026-11-11; targeted, not a systematic review)
+
+- Separating word gaps from within-word gaps is treated as a classification problem and is known
+  to fail where the two populations overlap or words touch. Arabic script is the hard case,
+  because every non-joining letter leaves a gap inside a word. No threshold fixes O2.
+- With known text, the established approach is alignment rather than segmentation (HMM/Viterbi,
+  later CTC). Reported word-alignment rates on historical handwriting run from about 69% to 93%
+  across papers with different data and definitions. They are not comparable with each other or
+  with the §1 targets.
+- A learning-free variant renders the known text and warps it onto the line image. Added as
+  optional arm R (§4.3).
+- Fixed-pitch typewriting is segmented by fitting a character-cell grid, not by gaps; degraded
+  typewritten pages still break and merge characters, so the grid is a prior, not a solution.
+- Margin specks and scan noise are handled as a separate problem before segmentation.
+
+### 13.4 Status
+
+All of §13 is reasoning from the design plus a draft tool's errors. Arm G is not built; neither
+its protection nor its weak points are measured. The owner's audited boxes decide it in step 4.
+The synthetic additions (§6.1) are being built now as a step 3 prerequisite.
+
+Sources: Stutzmann & Bluche, text-image alignment overview
+(dh-abstracts.library.virginia.edu/works/2258); Moccia Code alignment
+(ncbi.nlm.nih.gov/pmc/articles/PMC9864051); Rothfeder, Manmatha & Rath
+(maroo.cs.umass.edu/pub/web/getpdf.php?id=463); Hassner, Wolf & Dershowitz, OCR-free transcript
+alignment (openu.ac.il/home/hassner/projects/Ofta); Peer, Scius-Bertrand & Fischer, CTC alignment
+(arxiv.org/abs/2508.07904); kraken forced alignment (kraken.re/7.0/user_guide/api.html);
+Louloudis thesis on gap classification (di.uoa.gr/sites/default/files/documents/grad/phdbook/louloudis.pdf);
+Retsinas et al., typewritten recognition
+(primaresearch.org/www/assets/papers/HIP2015_Retsinas_TypewrittenDocumentRecognition.pdf);
+Berg-Kirkpatrick, Durrett & Klein 2013 (nlp.cs.berkeley.edu/pubs/BergKirkpatrick-Durrett-Klein_2013_OCR_paper.pdf);
+Arabic typewriter widths (blog.29lt.com/2014/01/01/29lt-makina-multilingual-typewriter-typeface,
+patents.google.com/patent/US2940575A/en).
