@@ -586,8 +586,31 @@ class Ledger:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+# A stronger model than the repo's MODEL_STRONG, for the per-line follow-up.
+# Defined here on purpose (not in farsi2epub/config.py).
+MODEL_OPUS = "claude-opus-5-5"
+# USD per MTok. Source: the claude-api skill's model table ("Current Models",
+# cached 2026-11-03): Claude Opus 5.5 $4.00 in / $20.00 out. The budget guard
+# pads prices of models outside config.PRICES by GUARD_MARGIN_EXTRA.
+PRICES_EXTRA = {MODEL_OPUS: {"in": 4.0, "out": 20.0}}
+GUARD_MARGIN_EXTRA = 1.25
+HIGH_RES_PREFIXES = ("claude-sonnet-5", "claude-opus-5")
+
+
 def price(model: str) -> dict:
-    return config.PRICES[model]
+    return config.PRICES[model] if model in config.PRICES else PRICES_EXTRA[model]
+
+
+def guard_price(model: str) -> dict:
+    p = price(model)
+    if model in config.PRICES:
+        return p
+    return {k: v * GUARD_MARGIN_EXTRA for k, v in p.items()}
+
+
+def cost_usd(usage, model: str) -> float:
+    p = price(model)
+    return usage.input_tokens / 1e6 * p["in"] + usage.output_tokens / 1e6 * p["out"]
 
 
 def text_tokens_est(s: str) -> int:
@@ -619,13 +642,13 @@ def image_block(img: Image) -> dict:
 
 def api_tokens(img: Image, model: str) -> int:
     """Visual tokens for this model's tier (repo rule, config.image_tokens)."""
-    tiers = config.IMAGE_TIERS if model.startswith("claude-sonnet-5") else config.IMAGE_TIERS[1:]
+    tiers = config.IMAGE_TIERS if model.startswith(HIGH_RES_PREFIXES) else config.IMAGE_TIERS[1:]
     edge, cap = tiers[0]
     return config._patch_tokens(*config._resized_size(img.width, img.height, edge, cap))
 
 
 def api_size(img: Image, model: str) -> tuple[int, int]:
-    tiers = config.IMAGE_TIERS if model.startswith("claude-sonnet-5") else config.IMAGE_TIERS[1:]
+    tiers = config.IMAGE_TIERS if model.startswith(HIGH_RES_PREFIXES) else config.IMAGE_TIERS[1:]
     edge, cap = tiers[0]
     return config._resized_size(img.width, img.height, edge, cap)
 
@@ -642,16 +665,18 @@ class Request:
     rep: int = 0
     expected_out: int = 1800
     thinking: Optional[dict] = None   # None = repo convention (thinking_kwargs)
+    extra: Optional[dict] = None      # extra API kwargs, e.g. output_config effort
 
     def thinking_kw(self) -> dict:
-        return {"thinking": self.thinking} if self.thinking else thinking_kwargs(self.model)
+        kw = {"thinking": self.thinking} if self.thinking else thinking_kwargs(self.model)
+        return {**kw, **(self.extra or {})}
 
     def key_dict(self) -> dict:
         return {"model": self.model, "max_tokens": self.max_tokens, "system": self.system,
                 "content": [{"image": c.sha, "mt": c.media_type} if isinstance(c, Image) else {"text": c}
                             for c in self.content],
                 "schema": self.schema.model_json_schema(), "thinking": self.thinking_kw(),
-                "rep": self.rep}
+                "rep": self.rep, **({"extra": self.extra} if self.extra else {})}
 
     def input_est(self) -> int:
         n = text_tokens_est(self.system)
@@ -660,7 +685,7 @@ class Request:
         return n
 
     def worst_case(self) -> float:
-        p = price(self.model)
+        p = guard_price(self.model)
         return 1.10 * self.input_est() / 1e6 * p["in"] + self.max_tokens / 1e6 * p["out"]
 
     def expected(self) -> float:
@@ -730,7 +755,7 @@ class Runner:
                     raise AccessError(str(exc)) from exc
                 continue
             usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
-            cost = llm.cost_of(resp.usage, req.model)
+            cost = cost_usd(resp.usage, req.model)
             parsed = resp.parsed_output
             self.ledger.record({"arm": req.arm, "page": req.page, "rep": req.rep, "model": req.model,
                                 "key": key, "status": "ok" if parsed is not None else "unparsed",
@@ -945,6 +970,289 @@ def user_text(slug: str, page: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-line crops from audited line outlines (follow-up arm)
+# ---------------------------------------------------------------------------
+#
+# Each audited line has a frame (centre cx, cy and clockwise angle, y down, in
+# the audit image's pixels) and a box [u0, v0, u1, v1] in that frame. A strip
+# is resampled straight (bilinear) from the finest source: the PDF's embedded
+# photo at native size when it is finer than the audit image, else the audit
+# image itself. The geometry is the owner's audit, so this arm measures
+# reading alone, not line finding.
+
+LINE_SCALE_CAP = 1.6          # enlargement over the source's native pixels
+LINE_MARGIN_V = 0.30          # of the line box height, above and below
+LINE_MARGIN_U_PX = 16         # native px, left and right
+CONTEXT_MARK_RGB = (220, 0, 0)
+EXCLUDE_LINES = {"h1": {0}}   # p1 line 0: audited outline sits on an underline
+
+
+def load_audit(pid: str) -> dict:
+    slug, page = PAGES[pid]
+    _check(slug, page)
+    return json.loads((ROOT / "books" / slug / "truth" / f"{page:04d}.geometry.audit.json").read_text())
+
+
+def frame_point(frame: dict, u: float, v: float) -> tuple[float, float]:
+    """Line-frame (u along the line, v down) -> image (x right, y down)."""
+    a = math.radians(frame["angle_deg"])
+    return (frame["cx"] + u * math.cos(a) - v * math.sin(a),
+            frame["cy"] + u * math.sin(a) + v * math.cos(a))
+
+
+def sample_affine(arr, x0: float, y0: float, ux: tuple, vy: tuple, width: int, height: int):
+    """Bilinear resample of arr (H, W, C uint8): output pixel (i, j) reads
+    source point (x0, y0) + j*ux + i*vy. Points outside the source are white."""
+    import numpy as np
+    jj, ii = np.meshgrid(np.arange(width, dtype=np.float64), np.arange(height, dtype=np.float64))
+    xs = x0 + jj * ux[0] + ii * vy[0]
+    ys = y0 + jj * ux[1] + ii * vy[1]
+    H, W, C = arr.shape
+    x0f, y0f = np.floor(xs), np.floor(ys)
+    fx, fy = (xs - x0f)[..., None], (ys - y0f)[..., None]
+    xi, yi = x0f.astype(int), y0f.astype(int)
+    pad = np.pad(arr, ((1, 2), (1, 2), (0, 0)), constant_values=255).astype(np.float64)
+    xi = np.clip(xi + 1, 0, W + 1)
+    yi = np.clip(yi + 1, 0, H + 1)
+    out = (pad[yi, xi] * (1 - fx) * (1 - fy) + pad[yi, xi + 1] * fx * (1 - fy)
+           + pad[yi + 1, xi] * (1 - fx) * fy + pad[yi + 1, xi + 1] * fx * fy)
+    outside = (xs < -0.5) | (ys < -0.5) | (xs > W - 0.5) | (ys > H - 0.5)
+    out[outside] = 255
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+
+
+def png_from_array(arr) -> bytes:
+    import fitz
+    import numpy as np
+    arr = np.ascontiguousarray(arr)
+    cs = fitz.csGRAY if arr.shape[2] == 1 else fitz.csRGB
+    return fitz.Pixmap(cs, arr.shape[1], arr.shape[0], arr.tobytes(), False).tobytes("png")
+
+
+def line_source(pid: str):
+    """(array, k, ox, oy, src_kind): audit px (x, y) -> source px (k*x + ox, k*y + oy)."""
+    import fitz
+    import numpy as np
+    slug, page = PAGES[pid]
+    audit = load_audit(pid)
+    zoom = audit["image"]["zoom"]
+    pix, ppt, kind = band_source(slug, page)
+    if kind == "embedded_native":
+        doc = fitz.open(str(ROOT / "books" / slug / "source.pdf"))
+        info = max((i for i in doc[page - 1].get_image_info(xrefs=True) if i.get("xref")),
+                   key=lambda i: i["width"] * i["height"])
+        bx0, by0 = info["bbox"][0], info["bbox"][1]
+        k = ppt / zoom
+        ox, oy = -bx0 * ppt, -by0 * ppt
+    else:
+        apath = ROOT / audit["image"]["path"]
+        pix = fitz.Pixmap(apath.read_bytes())
+        if pix.alpha:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        k, ox, oy, kind = 1.0, 0.0, 0.0, "audit_image"
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    return arr, k, ox, oy, kind
+
+
+def crop_line(arr, k, ox, oy, line: dict, context_lines: tuple = (), scale_cap: float = LINE_SCALE_CAP,
+              pitch: float = 0.0):
+    """Straightened, enlarged strip of one audited line. With context_lines
+    (the neighbouring audited lines), the strip extends to cover them and the
+    target line is marked with red bars in the left and right margins.
+    Returns (array, meta)."""
+    import numpy as np
+    u0, v0, u1, v1 = line["box"]
+    bh = v1 - v0
+    mv = LINE_MARGIN_V * bh
+    mu = LINE_MARGIN_U_PX / k
+    top, bot = v0 - mv, v1 + mv
+    if context_lines:
+        top = min(top, v0 - pitch - mv)
+        bot = max(bot, v1 + pitch + mv)
+        for nb in context_lines:
+            u0 = min(u0, nb["box"][0])
+            u1 = max(u1, nb["box"][2])
+        mu = 3 * LINE_MARGIN_U_PX / k
+    left, right = u0 - mu, u1 + mu
+    w_native = (right - left) * k
+    edge = config.IMAGE_TIERS[0][0]
+    scale = min(scale_cap, (edge - 1) / w_native)
+    width = int(w_native * scale)
+    height = int((bot - top) * k * scale)
+    while config._patch_tokens(width, height) > config.IMAGE_TIERS[0][1]:
+        scale *= 0.95
+        width, height = int(w_native * scale), int((bot - top) * k * scale)
+    step = 1.0 / (k * scale)            # audit px per output px
+    a = math.radians(line["frame"]["angle_deg"])
+    ux = (math.cos(a) * step * k, math.sin(a) * step * k)
+    vy = (-math.sin(a) * step * k, math.cos(a) * step * k)
+    sx, sy = frame_point(line["frame"], left, top)
+    out = sample_affine(arr, k * sx + ox, k * sy + oy, ux, vy, width, height)
+    if context_lines:
+        t0 = int((v0 - top) * k * scale)
+        t1 = int((v1 - top) * k * scale)
+        bar = max(4, int(LINE_MARGIN_U_PX * scale * 0.6))
+        for x_lo in (0, width - bar):
+            out[max(0, t0):t1, x_lo:x_lo + bar] = CONTEXT_MARK_RGB[:out.shape[2]] if out.shape[2] == 3 else 0
+    return out, {"scale": round(scale, 3), "box_h_px": round(bh * k * scale, 1), "w": width, "h": height}
+
+
+def line_images(pid: str, context: bool = False) -> list[Optional[Image]]:
+    """One Image per audited line (None for excluded and page-number lines)."""
+    import statistics as st
+    audit = load_audit(pid)
+    lines = audit["lines"]
+    arr, k, ox, oy, kind = line_source(pid)
+    cys = [l["frame"]["cy"] for l in lines]
+    pitch = st.median([b - a for a, b in zip(cys, cys[1:])])
+    truth = [l for l in truth_lines(pid) if l.strip()]
+    out: list[Optional[Image]] = []
+    for i, line in enumerate(lines):
+        if i in EXCLUDE_LINES.get(pid, set()) or _PAGE_NO_LINE.match(strict_fold(truth[i]).strip()):
+            out.append(None)
+            continue
+        ctx = tuple(lines[j] for j in (i - 1, i + 1) if 0 <= j < len(lines)) if context else ()
+        a, meta = crop_line(arr, k, ox, oy, line, ctx, pitch=pitch)
+        out.append(Image(png_from_array(a), "image/png", meta["w"], meta["h"],
+                         f"line{i}:{kind}:x{meta['scale']}:box{meta['box_h_px']}"))
+    return out
+
+
+PERLINE_RULES = READ_RULES.replace(
+    "- Completeness: transcribe every printed line of body text, top to bottom, including headings. Never skip a line.\n",
+    "- Write every word of the line, right to left, in order. Do not add words from outside the line.\n")
+
+LINE_SYSTEM_SINGLE = (
+    "You are an expert transcriber of Persian (Farsi) typewritten and printed documents. "
+    "You receive one straightened, enlarged image of a single printed line cut from a photographed page. "
+    "Partial letters of the lines above and below may show at the top and bottom edges: ignore them.\n\n"
+    + PERLINE_RULES + "OUTPUT\n- `text`: the printed line, exactly as typed, as one string. No Markdown.")
+
+LINE_SYSTEM_BATCH = (
+    "You are an expert transcriber of Persian (Farsi) typewritten and printed documents. "
+    "You receive {n} straightened, enlarged images, each of a single printed line cut from a photographed page, "
+    "each preceded by a label \"Line k:\". Partial letters of neighbouring lines may show at the top and bottom "
+    "edges: ignore them.\n\n"
+    + PERLINE_RULES
+    + "OUTPUT\n- `lines`: one entry per image, echoing its label number as line_index, with `text`: that image's "
+    "printed line exactly as typed. Each entry must come from its own image alone: never move, repeat or "
+    "complete words across images, and do not read the images as running prose. No Markdown.")
+
+LINE_SYSTEM_CONTEXT = (
+    "You are an expert transcriber of Persian (Farsi) typewritten and printed documents. "
+    "You receive {n} straightened, enlarged images cut from a photographed page, each preceded by a label "
+    "\"Line k:\". Each image shows three printed lines; the TARGET line is the one between the red bars at the "
+    "left and right edges. The lines above and below are there only so you can see the context: never copy "
+    "words from them.\n\n"
+    + PERLINE_RULES
+    + "OUTPUT\n- `lines`: one entry per image, echoing its label number as line_index, with `text`: that "
+    "image's TARGET line exactly as typed. Each entry must come from its own target line alone. No Markdown.")
+
+
+class LineText(BaseModel):
+    text: str = Field(description="The printed line, exactly as typed.")
+
+
+class IndexedLine(BaseModel):
+    line_index: int = Field(description="The k from the image's 'Line k:' label.")
+    text: str = Field(description="That image's printed line, exactly as typed.")
+
+
+class IndexedLines(BaseModel):
+    lines: list[IndexedLine]
+
+
+PERLINE_ARMS = {   # arm: (model, mode, context)
+    "pl_s1": (config.MODEL_STRONG, "single", False),
+    "pl_s": (config.MODEL_STRONG, "batch", False),
+    "pl_o": (MODEL_OPUS, "batch", False),
+    "pl_o1": (MODEL_OPUS, "single", False),
+    "pl_s_ctx": (config.MODEL_STRONG, "batch", True),
+    "pl_o_ctx": (MODEL_OPUS, "batch", True),
+}
+OPUS_EFFORT = "medium"   # thinking cannot be disabled on Opus 5.5; effort is the control
+
+
+def _model_kwargs(model: str) -> dict:
+    return {"extra": {"output_config": {"effort": OPUS_EFFORT}}} if model == MODEL_OPUS else {}
+
+
+def perline_requests(arm: str, pid: str, rep: int = 0) -> list[tuple[list[int], Request]]:
+    """[(audit line indices covered, request)]."""
+    model, mode, ctx = PERLINE_ARMS[arm]
+    imgs = line_images(pid, context=ctx)
+    idx = [i for i, im in enumerate(imgs) if im is not None]
+    out = []
+    if mode == "single":
+        for i in idx:
+            out.append(([i], Request(arm, f"{pid}:L{i}", model, LINE_SYSTEM_SINGLE,
+                                     [imgs[i], "Transcribe this line following the system instructions."],
+                                     LineText, max_tokens=2000, rep=rep, expected_out=150 if model != MODEL_OPUS else 600,
+                                     **_model_kwargs(model))))
+        return out
+    content: list = []
+    for k, i in enumerate(idx, 1):
+        content += [f"Line {k}:", imgs[i]]
+    content.append(f"Transcribe each of the {len(idx)} line images above following the system instructions.")
+    system = (LINE_SYSTEM_CONTEXT if ctx else LINE_SYSTEM_BATCH).format(n=len(idx))
+    out.append((idx, Request(arm, pid, model, system, content, IndexedLines, max_tokens=12000, rep=rep,
+                             expected_out=2500 if model != MODEL_OPUS else 6000, **_model_kwargs(model))))
+    return out
+
+
+def perline_output(runner: "Runner", arm: str, pid: str, rep: int, call: bool = False) -> Optional[dict]:
+    """Assemble per-line texts in audit order; None if anything is uncached
+    (unless call=True, which pays for missing requests)."""
+    n = len(load_audit(pid)["lines"])
+    texts = [""] * n
+    cost, usage = 0.0, {"input_tokens": 0, "output_tokens": 0}
+    missing_idx = []
+    for idx, req in perline_requests(arm, pid, rep):
+        rec = runner.call(req) if call else runner.cached(req)
+        if rec is None:
+            return None
+        cost += rec["cost"]
+        for k2 in usage:
+            usage[k2] += rec["usage"][k2]
+        p = rec["parsed"]
+        if "text" in p:
+            texts[idx[0]] = p["text"]
+        else:
+            got = {e["line_index"]: e["text"] for e in p["lines"]}
+            for k, i in enumerate(idx, 1):
+                if k in got:
+                    texts[i] = got[k]
+                else:
+                    missing_idx.append(i)
+    return {"md": None, "lines": texts, "cost": cost, "usage": usage, "missing_lines": missing_idx}
+
+
+def truth_tokens_wild(pid: str, wild: frozenset = frozenset()) -> list[Tok]:
+    """Truth tokens with the given (non-blank) truth lines turned into wildcards."""
+    lines = [l for l in truth_lines(pid) if l.strip()]
+    lines = [" ".join(MARK_UNK for _ in l.split()) if i in wild else l for i, l in enumerate(lines)]
+    return tokenize_lines(lines)
+
+
+def per_line_errors(truth: list[Tok], hyp: list[Tok]) -> dict:
+    """Lenient errors per truth line (insertions go to the line of the next
+    truth token). Returns counts, perfect lines and concentration."""
+    r, h, ops, events = lenient_alignment(truth, hyp)
+    nlines = (r[-1].line + 1) if r else 0
+    graded = {t.line for t in r if t.text != MARK_UNK}
+    per = {L: 0 for L in sorted(graded)}
+    for e in events:
+        ri = min(e.ref, len(r) - 1)
+        L = r[ri].line
+        if L in per:
+            per[L] += 1
+    errs = sorted(per.values(), reverse=True)
+    total = sum(errs)
+    return {"lines": len(per), "perfect_lines": sum(1 for v in errs if v == 0), "errors": total,
+            "worst5_share": (sum(errs[:5]) / total) if total else 0.0, "per_line": per}
+
+
+# ---------------------------------------------------------------------------
 # Arms
 # ---------------------------------------------------------------------------
 
@@ -966,13 +1274,16 @@ def build_request(arm: str, pid: str, rep: int = 0) -> Request:
     if arm == "folded":
         return Request(arm, pid, config.MODEL_STRONG, FOLDED_SYSTEM,
                        [whole_page_image(slug, page), ut], PageWithLines, rep=rep, expected_out=3200)
-    if arm in ("t1", "t1t4", "t1r", "t1r_think"):
+    if arm in ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus"):
         imgs, _ = band_images(slug, page)
         content: list = []
         for k, im in enumerate(imgs, 1):
             content += [f"Band {k}:", im]
         content.append(ut.replace("Transcribe this page", f"Transcribe the {len(imgs)} bands of this page"))
         sysf = {"t1": BANDS_CURRENT_SYSTEM, "t1t4": BANDS_DIPLOMATIC_SYSTEM}.get(arm, BANDS_READ_SYSTEM)
+        if arm == "t1r_opus":
+            return Request(arm, pid, MODEL_OPUS, sysf(len(imgs)), content, BandsReading, rep=rep,
+                           max_tokens=12000, expected_out=4000, **_model_kwargs(MODEL_OPUS))
         if arm == "t1r_think":
             return Request(arm, pid, config.MODEL_STRONG, sysf(len(imgs)), content, BandsReading, rep=rep,
                            max_tokens=16000, expected_out=6000, thinking={"type": "adaptive"})
@@ -981,7 +1292,7 @@ def build_request(arm: str, pid: str, rep: int = 0) -> Request:
     raise KeyError(arm)
 
 
-ARMS = ("current", "t1", "t4", "t1t4", "lines", "folded", "lines_haiku", "t1r", "t1r_think")
+ARMS = ("current", "t1", "t4", "t1t4", "lines", "folded", "lines_haiku", "t1r", "t1r_think", "t1r_opus")
 
 
 def output_of(rec: dict, arm: str) -> dict:
@@ -993,7 +1304,7 @@ def output_of(rec: dict, arm: str) -> dict:
         return {"md": None, "lines": p["lines"]}
     if arm == "folded":
         return {"md": p["text_md"], "lines": p["printed_lines"], "confidence": p.get("confidence")}
-    if arm in ("t1", "t1t4", "t1r", "t1r_think"):
+    if arm in ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus"):
         bands = sorted(p["bands"], key=lambda b: b["band_index"])
         lines, warns = stitch_bands([b["lines"] for b in bands])
         return {"md": None, "lines": lines, "band_warnings": warns,
@@ -1110,6 +1421,22 @@ def cmd_run(args) -> None:
                   f"${rec['cost']:.4f} stop={rec.get('stop_reason')}  ledger ${runner.ledger.total():.4f}")
 
 
+def cmd_runpl(args) -> None:
+    runner = Runner()
+    pids = args.pages.split(",") if args.pages else ALL_PIDS
+    for arm in args.arms:
+        for pid in pids:
+            before = runner.ledger.total()
+            try:
+                out = perline_output(runner, arm, pid, args.rep, call=True)
+            except (BudgetExceeded, AccessError, RuntimeError) as exc:
+                print(f"STOP: {type(exc).__name__}: {exc}")
+                return
+            print(f"{arm:9s} {pid:5s} rep{args.rep} in={out['usage']['input_tokens']} out={out['usage']['output_tokens']} "
+                  f"${out['cost']:.4f} paid_now=${runner.ledger.total() - before:.4f} missing={out['missing_lines']} "
+                  f"ledger ${runner.ledger.total():.4f}", flush=True)
+
+
 def _cached_runs(runner: Runner, arm: str, pid: str) -> list[tuple[int, dict]]:
     out = []
     for rep in range(6):
@@ -1122,7 +1449,7 @@ def _cached_runs(runner: Runner, arm: str, pid: str) -> list[tuple[int, dict]]:
 def effective_px(pid: str, arm: str) -> dict:
     slug, page = PAGES[pid]
     g = line_geometry(pid)
-    if arm in ("t1", "t1t4", "t1r", "t1r_think"):
+    if arm in ("t1", "t1t4", "t1r", "t1r_think", "t1r_opus"):
         imgs, meta = band_images(slug, page)
         scale = min(api_size(i, config.MODEL_STRONG)[0] / i.width for i in imgs)
         ppt = meta["px_per_pt"]
@@ -1183,10 +1510,20 @@ def cmd_score(_args) -> None:
         results["pages"][pid] = pr
     results["t2"] = score_t2(runner)
     results["votes"] = score_votes(runner)
+    results["perline"] = score_perline(runner)
     (OUT / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=1))
     (OUT / "errors_detail.txt").write_text("\n".join(detail_lines), encoding="utf-8")
-    print(summary_table(results))
-    (OUT / "summary.txt").write_text(summary_table(results), encoding="utf-8")
+    text = summary_table(results) + "\n\n" + perline_table(results["perline"])
+    print(text)
+    (OUT / "summary.txt").write_text(text, encoding="utf-8")
+    pl_detail = []
+    for pid in ALL_PIDS:
+        for arm in ("pl_o", "pl_s", "pl_o_ctx", "t1r_opus"):
+            for rep in range(3):
+                got = _any_tokens(runner, pid, arm, rep)
+                if got:
+                    pl_detail.append(_detail_tokens(pid, arm, rep, got[0]))
+    (OUT / "errors_detail_perline.txt").write_text("\n".join(pl_detail), encoding="utf-8")
 
 
 T2_PAIRS = [  # (name, primary (arm, rep), secondary (arm, rep))
@@ -1263,6 +1600,93 @@ def score_t2(runner) -> list[dict]:
     return rows
 
 
+PL_COMPARE = ("pl_o", "pl_o1", "pl_s", "pl_s1", "pl_o_ctx", "pl_s_ctx", "t1r_opus", "t1r", "current")
+PL_T2 = [
+    ("pl_o vs t1r (best Sonnet whole-page arm)", ("pl_o", 0), ("t1r", 0)),
+    ("pl_o vs current", ("pl_o", 0), ("current", 0)),
+    ("pl_o vs pl_o(rep1)", ("pl_o", 0), ("pl_o", 1)),
+    ("pl_o vs pl_s (same crops, Sonnet)", ("pl_o", 0), ("pl_s", 0)),
+    ("pl_o vs t1r_opus (same model, bands)", ("pl_o", 0), ("t1r_opus", 0)),
+    ("t1r_opus vs t1r", ("t1r_opus", 0), ("t1r", 0)),
+    ("t1r vs current (earlier best pair)", ("t1r", 0), ("current", 0)),
+]
+
+
+def _any_tokens(runner, pid, arm, rep):
+    if arm in PERLINE_ARMS:
+        o = perline_output(runner, arm, pid, rep)
+        return None if o is None else (tokenize_lines(o["lines"]), o)
+    rec = runner.cached(build_request(arm, pid, rep))
+    if rec is None:
+        return None
+    o = output_of(rec, arm)
+    return hyp_tokens(o, "md" if o.get("md") is not None else "lines"), {**o, "cost": rec["cost"], "usage": rec["usage"]}
+
+
+def score_perline(runner) -> dict:
+    """Per-line follow-up: all arms scored against truth with EXCLUDE_LINES as
+    wildcards (so whole-page and per-line arms are compared on the same words)."""
+    rows, t2 = [], []
+    for pid in ALL_PIDS:
+        truth = truth_tokens_wild(pid, frozenset(EXCLUDE_LINES.get(pid, ())))
+        for arm in PL_COMPARE:
+            for rep in range(4):
+                got = _any_tokens(runner, pid, arm, rep)
+                if got is None:
+                    continue
+                hyp, o = got
+                row = {"page": pid, "arm": arm, "rep": rep, "cost": o.get("cost"), "usage": o.get("usage"),
+                       **{f: wer(truth, hyp, f) for f in FOLDINGS},
+                       "invented": len(invented_words(truth, hyp)), "markers": marker_stats(truth, hyp),
+                       "per_line": per_line_errors(truth, hyp)}
+                if o.get("lines") is not None:
+                    row["linebreaks"] = line_stats([l for l in truth_lines(pid) if l.strip()], o["lines"])
+                if o.get("missing_lines"):
+                    row["missing_lines"] = o["missing_lines"]
+                rows.append(row)
+        for name, (pa, pr), (sa, sr) in PL_T2:
+            P, S = _any_tokens(runner, pid, pa, pr), _any_tokens(runner, pid, sa, sr)
+            if P is None or S is None:
+                continue
+            t2.append({"pair": name, "page": pid, **t2_stats(truth, P[0], S[0])})
+    return {"rows": rows, "t2": t2}
+
+
+def perline_table(pl: dict) -> str:
+    out = ["PER-LINE FOLLOW-UP (truth with excluded lines as wildcards: h1 line 0)",
+           "page  arm        rep strict  lenient (err/n)   inv  unk guess(ok/wrong) in-mark perfect-lines worst5  cost"]
+    for r in pl["rows"]:
+        m, p = r["markers"], r["per_line"]
+        cost = f"${r['cost']:.4f}" if r.get("cost") is not None else "-"
+        out.append(f"{r['page']:5s} {r['arm']:10s} {r['rep']}  {r['strict']['wer']:.3f}   {r['lenient']['wer']:.3f} "
+                   f"({r['lenient']['errors']:3d}/{r['lenient']['n_truth']})  {r['invented']:3d}  {m['markers_unk']:3d} "
+                   f"{m['markers_guess']:2d}({m['guess_correct']}/{m['guess_wrong']})      {m['errors_in_markers']:3d}   "
+                   f"{p['perfect_lines']:2d}/{p['lines']:2d}      {p['worst5_share']:.2f}   {cost}")
+    out.append("")
+    out.append("T2 pair (per-line follow-up)                 page  recall (caught/err)  flag rate")
+    for t in pl["t2"]:
+        out.append(f"{t['pair']:44s} {t['page']:5s} {t['recall']:.2f} ({t['caught']}/{t['errors']})   "
+                   f"{t['flag_rate']:.3f} ({t['flagged_words']}+{t['flagged_gaps']}/{t['primary_words']})")
+    return "\n".join(out)
+
+
+def _detail_tokens(pid, arm, rep, hyp) -> str:
+    truth = truth_tokens_wild(pid, frozenset(EXCLUDE_LINES.get(pid, ())))
+    r, h, ops, ev = lenient_alignment(truth, hyp)
+    lines = [f"=== {pid} {arm} rep{rep}: {len(ev)} lenient errors"]
+    ref_pos = 0
+    for op in ops:
+        if op.ref:
+            ref_pos = op.ref[0]
+        if op.kind in ("match", "join", "split"):
+            continue
+        rt = " ".join(r[i].text for i in op.ref)
+        ht = " ".join(h[j].text + ("*" if h[j].marker else "") for j in op.hyp)
+        tl = r[min(ref_pos, len(r) - 1)].line + 1
+        lines.append(f"  {op.kind:4s} truthline {tl}: [{rt}] -> [{ht}]")
+    return "\n".join(lines)
+
+
 def _detail(pid, arm, rep, out) -> str:
     truth = truth_tokens(pid)
     hyp = hyp_tokens(out, "md" if out.get("md") is not None else "lines")
@@ -1320,10 +1744,14 @@ def main(argv=None) -> None:
     pr.add_argument("arms", nargs="+", choices=ARMS)
     pr.add_argument("--pages", default=None, help="comma list of " + ",".join(PAGES))
     pr.add_argument("--rep", type=int, default=0)
+    pl = sub.add_parser("runpl")
+    pl.add_argument("arms", nargs="+", choices=list(PERLINE_ARMS))
+    pl.add_argument("--pages", default=None)
+    pl.add_argument("--rep", type=int, default=0)
     sub.add_parser("score")
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
-    {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "score": cmd_score}[args.cmd](args)
+    {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "runpl": cmd_runpl, "score": cmd_score}[args.cmd](args)
 
 
 if __name__ == "__main__":

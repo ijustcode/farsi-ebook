@@ -139,6 +139,7 @@ are new in this review.
 | **E22** | The reviewed p2 text still contains strings that are not Persian legal prose and do not match the image ("و در رقاب او", "جزء شریانند", "در رقتی"), and fluent phrases not visibly on the page ("لازم‌الاجرا و معتبر است"). | read `text/0002.md` beside `pages/hires/0002.png` | verified by reading; exact error rate needs step 1 truth |
 | **E23** | The Markdown is normalized, not diplomatic: it inserts ZWNJ ("می‌گردد" where the print has no break) and splits words the print fuses ("به وسیله" for printed "بوسیله"). | same comparison | verified |
 | **E25** | The API's 4,784-token image cap downsizes the 1821×2576 hi-res render again, to about 1623×2296 (scale 0.891; `count_tokens` returned 4,759). The model therefore sees about 68% of hadpi's native linear resolution, and 0.89× of the render on any portrait page of any book. Native bands of at most 82×58 patches are not downsized (3,775 tokens measured). The `config.py` comment saying there is no API downscaling is wrong for portrait pages. | `tests/transcription_experiments.py` (`effective_px`), `messages.count_tokens` | verified 2026-11-12 |
+| **E26** | Claude Opus 5.5 (effort medium; $4/$20 per MTok taken from the claude-api skill's table, not from a bill) costs about $0.085–0.09 per hadpi page in one batched call (about 13k input, 1.8k output tokens), for 3 bands or for about 30 line crops. Opus cannot run with thinking disabled. | `tests/transcription_experiments.py` (`runpl`, `run t1r_opus`); ledger | measured 2026-11-12 |
 | **E24** | Tesseract 5.5.2 is installed, with only `osd` data: no `fas`. kraken is not installed anywhere on PATH. PyMuPDF 1.28 has `Page.insert_htmlbox`. | `tesseract --list-langs`; `which kraken` | verified |
 
 **Diagnosis (unchanged from v1, now with a fourth cause):**
@@ -569,6 +570,45 @@ typewriter joins); strict "as printed" WER is 7–24 points higher on hadpi.
   of that kind explains. Follow-up arm: per-line crop reading, Sonnet 5 and a stronger model, on
   the remaining Step 2 budget. Until it is measured, "hadpi is beyond word-level transcription"
   holds only for whole-page reading with Sonnet 5.
+
+**Step 2 follow-up (2026-11-12, +$1.04; Step 2 total $2.86 of $3).** The model is the dominant
+lever, not the cropping.
+
+| Arm | hadpi p1 | hadpi p2 | controls |
+|---|---|---|---|
+| Opus 5.5, straightened line crops, batched, 2 runs ($0.088/page) | 2.9–4.3% | 4.2–5.3% | 1.5% / 1.4% |
+| Opus 5.5, the same 3 native bands as before, 1 run ($0.086–0.089/page) | 2.3% | 4.5% | – |
+| Opus 5.5, one line crop per request ($0.257/page) | – | 9.5% | – |
+| Sonnet 5, line crops, batched, 1 run ($0.043/page) | 22.7% | 46.3% | – |
+| Sonnet 5, bands + revised prompt, 3 runs (from above) | 11.5–21.2% | 30.9–35.9% | 1.8% / 1.0% |
+
+- Opus reading bands is as good as Opus reading straightened lines; Sonnet reading lines is worse
+  than Sonnet reading bands. Per-line cropping adds nothing for reading. Spread for Opus is small
+  (10 and 15 errors on p1; 14 and 18 on p2).
+- Strict "as printed" WER on p2 stays 23–31% for Opus: the remainder is joins, ZWNJ and
+  punctuation spacing, not misread words. T7 (keep both forms) still matters for the aligner.
+- Against the criteria, for Opus: WER halves and is near or under 5% (**pass**); invented words
+  1 per run on p1 (**pass**), 4–7 on p2 (**fail**); two Opus readings by different routes (bands
+  vs line crops) flag about 80–87% of errors with 4–5% of words flagged (**pass under the restated
+  criterion**); controls 5 and 4 errors against 3 and 0 for the current pipeline, **unresolved**
+  because several of those look like errors in the stored control text.
+- Opus uses the unreadable marker (17 of its 57 errors over four hadpi runs sit inside markers),
+  correctly on stamp-covered words and over-cautiously on the company name.
+- **Anchoring caveat, attached to every Opus number here:** the hadpi truth was made by
+  correcting a draft that an Opus-class model read from similar crops. These numbers are weaker
+  evidence than the Sonnet ones. They do not explain Sonnet being 5–10 times worse on identical
+  crops. **An unbiased test needs owner text truth for held-out hadpi p3–p5, before adoption.**
+- The earlier conclusion "beyond word-level transcription" is **withdrawn**: it held for Sonnet 5.
+- Not run: the context variant (crop with neighbouring lines), cut for budget; repeats of Opus on
+  bands; Opus on the whole page with the current prompt; effort levels other than medium.
+- Truth spots for the owner's second look (page and line as in `truth/crops/` names): hadpi p2
+  line 15 (a number: three Opus readings agree on a value different from the truth); words under
+  the stamp on hadpi p1 line 30 and p2 lines 30–31; majid p23 lines 2, 3, 12, 15 and p109 lines
+  9, 14 (letter-level differences where the stored text may be the one that is wrong).
+- **Proposed for the owner (not adopted):** escalate hard no-oracle pages (review gate fires:
+  confidence < 0.70 or `illegible`) to Opus 5.5 reading native bands with the revised prompt,
+  about $0.09/page; keep Sonnet 5 for clean pages; use a second Opus reading by a different route
+  as the review flag where wanted (+$0.09/page).
 
 ### Step 3 — Line finding (research venv for L2/L3; $0)
 

@@ -123,6 +123,71 @@ def test_vote3():
     check([t.text for t in voted] == ["الف", "بب"], "vote drops doubly-deleted word")
 
 
+def test_line_crop():
+    import math
+    import numpy as np
+    # frame_point: zero angle is a translation; 90 degrees maps u to +y
+    check(te.frame_point({"cx": 10, "cy": 20, "angle_deg": 0}, 5, -2) == (15, 18), "frame_point 0deg")
+    x, y = te.frame_point({"cx": 0, "cy": 0, "angle_deg": 90}, 1, 0)
+    check(abs(x) < 1e-9 and abs(y - 1) < 1e-9, "frame_point 90deg")
+    # identity resample reproduces the source
+    rng = np.random.default_rng(0)
+    src = rng.integers(0, 255, (20, 30, 3), dtype=np.uint8)
+    out = te.sample_affine(src, 0, 0, (1, 0), (0, 1), 30, 20)
+    check(np.array_equal(out, src), "identity resample")
+    # a dark bar drawn along a 5-degree line comes out horizontal and centred
+    H, W = 300, 600
+    img = np.full((H, W, 3), 255, np.uint8)
+    frame = {"cx": 300.0, "cy": 150.0, "angle_deg": 5.0}
+    a = math.radians(5)
+    yy, xx = np.mgrid[0:H, 0:W]
+    u = (xx - 300) * math.cos(a) + (yy - 150) * math.sin(a)
+    v = -(xx - 300) * math.sin(a) + (yy - 150) * math.cos(a)
+    img[(np.abs(u) <= 200) & (np.abs(v) <= 10)] = 0
+    line = {"frame": frame, "box": [-200, -10, 200, 10]}
+    crop, meta = te.crop_line(img, 1.0, 0.0, 0.0, line)
+    check(abs(meta["scale"] - te.LINE_SCALE_CAP) < 1e-9 and abs(meta["box_h_px"] - 20 * te.LINE_SCALE_CAP) < 1e-6,
+          f"crop meta {meta}")
+    rows = crop[..., 0].mean(axis=1)
+    dark = np.where(rows < 80)[0]
+    check(len(dark) > 0 and abs((dark[0] + dark[-1]) / 2 - crop.shape[0] / 2) <= 2, f"bar centred {dark[:3]}")
+    check(rows[0] > 250 and rows[-1] > 250, "margins white")
+    cols = crop[crop.shape[0] // 2, :, 0]
+    check((cols[20:-20] < 80).mean() > 0.95, "bar straight along the whole strip")
+    # context crop: taller, with red marks on the target rows only
+    nb = [{"frame": frame, "box": [-200, -40, 200, -20]}, {"frame": frame, "box": [-200, 20, 200, 40]}]
+    ctx, cm = te.crop_line(img, 1.0, 0.0, 0.0, line, tuple(nb), pitch=30.0)
+    check(ctx.shape[0] > crop.shape[0], "context crop is taller")
+    red = (ctx[..., 0] > 200) & (ctx[..., 1] < 40)
+    rr = np.where(red.any(axis=1))[0]
+    check(len(rr) > 0 and abs((rr[0] + rr[-1]) / 2 - ctx.shape[0] / 2) <= 3, "target marked")
+    # PNG encode round-trip size
+    import fitz
+    pix = fitz.Pixmap(te.png_from_array(crop))
+    check((pix.width, pix.height) == (crop.shape[1], crop.shape[0]), "png size")
+
+
+def test_per_line_errors():
+    truth = te.tokenize_lines(["الف بب", "جج دد", "هه وو"])
+    hyp = te.tokenize_lines(["الف بب", "جج XX", "هه وو ZZ"])
+    pl = te.per_line_errors(truth, hyp)
+    check(pl["lines"] == 3 and pl["perfect_lines"] == 1 and pl["errors"] == 2, f"per line {pl}")
+    check(pl["per_line"] == {0: 0, 1: 1, 2: 1}, f"per line map {pl['per_line']}")
+
+
+def test_truth_wild():
+    orig = te.truth_lines
+    te.truth_lines = lambda pid: ["عنوان", "", "الف بب جج"]
+    try:
+        t = te.truth_tokens_wild("x", frozenset({0}))
+    finally:
+        te.truth_lines = orig
+    check([x.text for x in t] == [te.MARK_UNK, "الف", "بب", "جج"], f"wild tokens {[x.text for x in t]}")
+    # excluded line: an arm that skips it and one that reads it both score 0
+    check(te.wer(t, te.tokenize_lines(["الف بب جج"]), "lenient")["errors"] == 0, "skip excluded")
+    check(te.wer(t, te.tokenize_lines(["عنوان", "الف بب جج"]), "lenient")["errors"] == 0, "read excluded")
+
+
 def test_stitch():
     a = ["سطر یک اول", "سطر دو دوم", "سطر سه سوم", "سطر چهار چهارم"]
     b = ["سطر سه سوم", "سطر چهار چهارم", "سطر پنج پنجم", "سطر شش ششم"]
