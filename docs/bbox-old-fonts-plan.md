@@ -138,6 +138,7 @@ are new in this review.
 | **E21** | Human review changed 49 of 417 words on p1, 42 of 396 on p2, and 3–10 on p3–p5 (word-level diff of `.orig.md` vs `.md`). | `difflib` over the two files | verified; note the review may be incomplete |
 | **E22** | The reviewed p2 text still contains strings that are not Persian legal prose and do not match the image ("و در رقاب او", "جزء شریانند", "در رقتی"), and fluent phrases not visibly on the page ("لازم‌الاجرا و معتبر است"). | read `text/0002.md` beside `pages/hires/0002.png` | verified by reading; exact error rate needs step 1 truth |
 | **E23** | The Markdown is normalized, not diplomatic: it inserts ZWNJ ("می‌گردد" where the print has no break) and splits words the print fuses ("به وسیله" for printed "بوسیله"). | same comparison | verified |
+| **E25** | The API's 4,784-token image cap downsizes the 1821×2576 hi-res render again, to about 1623×2296 (scale 0.891; `count_tokens` returned 4,759). The model therefore sees about 68% of hadpi's native linear resolution, and 0.89× of the render on any portrait page of any book. Native bands of at most 82×58 patches are not downsized (3,775 tokens measured). The `config.py` comment saying there is no API downscaling is wrong for portrait pages. | `tests/transcription_experiments.py` (`effective_px`), `messages.count_tokens` | verified 2026-11-12 |
 | **E24** | Tesseract 5.5.2 is installed, with only `osd` data: no `fas`. kraken is not installed anywhere on PATH. PyMuPDF 1.28 has `Page.insert_htmlbox`. | `tesseract --list-langs`; `which kraken` | verified |
 
 **Diagnosis (unchanged from v1, now with a fourth cause):**
@@ -527,6 +528,47 @@ the gate.
 - **KILL:** no arm brings hadpi WER under 10% and T2 flag recall is under 60%. Then the page is
   beyond current transcription, placement on it must stay at `line` level, and the owner is told
   so explicitly. Placement work continues for readable pages.
+
+**Step 2 result (2026-11-12, $1.82 of the $3 cap; `tests/transcription_experiments.py`).**
+No arm passes on hadpi. WER below is the lenient folding (ignores ZWNJ, punctuation and pure
+typewriter joins); strict "as printed" WER is 7–24 points higher on hadpi.
+
+| Arm (Sonnet 5 unless stated) | hadpi p1 | hadpi p2 | controls (majid p23 / p109) |
+|---|---|---|---|
+| Stored text (what the owner has) | 14.9% | 35.3% | – |
+| Current pipeline, 3 runs | 17.2–33.5% | 32.9–39.5% | 0.9% / 0.0% |
+| T1 native-resolution bands, 2 runs | 19.5–20.1% | 32.9–34.1% | 1.8% / 0.7% |
+| T4 diplomatic prompt, whole page | 35.5% | 49.9% | 0.6% / 1.0% |
+| Bands + revised prompt (added arm), 3 runs | 11.5–21.2% | 30.9–35.9% | 1.8% / 1.0% |
+| Same with adaptive thinking, 1 run | 13.5% | 37.1% | – |
+| Haiku 4.5 line reading | 92.6% | 94.7% | 36.3% / 21.6% |
+
+- **Run-to-run spread is as large as the differences between arms** (current pipeline on p1: 60, 90
+  and 117 errors in three runs). Bands plus the revised prompt beat the current pipeline on p1 in
+  mean only, with overlapping ranges, and show no difference on p2.
+- Invented words: 9–41 per page for the best arm (criterion: ≤ 1). The model almost never uses
+  the unreadable marker, so markers cannot be relied on to find errors (T4, D3).
+- T2: two readings that differ in prompt and resolution catch about 80% of errors but flag
+  22–34% of hadpi words (0.7–2% on the clean controls). Two runs of the same arm share most
+  errors. Usable as a page/line review trigger (T3), not as a word-level error locator. The
+  criterion "≥ 80% recall with ≤ 10% flagged" is unreachable when WER exceeds 10%; restate it as
+  flag rate ≤ WER + 5 points, and ≤ 3% on clean pages.
+- Line-faithful reading: a separate whole-page call is unreliable on hard pages (24, 32, 42 and
+  once 2 lines); read from bands it gives 29–32 lines on hadpi (77–100% of breaks right) and is
+  exact on the controls. §4.2 should take line text from the banded reading.
+- Remaining errors (best arm): 36% letter- or dot-level misreadings of a real word, 27% unrelated
+  words substituted or inserted, 15% dropped words; about 40% of errors sit on 5 of ~30 lines
+  per page (faint lines, stamp-covered lines).
+- **PASS criteria fail. KILL is formally not triggered** (T2 recall ≈ 0.8, but only at a high flag
+  rate).
+- **Not tested, and the reason this is not yet a kill:** a stronger model, and reading one
+  straightened, enlarged line at a time. The owner's text-truth draft was made that way (line
+  crops, read by an Opus-class agent) and needed about 1 correction on p1 and about 7 on p2,
+  against 40–133 errors for every whole-page arm here. That comparison is biased in the draft's
+  favour (the truth was made by correcting that draft), but the gap is far larger than any bias
+  of that kind explains. Follow-up arm: per-line crop reading, Sonnet 5 and a stronger model, on
+  the remaining Step 2 budget. Until it is measured, "hadpi is beyond word-level transcription"
+  holds only for whole-page reading with Sonnet 5.
 
 ### Step 3 — Line finding (research venv for L2/L3; $0)
 
