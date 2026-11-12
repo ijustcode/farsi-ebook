@@ -876,7 +876,9 @@ def align_line(li: LineInk, pieces: list[Piece], model: WidthModel, mref: float,
     # observations for re-estimation: only pieces of confident words
     conf_words = {w for w, d in enumerate(words) if not d["deleted"] and d["margin"] >= P["LEARN_MARGIN"]}
     obs_p = [(p, E) for p, E in obs_p if p.word in conf_words]
-    return LineAlignment(total, words, groups, skipped, N, obs_p, obs_g, obs_f)
+    al = LineAlignment(total, words, groups, skipped, N, obs_p, obs_g, obs_f)
+    al.fused_cuts = sorted({float(v[1]) for k, v in piece_span.items() if v[3]})   # cuts placed inside ink
+    return al
 
 
 def DEL_ALL(pieces):
@@ -1074,6 +1076,8 @@ def place_jobs(ev_sw: float, jobs: list[LineJob], *, nottext: bool = True, width
                                reason=f"word position not trusted ({why})", other_ok=other_ok)
         out.append(res)
     diag["model"] = model.snapshot()
+    diag["aligns"] = aligns            # per job: LineAlignment of the final round (or None)
+    diag["prepared"] = prepared        # per job: (pieces, visual order)
     return out, model, diag
 
 

@@ -745,6 +745,45 @@ All rates use the strict scorer ("located and correct" over all graded words).
   lines at 2–5% error; (3) arm C (kraken/torch, D5), the published answer, an install and an
   unverified Persian model. D5 goes back to the owner with these numbers after (1) and (2).
 
+**Step 4 continuation: arms V and R (2026-11-12, $0.67 of the $1 cap; `tests/word_placer_v.py`,
+`tests/word_placer_r.py`).** Strict scorer; "within 1 letter" is a diagnostic added for every arm
+(right word and line, each horizontal edge within one letter), not the headline.
+
+| Experiment A (audited lines + truth text) | hadpi (729): correct, precision; within 1 letter | majid (632): correct, precision; within 1 letter |
+|---|---|---|
+| Draft splitter | 70.8%, 70.8%; 76.0% | 97.2%, 97.2%; 97.8% |
+| G | 40.3%, 87.2%; 45.7% | 64.1%, 98.3%; 64.9% |
+| **R** (render and warp) | 55.0%, 55.6%; 70.9% | **95.9%, 95.9%; 97.8%** |
+| **R∧G** (located only where R and G agree) | 49.0%, 85.0%; 56.5% | **91.9%, 98.1%; 93.4%** |
+| V, numbered candidate cuts, Opus 5.5 (p1 / p23 only) | 30/367, precision 30/351 | 53/336, precision 53/330 |
+| V, same, Sonnet 5 | 18/367, precision 18/297 | 20/336, precision 20/101 |
+
+End to end with L1 lines (B): R 44.2% at 55.3% on hadpi; 82.1% at 95.6% on majid (89 words
+unresolved on p23 through untrusted line assignment); R∧G 79.6% at 97.7% on majid. p66 (A): R
+97.8%, R∧G 89.0% at 99.4%. Synthetic untouched seeds (A, the page's own face excluded from R's
+candidates): clean R 97.5%, R∧G 91.7% at 99.6%; hard R 61.2%; nastaliq R 84.4% (G: 25%).
+
+- **Arm V is dropped as a word locator.** Given one straightened line and its word list, with
+  numbered candidate cuts or a pixel ruler, neither Sonnet 5 nor Opus 5.5 localises words: 5–16%
+  of V-located words are correct, on clean book print as well as on hadpi. The answers divide the
+  line by proportion and drift. Repeats and one-line-per-request confirm it. A model that reads
+  the line at 2–5% error still cannot point at its words. V∧G and a G+V hybrid add little and the
+  hybrid lowers precision.
+- **Arm R solves printed pages** and replaces G as the lead arm there, with R∧G agreement as the
+  `located` rule: the first configuration near the clean-page targets (≥ 95% at ≥ 98%): 91.9% at
+  98.1% with truth lines; 79.6% at 97.7% end to end, where the loss is line-text assignment on
+  p23, not word placement.
+- **hadpi is still far off**: R 55% at 56%; R∧G 49% at 85%. No installed face resembles the
+  typewriter (R picked DecoType Naskh on p1 and Tahoma on p2). No arm meets the hard-page targets
+  or the 70% kill line with usable precision.
+- Text errors (C5): on majid R keeps 75.8% of intact words correct but places substituted words
+  confidently (0 of 13 flagged); on hadpi 39.1%. §4.4 still fails.
+- Not run: V under B and C5 (V had already failed under A); Opus above effort low; sparser marks.
+- **Next, at $0, before D5:** a page-trained template aligner (arm T): learn each letter form's
+  appearance from the page itself by forced alignment of the known text, starting from R's
+  alignment. This is the recogniser-based alignment of the literature (§13.3) without an
+  external model or install. If it fails, D5 (kraken/torch) goes to the owner.
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases

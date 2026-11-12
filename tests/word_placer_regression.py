@@ -195,6 +195,88 @@ def main() -> int:
     same = all(a1[k]["status"] == a2[k]["status"] and a1[k]["segments"] == a2[k]["segments"] for k in a1) and a1.keys() == a2.keys()
     check(same, "two runs give identical statuses and boxes")
 
+
+    # ---- 7. arm V machinery (no API: canned answers and a fake client) ----
+    print("7. arm V: marks, parsing, budget guard, cache, hybrid routing")
+    import tempfile
+    from types import SimpleNamespace
+    import word_placer_v as V
+    page = page_of("typewriter", 216, preset="tw_photo_medium")
+    ev = WP.page_evidence(page["gray"])
+    _, _, r, texts, lines, meta = E.v_lines(page, "A", "mark", ev=ev)
+    ln, toks, crop, png = lines[2]
+    check(len(crop.marks) >= len(toks) + 1, f"line has {len(crop.marks)} candidate marks for {len(toks)} words")
+    check(V.text_area_untouched(png, crop), "mark overlay never touches the text area (margin only)")
+    sep = [b[1] - a[1] for a, b in zip(crop.marks, crop.marks[1:])]
+    check(min(sep) * crop.scale >= V.VP["MARK_MIN_SEP"] - 1e-6, f"marks at least {V.VP['MARK_MIN_SEP']} crop px apart")
+    _, _, _, _, lines_c, _ = E.v_lines(page, "A", "coord", ev=ev)
+    check(V.text_area_untouched(lines_c[2][3], lines_c[2][2]), "ruler overlay never touches the text area")
+    import transcription_experiments as TE
+    im = V.make_image(png, crop.img.shape[1], crop.img.shape[0], "t")
+    check(TE.api_size(im, V.MODEL_SONNET) == (crop.img.shape[1], crop.img.shape[0]),
+          f"crop {crop.img.shape[1]}x{crop.img.shape[0]} is not downsized by the API (<= 2576 px, <= 4784 tokens)")
+    # parsing canned answers
+    check(V.parse_word("3-7") == (3, 7, True), "parse 'R-L'")
+    check(V.parse_word("3-?") == (3, None, True), "parse 'R-?' (no visible boundary)")
+    check(V.parse_word("absent") == (None, None, False), "parse 'absent' (word not on the line)")
+    check(V.parse_word("garbage")[2] is None, "unparseable answer is flagged, not guessed")
+    n = len(crop.marks)
+    canned = ["1-3", "3-?", "absent"] + ["x"] * (len(toks) - 3)
+    iv = V.answer_intervals(canned, crop, "mark", len(toks))
+    check(iv[0]["interval"] is not None and iv[1]["interval"] is None and iv[2]["present"] is False,
+          "canned answers: located span, touching edge -> no span, absent -> not on line")
+    # stray ink outside every word: a span between marks 2 and 3 leaves mark 1..2 ink unassigned
+    iv2 = V.answer_intervals(["2-3"], crop, "mark", 1)
+    q = WP.snap_words(crop and meta[ln - 1][0], [iv2[0]["interval"]], ev.sw, r["model"].unit, ev.hc)[0]
+    s_ext = V.quad_s_extent(meta[ln - 1][0], q) if q else None
+    m2 = dict((k, s_) for k, s_, _ in crop.marks)
+    check(s_ext is not None and s_ext[0] >= m2[2] - 1.0, "ink right of the word's right mark is left out (not text)")
+    vres = V.v_results(meta[ln - 1][0], toks, iv, ev.sw, r["model"].unit, ev.hc, None)
+    check({x["status"] for x in vres} <= ALLOWED, "V statuses only located/line/unresolved")
+    # hybrid routing
+    g_ok = [dict(status="located"), dict(status="located")]
+    g_mixed = [dict(status="located"), dict(status="line")]
+    check(not V.route_line(g_ok) and V.route_line(g_mixed), "hybrid asks V only for lines G did not fully locate")
+    hy = V.hybrid_results(g_mixed, [dict(status="line", tag="v0"), dict(status="located", tag="v1")])
+    check(hy[0]["status"] == "located" and "tag" not in hy[0] and hy[1].get("tag") == "v1",
+          "hybrid keeps G's located words and takes V for the rest")
+    # budget guard and cache with a fake client
+    calls = []
+
+    class FakeMessages:
+        def parse(self, **kw):
+            calls.append(kw["model"])
+            return SimpleNamespace(usage=SimpleNamespace(input_tokens=1000, output_tokens=50),
+                                   parsed_output=V.VAnswer(lines=[V.VLine(line=ln, words=["1-2"] * len(toks))]),
+                                   stop_reason="end_turn")
+
+    fake = lambda: SimpleNamespace(messages=FakeMessages())  # noqa: E731
+    with tempfile.TemporaryDirectory() as tmp:
+        run = V.runner(cap=1.0, client_factory=fake, out=Path(tmp))
+        (_, req), = V.build_requests("synth:A", [lines[2]], "mark", V.MODEL_SONNET, arm="t", batch=1)
+        rec1 = run.call(req)
+        rec2 = run.call(req)
+        check(len(calls) == 1 and rec2.get("cache_hit") is True, "second identical request is a cache hit (no second call)")
+        tiny = V.runner(cap=0.001, client_factory=fake, out=Path(tmp) / "tiny")
+        (_, req_o), = V.build_requests("synth:A", [lines[3]], "mark", V.MODEL_OPUS, arm="t", batch=1)
+        refused = False
+        try:
+            tiny.call(req_o)
+        except TE.BudgetExceeded:
+            refused = True
+        check(refused and len(calls) == 1, "budget guard refuses a call whose worst case would pass the cap (no call made)")
+        check(req_o.worst_case() > req.worst_case(), "Opus worst case is padded above Sonnet's")
+
+    # ---- 8. arm R (render + warp) on a clean page, own face excluded ----
+    print("8. arm R")
+    page = page_of("modern_naskh", 211, preset="clean")
+    ev = WP.page_evidence(page["gray"])
+    arms_r, rinfo = E.run_R(page, "A", ev=ev)
+    _, smR = score(page, arms_r["R"])
+    check(rinfo["font"] is not None and "Vazirmatn" not in str(rinfo["font"]), f"R chose {rinfo['font']} (page's own face excluded)")
+    check(statuses(arms_r["R"]) <= ALLOWED and statuses(arms_r["RG"]) <= ALLOWED, "R statuses only located/line/unresolved")
+    check(smR["located_correct"]["rate"] >= 0.0, f"R located&correct {smR['located_correct']['k']}/{smR['located_correct']['n']} (reported, no floor)")
+
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
         print("  - " + f)

@@ -34,6 +34,7 @@ under books/. Every real-page scoring is appended to out/word_placer/run_log.txt
 from __future__ import annotations
 
 import argparse
+import os
 import datetime as dt
 import difflib
 import json
@@ -237,6 +238,7 @@ def run_G(page, exp, *, nottext=True, width_mode="free", texts=None, src=None, e
         info["mapped_words"] = len(m)
         info["md_tokens"] = len(toks)
         info["boundary_margins"] = {str(k): round(v, 2) for k, v in r["boundary_margin"].items()}
+    info["_r"] = r                     # raw placement (not serialised)
     info["seconds_place"] = round(time.perf_counter() - t0, 2)
     info["seconds_l1"] = round(ev.seconds, 2)
     info["model"] = r["diag"]["model"]
@@ -355,12 +357,33 @@ def run_draft(page):
     return per_word, {}
 
 
+def within_one_letter(tp, key, placed, row) -> bool:
+    """DIAGNOSTIC (not the headline): a located box whose best-covered word
+    is the target (not shifted, not on another line) and whose two
+    horizontal edges are each within 1.0 letter of the truth word's edges,
+    measured in the truth line's frame. The strict rule's tolerance is half a
+    letter; this is the looser reading the owner may decide the UI needs."""
+    if not placed or placed.get("status") != "located" or not placed.get("segments"):
+        return False
+    if row.get("outcome") in ("shifted", "wrong_line", "off_text", "no_box"):
+        return False
+    w = tp.word(*key)
+    L = tp.lines[key[0]]
+    pts = [p for sgm in placed["segments"] for p in rt.region_poly(sgm, tp.W, tp.H)]
+    fb = ba.quad_to_frame_box(L.frame, pts)
+    letter = (w.fbox[2] - w.fbox[0]) / max(1.0, w.letters)
+    return abs(fb[0] - w.fbox[0]) <= letter and abs(fb[2] - w.fbox[2]) <= letter
+
+
 def grade_page(page, per_word, seed=7, n_spans=60):
     tp = page["truth_page"]
     words, spans = rt.build_targets(tp, seed, n_spans)
     wrows, srows = [], []
     for tg in words:
-        wrows.append(dict(rt.grade_target(tp, tg.words, per_word.get(tg.words[0])), tid=tg.tid))
+        pl = per_word.get(tg.words[0])
+        row = dict(rt.grade_target(tp, tg.words, pl), tid=tg.tid)
+        row["within1"] = bool(within_one_letter(tp, tg.words[0], pl, row))
+        wrows.append(row)
     for tg in spans:
         srows.append(dict(rt.grade_target(tp, tg.words, span_placed([per_word.get(k) for k in tg.words])), tid=tg.tid))
     return wrows, srows
@@ -487,11 +510,21 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
                 continue
             if arm == "Gc" and exp not in ("A", "B"):
                 continue
+            if arm == "R" and exp not in ("A", "B", "C5"):
+                continue
             if arm == "draft" and exp == "B":
                 continue      # the draft has its own lines: reported once, under A and B alike
             t0 = time.perf_counter()
             status = None
             info = {}
+            if arm == "R":
+                texts = src = None
+                if exp == "C5":
+                    texts, src, status, _ = corrupt_lines(page["texts"], 0.05, seed=hash_seed(page["name"], exp))
+                arms_r, rinfo = run_R(page, exp, ev=ev, texts=texts, src=src)
+                for nm, pw_ in arms_r.items():
+                    rows.append(_score_arm(page, exp, nm, pw_, rinfo, status, time.perf_counter() - t0, verbose))
+                continue
             if arm == "draft":
                 pw, info = run_draft(page)
             elif exp in ("A", "B"):
@@ -515,8 +548,9 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
             sw_ = rt.summarize_targets([(tp, wrows)], True)
             ss_ = rt.summarize_targets([(tp, srows)], False)
             row = dict(page=page["name"], exp=exp, arm=arm, words=_slim(sw_), spans=_slim(ss_),
+                       within1=sum(r_["within1"] for r_ in wrows),
                        seconds=round(secs + (ev.seconds if arm != "draft" else 0.0), 2),
-                       info={k: v for k, v in info.items() if k not in ("rounds",)})
+                       info={k: v for k, v in info.items() if k not in ("rounds", "_r")})
             if status is not None:
                 row["corruption"] = corruption_metrics(wrows, status)
             row["_wrows"] = wrows
@@ -536,6 +570,28 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
                       f"  prec {pr['k']}/{pr['n']}  wl {sw_['wrong_line']['k']}  O1 {sw_['O1_cascades']['count']}"
                       f"  O2 {sw_['O2_boundary']['k']}  {secs:.1f}s{extra}", flush=True)
     return rows
+
+
+def _score_arm(page, exp, name, pw, info, status, secs, verbose):
+    tp = page["truth_page"]
+    wrows, srows = grade_page(page, pw)
+    sw_ = rt.summarize_targets([(tp, wrows)], True)
+    ss_ = rt.summarize_targets([(tp, srows)], False)
+    row = dict(page=page["name"], exp=exp, arm=name, words=_slim(sw_), spans=_slim(ss_),
+               within1=sum(r_["within1"] for r_ in wrows), seconds=round(secs, 2), info=info,
+               outcomes_located_wrong=rt._count(x["outcome"] for x in wrows if x["status"] == "located" and not x["correct"]))
+    if status is not None:
+        row["corruption"] = corruption_metrics(wrows, status)
+    if verbose:
+        lc = sw_["located_correct"]; pr = sw_["located_precision"]
+        extra = ""
+        if "corruption" in row:
+            c = row["corruption"]
+            extra = f" kept {c['kept_correct']}/{c['kept']} corrupt-notloc {c['corrupted_not_located']}/{c['corrupted']}"
+        print(f"    {page['name'][:34]:34s} {exp:3s} {name:5s} loc&corr {lc['k']:3d}/{lc['n']:3d} = {lc['rate']:.3f}"
+              f"  prec {pr['k']}/{pr['n']}  within1 {row['within1']}  wl {sw_['wrong_line']['k']}  O1 {sw_['O1_cascades']['count']}"
+              f"  O2 {sw_['O2_boundary']['k']}  {secs:.1f}s {info.get('font')}{extra}", flush=True)
+    return row
 
 
 def hash_seed(name, exp):
@@ -558,10 +614,11 @@ def aggregate(rows, key):
                                                                           wrong_line=0, o1=0, o1_words=0, o2=0,
                                                                           line=0, unresolved=0, seconds=[],
                                                                           span_n=0, span_loc_correct=0, span_located=0,
-                                                                          kept=0, kept_correct=0, corrupted=0,
+                                                                          kept=0, kept_correct=0, corrupted=0, within1=0,
                                                                           corrupted_not_located=0, sub=0, sub_not_located=0))
         w = r["words"]
         d["pages"] += 1
+        d["within1"] += r.get("within1", 0)
         d["n"] += w["n"]
         d["loc_correct"] += w["located_correct"]["k"]
         d["located"] += w["located_precision"]["n"]
@@ -595,6 +652,7 @@ def fmt_agg(agg):
             s = (f"    {ea:10s} loc&corr {d['loc_correct']:5d}/{d['n']:<5d} = {d['loc_correct'] / n:6.1%}"
                  f"  prec {d['loc_correct'] if False else ''}{_prec(d)}  wrong-line {d['wrong_line']}/{d['n']}"
                  f"  O1 {d['o1']} ({d['o1_words']} w)  O2 {d['o2']}  line {d['line']}  unres {d['unresolved']}"
+                 f"  [diag: located&within-1-letter {d['within1']}/{d['n']} = {d['within1'] / n:.1%}]"
                  f"  spans {d['span_loc_correct']}/{d['span_n']}")
             if d["kept"]:
                 s += (f"  | kept correct {d['kept_correct']}/{d['kept']} = {d['kept_correct'] / d['kept']:.1%}"
@@ -645,6 +703,16 @@ def main(argv=None) -> int:
     r.add_argument("--keys", nargs="*", default=None, help="slug/page subset")
     r.add_argument("--note", required=True, help="why this real-page scoring is run (logged)")
     r.add_argument("--out", default=None)
+    v = sub.add_parser("vrun")
+    v.add_argument("--mode", choices=("mark", "coord"), default="mark")
+    v.add_argument("--model", choices=("sonnet", "opus"), default="sonnet")
+    v.add_argument("--exps", nargs="*", default=["A"])
+    v.add_argument("--keys", nargs="*", default=None)
+    v.add_argument("--batch", type=int, default=None)
+    v.add_argument("--rep", type=int, default=0)
+    v.add_argument("--plan", action="store_true", help="estimate cost only; no API call")
+    v.add_argument("--max-lines", type=int, default=None, help="only the first N lines (smoke)")
+    v.add_argument("--note", default="")
     t2 = sub.add_parser("twofold")
     t2.add_argument("results")
     o = sub.add_parser("overlay-real")
@@ -676,6 +744,8 @@ def main(argv=None) -> int:
         return cmd_real(a)
     if a.cmd == "overlay-real":
         return cmd_overlay_real(a)
+    if a.cmd == "vrun":
+        return cmd_vrun(a)
     if a.cmd == "twofold":
         res = twofold(a.results)
         for r in res:
@@ -813,6 +883,203 @@ def twofold(results_path, pages=("hadpi-articles/1", "hadpi-articles/2"), target
                                 test_at_default_tau=dict(tau=WP.P["LOC_MARGIN"], correct=dflt["correct"], located=dflt["located"],
                                                          precision=dflt["precision"])))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Arm V (line crops; paid) and the hybrid
+# ---------------------------------------------------------------------------
+def v_lines(page, exp, mode, *, ev, texts=None, src=None):
+    """Run G (the source of candidates, the routing signal and the line
+    geometry), then build one crop per trusted text line."""
+    import word_placer_v as V
+    gexp = "A" if exp == "A" else ("C" if exp.startswith("C") else "B")
+    pwG, info = run_G(page, gexp, texts=texts, src=src, ev=ev)
+    r = info["_r"]
+    texts_used = texts if texts is not None else page["texts"]
+    lines, meta = [], {}
+    for i, toks in enumerate(texts_used):
+        if not toks:
+            continue
+        if gexp == "A":
+            j, trusted = i, True
+        else:
+            j = r["assign"][i]
+            trusted = j is not None and r["la"]["margin"][i] >= WP.P["LA_MARGIN"]
+        if j is None or not trusted:
+            continue
+        li = r["inks"][j]
+        if not li.M:
+            continue
+        al = r["diag"]["aligns"][i]
+        crop = V.line_strip(page["gray"], li, ev.hc)
+        if mode == "mark":
+            crop.marks = V.candidate_marks(li, al, crop)
+        png = V.render_png(crop, mode)
+        lines.append((i + 1, list(toks), crop, png))
+        meta[i] = (li, al, crop)
+    return pwG, info, r, texts_used, lines, meta
+
+
+def run_V(page, exp, mode, model, *, ev, run=None, rep=0, batch=None, dry=False, texts=None, src=None,
+          max_lines=None):
+    """Returns (arms {name: per_word}, cost info). dry=True: plan only."""
+    import word_placer_v as V
+    pwG, info, r, texts_used, lines, meta = v_lines(page, exp, mode, ev=ev, texts=texts, src=src)
+    if max_lines:
+        keep = {ln for ln, *_ in lines[:max_lines]}
+        lines = [x for x in lines if x[0] in keep]
+        meta = {i: m for i, m in meta.items() if i + 1 in keep}
+    tag = "s" if model == V.MODEL_SONNET else "o"
+    arm = f"V{mode}-{tag}" + (f"-b{batch}" if batch else "") + (f"-r{rep}" if rep else "")
+    reqs = V.build_requests(f"{page['name']}:{exp}", lines, mode, model, arm=arm, rep=rep, batch=batch)
+    cost = dict(requests=len(reqs), lines=len(lines), expected=sum(q.expected() for _, q in reqs),
+                worst=sum(q.worst_case() for _, q in reqs), input_est=sum(q.input_est() for _, q in reqs))
+    if dry:
+        return None, cost
+    answers, line_cost = {}, {}
+    actual = 0.0
+    for lns, req in reqs:
+        rec = run.call(req)
+        actual += rec["cost"]
+        ans = V.parse_response(rec)
+        toks_img = {im["label"]: im["api_tokens_est"] for im in rec.get("images", [])}
+        tot = sum(toks_img.values()) or 1
+        for ln in lns:
+            answers[ln] = ans.get(ln)
+            share = toks_img.get(f"{page['name']}:{exp}:l{ln}", tot / len(lns)) / tot
+            line_cost[ln] = rec["cost"] * share
+    W, H = page["truth_page"].W, page["truth_page"].H
+    unit = r["model"].unit
+    arms = {f"{arm}": {}, f"VG{mode}-{tag}" + (f"-r{rep}" if rep else ""): {},
+            f"H{mode}-{tag}" + (f"-r{rep}" if rep else ""): {}}
+    names = list(arms)
+    routed_cost = 0.0
+    n_routed = 0
+    for i, toks in enumerate(texts_used):
+        g_line = r["results"][i]
+        if i in meta:
+            li, al, crop = meta[i]
+            lq = next((x.get("line_quad") for x in g_line if x.get("line_quad")), None)
+            ans = answers.get(i + 1) or []
+            iv = V.answer_intervals(ans, crop, mode, len(toks))
+            v = V.v_results(li, toks, iv, ev.sw, unit, ev.hc, lq)
+            vg = V.vg_results(li, v, g_line, unit)
+            routed = V.route_line(g_line)
+            h = V.hybrid_results(g_line, v if routed else None)
+            if routed:
+                routed_cost += line_cost.get(i + 1, 0.0)
+                n_routed += 1
+        else:
+            v = vg = h = [dict(x) for x in g_line]
+        for name, res in zip(names, (v, vg, h)):
+            for ti, x in enumerate(res):
+                key = src[i][ti] if src is not None else (i, ti)
+                if key is None:
+                    continue
+                arms[name][key] = to_placed(x, W, H)
+    cost.update(actual=round(actual, 5), hybrid_routed_lines=n_routed, hybrid_cost=round(routed_cost, 5))
+    return arms, cost
+
+
+def cmd_vrun(a):
+    """Arm V on real (or synthetic) pages: plan (no calls) or run."""
+    import word_placer_v as V
+    model = V.MODEL_OPUS if a.model == "opus" else V.MODEL_SONNET
+    keys = real_keys(a.keys)
+    run = None if a.plan else V.runner(cap=V.CAP_USD)
+    rows, costs = [], {}
+    for slug, pg in keys:
+        page = real_page(slug, pg)
+        ev = WP.page_evidence(page["gray"])
+        for exp in a.exps:
+            texts = src = status = None
+            if exp == "C5":
+                texts, src, status, _ = corrupt_lines(page["texts"], 0.05, seed=hash_seed(page["name"], exp))
+            arms, cost = run_V(page, exp, a.mode, model, ev=ev, run=run, rep=a.rep, batch=a.batch,
+                               dry=a.plan, texts=texts, src=src, max_lines=a.max_lines)
+            costs[f"{page['name']}:{exp}"] = cost
+            print(f"  {page['name']} {exp} {a.mode} {model}: {cost}", flush=True)
+            if a.plan:
+                continue
+            for name, pw in arms.items():
+                wrows, srows = grade_page(page, pw)
+                sw_ = rt.summarize_targets([(page["truth_page"], wrows)], True)
+                ss_ = rt.summarize_targets([(page["truth_page"], srows)], False)
+                row = dict(page=page["name"], exp=exp, arm=name, words=_slim(sw_), spans=_slim(ss_),
+                           within1=sum(x["within1"] for x in wrows), seconds=0.0, info={},
+                           group=rt.group_of(page["truth_page"]), cost=cost,
+                           outcomes_located_wrong=rt._count(x["outcome"] for x in wrows if x["status"] == "located" and not x["correct"]),
+                           reasons_not_located=rt._count((pw.get(tuple(x["target"][0])) or {}).get("reason", "").split(":")[0]
+                                                      for x in wrows if x["status"] != "located"))
+                if status is not None:
+                    row["corruption"] = corruption_metrics(wrows, status)
+                rows.append(row)
+                lc, pr = sw_["located_correct"], sw_["located_precision"]
+                print(f"    {name:14s} loc&corr {lc['k']}/{lc['n']} = {lc['rate']:.3f}  prec {pr['k']}/{pr['n']}"
+                      f"  within1 {row['within1']}  wl {sw_['wrong_line']['k']}  O1 {sw_['O1_cascades']['count']}"
+                      f"  O2 {sw_['O2_boundary']['k']}" + (f"  kept {row['corruption']['kept_correct']}/{row['corruption']['kept']}"
+                                                           f" corrupt-notloc {row['corruption']['corrupted_not_located']}/{row['corruption']['corrupted']}"
+                                                           if "corruption" in row else ""), flush=True)
+    tot = sum(c.get("expected", 0) for c in costs.values())
+    print(f"\n{'PLAN' if a.plan else 'RUN'} {a.mode} {model}: expected ${tot:.4f}, worst ${sum(c['worst'] for c in costs.values()):.4f}"
+          + ("" if a.plan else f", actual ${sum(c.get('actual', 0) for c in costs.values()):.4f}"))
+    if not a.plan:
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out = OUT / f"v_{a.mode}_{a.model}_{'-'.join(a.exps)}_b{a.batch or 0}_r{a.rep}_{stamp}.json"
+        out.write_text(json.dumps(dict(created_at=now(), code=code_fingerprint(), mode=a.mode, model=model,
+                                       batch=a.batch, rep=a.rep, rows=rows, costs=costs,
+                                       ledger_total=V.runner().ledger.total()),
+                                  ensure_ascii=False, indent=1, default=_np), encoding="utf-8")
+        with (OUT / "run_log.txt").open("a", encoding="utf-8") as f:
+            f.write(f"\n[{now()}] arm V real scoring -> {out.name} code {code_fingerprint()} mode {a.mode} model {model}"
+                    f" exps {a.exps} batch {a.batch} rep {a.rep}; note: {a.note}\n")
+        print(f"wrote {out}")
+    return 0
+
+
+def run_R(page, exp, *, ev, texts=None, src=None):
+    """Arm R (render + DTW) and R-and-G agreement. $0."""
+    import word_placer_r as R
+    import word_placer_v as V
+    gexp = "A" if exp == "A" else ("C" if exp.startswith("C") else "B")
+    pwG, info = run_G(page, gexp, texts=texts, src=src, ev=ev)
+    r = info["_r"]
+    texts_used = texts if texts is not None else page["texts"]
+    todo = []
+    for i, toks in enumerate(texts_used):
+        if not toks:
+            continue
+        if gexp == "A":
+            j, trusted = i, True
+        else:
+            j = r["assign"][i]
+            trusted = j is not None and r["la"]["margin"][i] >= WP.P["LA_MARGIN"]
+        if j is None or not trusted or not r["inks"][j].M:
+            continue
+        todo.append((i, r["inks"][j], list(toks)))
+    own = (page.get("spec") or {}).get("font")
+    font, fcosts = R.choose_font([(li, t) for _, li, t in todo], ev.sw, exclude=own)
+    W, H = page["truth_page"].W, page["truth_page"].H
+    unit = r["model"].unit
+    arms = {"R": {}, "RG": {}}
+    done = {}
+    for i, li, toks in todo:
+        iv, _c = R.align_line_r(li, toks, font, ev.sw) if font else (None, None)
+        g_line = r["results"][i]
+        lq = next((x.get("line_quad") for x in g_line if x.get("line_quad")), None)
+        ans = [dict(interval=x, present=True, why="" if x else "no rendered span") for x in (iv or [None] * len(toks))]
+        rv = V.v_results(li, toks, ans, ev.sw, unit, ev.hc, lq)
+        rv = [dict(x, reason=x["reason"].replace("V", "R", 1)) for x in rv]
+        done[i] = (rv, V.vg_results(li, rv, g_line, unit))
+    for i, toks in enumerate(texts_used):
+        g_line = r["results"][i]
+        rv, rg = done.get(i, ([dict(x) for x in g_line], [dict(x) for x in g_line]))
+        for name, res in (("R", rv), ("RG", rg)):
+            for ti, x in enumerate(res):
+                key = src[i][ti] if src is not None else (i, ti)
+                if key is not None:
+                    arms[name][key] = to_placed(x, W, H)
+    return arms, dict(font=os.path.basename(font) if font else None, font_costs=fcosts)
 
 
 def cmd_overlay_real(a):
