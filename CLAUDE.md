@@ -74,6 +74,7 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/box_audit_regression.py              # box-audit packet: contract, save/resume, undo, audited rule, HTTP
 ./venv/bin/python tests/real_truth_eval_regression.py        # real-page truth scorer: metrics, freeze/held-out refusals, exclusions
 ./venv/bin/python tests/transcription_experiments_regression.py # Step 2 scorer: WER foldings, T2 flags, band stitching, spend guard
+./venv/bin/python tests/line_finder_regression.py            # Step 3 line finder (research): recall, masking, rectification, determinism
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -117,6 +118,12 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - `tests/real_truth_eval.py freeze` records each audited `books/<slug>/truth/NNNN.geometry.audit.json` in a private `truth_freeze.json` (content SHA without the audit tool's `cursor`/`revision`, image SHA, counts, excluded lines). Lines with an owner text flag are excluded automatically (hadpi p1 line 0). `run` refuses a page whose audit no longer matches its freeze, and always refuses hadpi p3–p5 (held out). bachehaye_ghali p66 is `agent_audited` and is never pooled with owner-audited pages.
 - `run` (about 6 minutes, offline, forces a dead API base URL) scores line finders (`find_lines(page) -> [Region]`) and word placers (`place(page, targets) -> [{status, segments}]`) by page and by provenance/class, with Wilson intervals (optimistic: pages, not words, are the real unit). Word "correct" is **stricter than plan §1**: ≥90% of the truth word covered, under 0.5 letter taken from any other word, ≤25% blank overreach, so over-wide boxes fail; the plan-literal and covering-only rates are printed beside it. O1 cascades and O2 boundary errors (plan §13) are counted separately.
 - Baseline (2026-11-11, $0, evidence already on disk only): the live engine places 0 words correctly on all five pages. Hadpi p1–p2 and majid p23/p109 show no box at all (no reader evidence for those pages, so this says nothing about the engine with evidence); p66 is all `estimated` (boxes cover the target for 52/60 spans but are several times too wide: median IoU 0.15). `_scan_page_lines` clean line recall: hadpi 25/60 with 10 merges, majid 54/54, p66 31/32. Results: `out/real_truth/`.
+
+## Line finder for warped pages (plan Step 3; research code, not wired in)
+
+- `tests/line_finder.py` (arm L1, numpy only): finds text lines by following them locally, with adaptive binarisation, conservative non-text masking, a text-block edge fit and per-line rectification. `tests/line_finder_eval.py {synth,real,overlay-real}` scores four arms (current detector, current + mask, L1, L1 + mask) with `real_truth_eval.grade_lines`; results under `out/line_finder/`.
+- Result (2026-11-12): clean one-to-one line recall on hadpi p1–p2 is 60/60 with 0 merges (current `_scan_page_lines`: 25/60, 10 merges); majid 54/54; p66 32/32; synthetic untouched seeds 98.8% (current 51.0%). **It over-detects on hadpi: 20 spurious lines, almost all on signatures, handwriting, the stamp and the scanner logo below the text**, so the plan's "≤ 1 spurious per page" criterion fails as written (owner decision open). Marks just past a line's end are absorbed into the line, so a line's ink extent is not a trustworthy line start. hadpi p1–p2 were looked at during development; only held-out p3–p5 are an untouched test.
+- Production still uses `locate._scan_page_lines`. Do not wire L1 in before plan Step 6.
 
 ## Transcription experiments (plan Step 2)
 

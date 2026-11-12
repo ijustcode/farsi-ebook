@@ -586,6 +586,47 @@ typewriter joins); strict "as printed" WER is 7–24 points higher on hadpi.
   replan around full page dewarping.
 - Tie-break: L1 (no dependency) wins unless a neural arm is better by ≥ 3 points on any class.
 
+**Step 3 result (2026-11-12, $0).** Built `tests/line_finder.py` (arm L1: paper-field and
+Sauvola binarisation; conservative size/isolation masking with in-line restoration; strip peaks
+linked across the page with neighbour-slope prediction; robust quadratic centre curves; shear
+rectification; consensus text-block edge fit), `tests/line_finder_eval.py`,
+`tests/line_finder_regression.py`. L2 (kraken) and L3 (Surya) were not run: they need installs.
+
+| Data set (truth lines) | Current detector | L1 + masking |
+|---|---|---|
+| hadpi p1–p2 (60) | 25 clean, 10 merges, 5 spurious | **60 clean, 0 merges, 20 spurious** |
+| majid p23, p109 (54) | 54, 0, 0 | 54, 0, 0 |
+| p66 (32, agent-audited) | 31, 0, 0 | 32, 0, 0 |
+| synthetic, untouched seeds (1999) | 1019 (51.0%), 293 merges | 1975 (98.8%), 0 merges |
+
+- Against the criteria: recall ≥ 95% on hard real pages **passes** (100%); zero merges **passes**;
+  p66 **passes**; synthetic ≥ 97% per class **passes** on the untouched seeds (typewriter 98.4%,
+  nastaliq 99.1%, mixed 97.1%; mixed is 94.9% on the development seeds, because a bidi-wrapped
+  token's truth box spans two lines). Kill not triggered.
+- **"≤ 1 spurious line per page" fails as written: 11 and 9 on hadpi.** One per page lies inside
+  the text block (a mark past a line end; a typed underline). The rest lie below the body:
+  signatures, a handwritten name, the stamp, the scanner logo. None is in the truth and no ignore
+  zone covers them. **Open decision for the owner:** either count spurious lines only inside the
+  fitted text block (L1 then passes with 1 per page), or have those regions annotated. Until
+  decided, the criterion is recorded as failed. What matters downstream is whether §4.2's
+  line-to-text alignment leaves these extra lines without text; step 4 must measure that.
+- Masking: no truth word loses ink on any real page. It does not change recall on real pages
+  (recall comes from following lines locally); on synthetic pages it removes the merges caused by
+  stamps and signatures (23 → 0). On synthetic pages some text is lost where a stamp or signature
+  touches a heading through its underline.
+- Edge fit: within 0.02–0.13 letters on the book pages; on hadpi the median is 0.2 letters but
+  13 line starts are more than a letter off, because marks just past the line end are absorbed
+  into the line (§13 O1). The fit can also cut real text on ragged layouts. **Use it as a flag
+  (flush / inside / protrudes), not as a position.** Step 4 must not take a line's ink extent or
+  its fitted edge as the line's start; arm G's "not text" state is needed exactly there.
+- Real pages were scored three times during development; one rule (margin marks) and the
+  edge-fit method changed after seeing them (`out/line_finder/run_log.txt`). Recall on hadpi was
+  already 60/60 on the first scoring, before any change motivated by real pages. Still, hadpi
+  p1–p2 are no longer an untouched test for L1; held-out p3–p5 are.
+- 46 free parameters, all relative to stroke width, glyph height or line spacing. Run time
+  0.7–3.7 s per real page. Deterministic. Not covered: colour (real stamps are coloured; only
+  grey levels are used), real two-column verse, real footnotes.
+
 ### Step 4 — Word placement (≤ $1 API for arm V)
 
 - Inputs: step 3 lines; line text from truth first (isolates the aligner), then from step 2's
