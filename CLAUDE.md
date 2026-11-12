@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Box placement: current state and plan
 
 - **Current engine (experimental, never promoted):** two geometry sources only, `match` (embedded PDF text) then `scan` (image evidence through `scan.PlacementService`). Contracts, limits and history: `docs/bbox-consolidation.md`, `docs/geometry-best-attempt.md` (current coverage-first policy), `docs/page-geometry-coverage-status.md` (superseded strict-evidence experiment). The old `layout`/`scan_vlm` tiers, the QC-coordinate "model" fallback, `context_anchor_v1`/`legacy_v1` selection and the `locate_vlm*.json` caches are **removed from production**; they survive only as frozen evaluation snapshots under `tests/historical/`. Never restore them as live fallbacks.
-- **Approved plan for the next engine:** `docs/bbox-old-fonts-plan.md` (v2, owner decisions in §10). Only its Step 0 is implemented (below). Do not start later steps without the owner.
+- **Approved plan for the next engine:** `docs/bbox-old-fonts-plan.md` (v2, owner decisions in §10). Status 2026-11-12: Step 0 is in production (below). Steps 1–3 are done as instruments and research code under `tests/` (sections below); Step 4 (word placement) is in progress. **Nothing from Steps 2–4 is wired into production**; integration is Step 6 and needs the owner.
 - **Box counts are availability, not accuracy.** No audited held-out comparison has run. Do not call a box count accuracy or an instrument change a locator improvement.
 
 ## Commands
