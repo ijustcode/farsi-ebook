@@ -443,6 +443,14 @@ review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth dr
 - Feedback capture: tests pass; drag-to-fix was checked in a real browser (coordinates correct
   while zoomed). Multi-line boxes, spot-check panel, Shift-pan and Escape are covered by automated
   tests only.
+- Box-audit packet (geometry truth, §6.2): `tests/box_audit.py` drafted word rectangles for hadpi
+  p1–p2 (from the owner's line text) and ghessehaye-majid p23 (prose) and p109 (dialogue + a verse
+  couplet), and exposes the audited bachehaye_ghali p66 fixture in the same format; the owner audits
+  every line in a local tool (`serve`). The draft is text-constrained (strip-tracked line finder,
+  line-to-text DP, word-gap DP; uncertain lines/words flagged), **not** a locator candidate. On
+  synthetic typewriter pages it places 96–99% of words (photo preset) and 99%+ (clean), with at most
+  1 wrong word per page left unflagged; real hadpi pages are visibly harder (stamp lines,
+  margin specks, underlines). Not audited yet: no real-page number exists until the owner finishes.
 
 ### Step 2 — Transcription experiments (≤ $3 API)
 

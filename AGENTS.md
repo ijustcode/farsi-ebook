@@ -71,6 +71,7 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/review_pages_regression.py           # review --pages scope, --wait-for-boxes
 ./venv/bin/python tests/box_truth_regression.py              # review feedback capture: records, split, endpoints (uses node if present)
 ./venv/bin/python tests/synth_pages_regression.py            # synthetic page generator: determinism, truth transforms
+./venv/bin/python tests/box_audit_regression.py              # box-audit packet: contract, save/resume, undo, audited rule, HTTP
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -95,6 +96,17 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - **`box_truth.jsonl`** (project root, gitignored, append-only; `farsi2epub/feedback.py`): what the reviewer says about boxes. Review adds per-correction "on target" / "Wrong line" / "Fix box" (an explicit drawing mode: drag to draw, drag again per wrapped line, Shift-drag pans, Esc cancels) / "Undo mark", an optional header "Spot check" of 5 randomly sampled boxes per session, and a `text_edit` record per changed correction on Accept. Records carry the page image SHA-256, correction key (same id as `tests/bbox_benchmark.py`), the box that was shown with engine versions, and the human verdict/rectangles. Latest record wins per (image, correction, family); undo appends a `retract`. Each page is fixed to `dev` or `heldout` by a hash of its image SHA: **tune on `dev` only, gate on `heldout` only, and compute precision from spot-check records only** (fix/confirm records are biased). Overrides: `FARSI2EPUB_BOX_TRUTH_PATH`, `FARSI2EPUB_SPOT_SEED`. Feedback observes; it never changes engine output.
 - `./venv/bin/python tests/box_truth_replay.py` replays the store against the current engine offline (it may write derived box caches under the book's `locate_evidence/`).
 - **Synthetic benchmark** (`tests/synth_pages.py`; `synth_smoke_1a.py`, `synth_smoke_1b.py`): lays out Persian text with PyMuPDF in local fonts, degrades the image, and carries exact word/line truth through the same transform. Output goes to `out/synth/`; only the manifest is tracked. **Grade against each word's `ink_aabb`, not its layout box** (layout boxes miss ink in nastaliq and DecoType Naskh). Synthetic pages are easier than real photographed ones; real pages remain the gate. Hashes are tied to PyMuPDF 1.28.0 and the system font files.
+
+## Real-page geometry truth: the box-audit packet (plan §6.2)
+
+- `tests/box_audit.py` (+ `box_audit_draft.py`, `box_audit_ui.py`) drafts word rectangles for the five truth pages and serves a local audit tool: `./venv/bin/python tests/box_audit.py serve [--port 8770] [--open]` (127.0.0.1 only, stdlib, no browser unless `--open`). Other commands: `status`, `draft --slug S --page N [--force]`, `import-pilot`, `overlay`, `export`, `synth-eval`.
+- Pages: hadpi-articles p1, p2 (text from the owner's `truth/NNNN.lines.txt`), ghessehaye-majid p23 and p109 (text from `text/NNNN.md`, words distributed over detected lines), bachehaye_ghali p66 (the audited pilot fixture, imported, labelled "previously audited"). **hadpi p3–p5 are held out**: the tool refuses to draft them; never tune on them.
+- Files (private, under `books/<slug>/truth/`): `NNNN.geometry.draft.json` (untouched draft, never rewritten by the tool), `NNNN.geometry.audit.json` (owner's version, created from the draft on first open, saved atomically after every action), `NNNN.geometry.audit.undo.jsonl` (undo stack), `NNNN.page.png` (audit image rendered from the PDF at the embedded scan's native resolution when finer than `pages/hires/`).
+- Record shape (`farsi2epub.box-audit/v1`): the `bbox_annotation_workflow` line/word records (`line_id`, `word_id`, `order`, `text`, normalised `rect`) plus a per-line frame (centre, angle) with line/word `box` in that frame, derived `quad` (TL, TR, BR, BL), word `state` draft/accepted/fixed, `uncertain` + reasons, line `text_flag`. `export` validates an audited page with `bbox_annotation_workflow.validate_lines`. Page ids match `tests/bbox_benchmark.py`.
+- Moving a word across a line break (E/B) never carries its box: the giving line drops only the moved word's box, the receiving line is re-split inside its unchanged outline (draft, uncertain). A word box centred outside its line's outline is refused. R first shrinks an outline that a stray box inflated. `serve --root DIR` runs on a copy.
+- A page is `audited` only when every line was explicitly accepted with as many boxes as truth words (or a flagged text problem); any later edit re-opens it.
+- Draft quality is availability, not truth: synthetic typewriter pages are much easier than the real ones, and `uncertain` flags only order the review. Grade later steps against the audited files only.
+- Test: `./venv/bin/python tests/box_audit_regression.py` (synthetic, no `books/`).
 
 ## Placement engine (current code)
 

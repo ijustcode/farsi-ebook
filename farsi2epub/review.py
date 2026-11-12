@@ -2149,8 +2149,13 @@ function fbFetch(url, body) {
       if (!r.ok) return {ok: false, error: d.error || ('HTTP ' + r.status)};
       return d;
     });
-  }).catch(function (e) { return {ok: false, error: String(e)}; });
+  }).catch(function () {
+    // fetch() itself failed: the request never reached the server.
+    return {ok: false, error: 'the review server is not running (this page could not reach it). ' +
+      'Restart it in a terminal with: farsi2epub review ' + FB_SLUG + ' (add --pages as before), then reload this page.'};
+  });
 }
+var FB_SLUG = {{ slug|tojson }};
 
 function fbStatus(page, key, msg, isErr) {
   var el = document.getElementById('fb-status-' + page + '-' + key);
