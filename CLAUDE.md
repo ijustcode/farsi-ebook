@@ -72,6 +72,7 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/box_truth_regression.py              # review feedback capture: records, split, endpoints (uses node if present)
 ./venv/bin/python tests/synth_pages_regression.py            # synthetic page generator: determinism, truth transforms
 ./venv/bin/python tests/box_audit_regression.py              # box-audit packet: contract, save/resume, undo, audited rule, HTTP
+./venv/bin/python tests/real_truth_eval_regression.py        # real-page truth scorer: metrics, freeze/held-out refusals, exclusions
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -109,6 +110,12 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - Test: `./venv/bin/python tests/box_audit_regression.py` (synthetic, no `books/`).
 
 - **Hard typewriter presets** (`tw_photo_medium`, `tw_photo_hard`; pipeline v2 in `tests/synth_pages.py`): margin specks at line starts (plan §13 O1), word gaps tightened to or below the letter gap (O2), multi-line stamps and signatures with per-word coverage, per-line baseline slope/jitter/curvature, typewriter texture and typed underlines, on a flush-right `memo` layout with invented pool text (`text_source="pool"`, or `"file:<path>"` at run time). Every v2 switch is off by default; v1 presets and their hashes are unchanged. Truth adds `word_gaps` (per boundary: gap, tightened, `o2_trigger`), speck/underline/overlay records with `text: false`, `covered_by`, per-line `slope_deg`. **MuPDF mirrors `text-align` under `dir="rtl"`: v1's non-justified layouts are flush-left, which is wrong for Persian** (fixed only in `memo`). `./venv/bin/python tests/synth_hard_eval.py` compares presets using the current detector and the box-audit draft splitter (O1/O2 counts). `tw_photo_medium` is the closer match to hadpi; `tw_photo_hard` is harder than the real pages.
+
+## Real-page geometry truth (plan §6.2)
+
+- `tests/real_truth_eval.py freeze` records each audited `books/<slug>/truth/NNNN.geometry.audit.json` in a private `truth_freeze.json` (content SHA without the audit tool's `cursor`/`revision`, image SHA, counts, excluded lines). Lines with an owner text flag are excluded automatically (hadpi p1 line 0). `run` refuses a page whose audit no longer matches its freeze, and always refuses hadpi p3–p5 (held out). bachehaye_ghali p66 is `agent_audited` and is never pooled with owner-audited pages.
+- `run` (about 6 minutes, offline, forces a dead API base URL) scores line finders (`find_lines(page) -> [Region]`) and word placers (`place(page, targets) -> [{status, segments}]`) by page and by provenance/class, with Wilson intervals (optimistic: pages, not words, are the real unit). Word "correct" is **stricter than plan §1**: ≥90% of the truth word covered, under 0.5 letter taken from any other word, ≤25% blank overreach, so over-wide boxes fail; the plan-literal and covering-only rates are printed beside it. O1 cascades and O2 boundary errors (plan §13) are counted separately.
+- Baseline (2026-11-11, $0, evidence already on disk only): the live engine places 0 words correctly on all five pages. Hadpi p1–p2 and majid p23/p109 show no box at all (no reader evidence for those pages, so this says nothing about the engine with evidence); p66 is all `estimated` (boxes cover the target for 52/60 spans but are several times too wide: median IoU 0.15). `_scan_page_lines` clean line recall: hadpi 25/60 with 10 merges, majid 54/54, p66 31/32. Results: `out/real_truth/`.
 
 ## Placement engine (current code)
 

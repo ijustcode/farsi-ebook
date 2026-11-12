@@ -477,6 +477,23 @@ review UI actions and `tests/box_truth_replay.py`, and the owner's text-truth dr
   1 wrong word per page left unflagged; real hadpi pages are visibly harder (stamp lines,
   margin specks, underlines). Not audited yet: no real-page number exists until the owner finishes.
 
+**Real geometry truth frozen and first baseline (2026-11-11).** Frozen: hadpi p1 (line 1
+excluded: owner text flag, outline sits on an underline) and p2, majid p23 and p109 (owner-audited);
+p66 (agent-audited, reported separately). Scorer: `tests/real_truth_eval.py`; "correct" is stricter
+than §1 (over-wide boxes fail), with the §1-literal rate printed beside it. Offline, $0, evidence
+on disk only:
+- Live engine: 0/729 hadpi, 0/632 majid, 0/356 p66 words located and correct. Hadpi and majid show
+  no box (no reader evidence for these pages; this is not a measure of the engine with evidence).
+  p66 is all `estimated`: boxes cover the target for 52/60 sampled spans but are several times
+  too wide (median IoU 0.15).
+- The pre-Step-0 estimated path would put 480/729 hadpi words on the wrong line.
+- Current line detector, clean one-to-one recall: hadpi 25/60 (10 merges holding 34 lines), majid
+  54/54, p66 31/32. This is the reference row for step 3.
+- Truth feeds back at 100% except hadpi p2 (358/362): two word pairs on lines 29–30 overlap across
+  lines in the audit. Open truth questions: those lines, two over-wide last words (p1 line 22,
+  p2 line 26), and line-angle jumps above 1° on some short lines.
+Not measured: the current engine with reader evidence present on these pages (needs paid reads).
+
 **Hard synthetic presets (2026-11-11).** §13's synthetic additions are built: `tw_photo_medium`
 and `tw_photo_hard` add margin specks, tight word spacing, multi-line overlays, per-line baselines
 and typewriter texture, on a flush-right memo layout with a large invented text pool. (v1's
