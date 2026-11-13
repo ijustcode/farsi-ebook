@@ -58,6 +58,7 @@ from typing import Callable, Optional
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import numpy as np  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from farsi2epub import config, llm  # noqa: E402
@@ -1253,13 +1254,16 @@ class PageWithLines(llm.PageTranscription):
 
 HADPI = "hadpi-articles"
 CONTROL = "ghessehaye-majid"
-PAGES = {"h1": (HADPI, 1), "h2": (HADPI, 2), "c23": (CONTROL, 23), "c109": (CONTROL, 109)}
+PAGES = {"h1": (HADPI, 1), "h2": (HADPI, 2), "c23": (CONTROL, 23), "c109": (CONTROL, 109),
+         "h3": (HADPI, 3), "h4": (HADPI, 4), "h5": (HADPI, 5)}
 HELD_OUT = {(HADPI, 3), (HADPI, 4), (HADPI, 5)}
+HELDOUT_PIDS = ("h3", "h4", "h5")
 BAND_OVERLAP_PX = 300
+_HELDOUT_RELEASED = False   # set only by release_held_out(), after a matching freeze record exists
 
 
 def _check(slug, page):
-    if (slug, page) in HELD_OUT:
+    if (slug, page) in HELD_OUT and not _HELDOUT_RELEASED:
         raise SystemExit(f"{slug} p{page} is held out")
 
 
@@ -2290,6 +2294,641 @@ def summary_table(res: dict) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# Held-out reading test (hadpi p3-p5): freeze, read, owner's text-truth draft
+# ---------------------------------------------------------------------------
+
+FREEZE_PATH = OUT / "heldout_freeze.json"
+LEDGER_HELDOUT = "ledger_heldout.jsonl"
+CAP_HELDOUT_USD = 1.50
+HELDOUT_PLAN = [("t1r_opus", (0, 1)), ("t1r", (0, 1)), ("current", (0,))]
+DRAFT_VERSION = "heldout_draft/1"
+DRAFT_VOTES = ("t1r_opus", "t1r")      # one vote per configuration (first run); second runs only add marks
+UNREADABLE_ALT = "…"               # an alternative a reader marked unreadable
+ABSENT_ALT = "∅"                   # an alternative where a reader has no words (line or span missing)
+LINE_BREAK_MARK = "⟦↵؟⟧"   # readers disagree where this printed line breaks
+
+
+def _sha256_text(t: str) -> str:
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()
+
+
+def _git(*args) -> str:
+    import subprocess
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def freeze_contents() -> dict:
+    """Everything that defines the held-out readings, the scorer and the draft builder."""
+    src = Path(__file__).read_text(encoding="utf-8")
+    cfgs = {}
+    # Built against p1 so nothing about p3-p5 is read while freezing; images differ per page only.
+    for arm, reps in HELDOUT_PLAN:
+        r = build_request(arm, "h1", 0)
+        cfgs[arm] = {"runs_per_page": len(reps), "reps": list(reps), "model": r.model,
+                     "thinking_and_extra": r.thinking_kw(), "max_tokens": r.max_tokens,
+                     "system_prompt_sha256": _sha256_text(r.system),
+                     "user_text_template": "صفحهٔ {page} از {page_count}. کتاب: {title_fa}\\n"
+                                           + ("Transcribe the {n} bands of this page following the system instructions."
+                                              if arm != "current" else "Transcribe this page following the system instructions."),
+                     "schema": r.schema.__name__,
+                     "schema_sha256": _sha256_text(json.dumps(r.schema.model_json_schema(), sort_keys=True)),
+                     "images": ("native-resolution bands (embedded photo when finer than the 2576 px render): "
+                                f"fewest equal-height full-width bands, {BAND_OVERLAP_PX} px overlap, each within "
+                                f"{config.IMAGE_TIERS[0][0]} px long edge and {config.IMAGE_TIERS[0][1]} patches of "
+                                f"{config.IMAGE_PATCH_PX} px, so not resized" if arm != "current"
+                                else "pages/hires/NNNN.png exactly as the app sends it (API shrinks it to about 0.89x)")}
+        if arm != "current":
+            cfgs[arm]["stitching"] = "stitch_bands(sim_min=0.6, window=12)"
+    import line_finder as LF
+    return {
+        "frozen_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "git_head": _git("rev-parse", "HEAD"),
+        "script": {"path": "tests/transcription_experiments.py", "git_blob": _git("hash-object", str(Path(__file__))),
+                   "sha256": _sha256_text(src),
+                   "uncommitted_changes": bool(_git("status", "--porcelain", "tests/transcription_experiments.py"))},
+        "pages": {pid: PAGES[pid] for pid in HELDOUT_PIDS},
+        "configurations": cfgs,
+        "not_run": {"pl_o": "needs audited line outlines; none exist for p3-p5"},
+        "scorer": {"foldings": list(FOLDINGS), "doc_sha256": _sha256_text(__doc__),
+                   "invented": "window 3, char_sim < 0.5", "alignment": "align(joins=True for lenient)"},
+        "draft_builder": {"version": DRAFT_VERSION, "votes": list(DRAFT_VOTES),
+                          "second_runs": "rep 1 of each vote configuration adds marks",
+                          "line_match_min_sim": DRAFT_LINE_SIM, "line_merge_min_sim": DRAFT_MERGE_SIM,
+                          "word_pair_cost_ortho_equal": 0.5},
+        "line_crops": {"line_finder": LF.VERSION,
+                       "line_finder_sha256": _sha256_text((Path(__file__).parent / "line_finder.py").read_text()),
+                       "crop_to_line_alignment": "monotone DP on ink width vs characters (crop_alignment)"},
+        "cap_usd": CAP_HELDOUT_USD,
+    }
+
+
+def release_held_out() -> dict:
+    """Allow p3-p5 only when a freeze record exists and the script is unchanged since."""
+    global _HELDOUT_RELEASED
+    if not FREEZE_PATH.is_file():
+        raise SystemExit("no freeze record: run `freeze` first")
+    rec = json.loads(FREEZE_PATH.read_text())
+    if rec["script"]["sha256"] != _sha256_text(Path(__file__).read_text(encoding="utf-8")):
+        raise SystemExit("tests/transcription_experiments.py changed since the freeze; refusing")
+    _HELDOUT_RELEASED = True
+    return rec
+
+
+# --- draft builder ----------------------------------------------------------
+
+DRAFT_LINE_SIM = 0.45
+DRAFT_MERGE_SIM = 0.80   # a 2-to-1 line match must be a close match of the joined text
+
+
+def _surface_tokens(line: str) -> list[Tok]:
+    return _line_tokens(strict_fold(line).strip(), 0, [0])
+
+
+def _tok_str(t: Tok) -> str:
+    if t.marker == "unk":
+        return UNREADABLE_ALT
+    return t.text
+
+
+def _ortho(t: Tok) -> str:
+    return "" if t.marker == "unk" else ortho_fold_token(t.text)
+
+
+def pair_tokens(a: list[Tok], b: list[Tok]) -> list[tuple[list[int], list[int]]]:
+    """Monotone pairing of two token lists (as printed). Cost 0 for identical
+    surfaces, 0.5 when only ZWNJ/punctuation/diacritics differ or when 2-3
+    tokens on one side join to one on the other, 1 for a substitution, 1 per
+    unpaired token. Returns segments ([a indices], [b indices])."""
+    n, m = len(a), len(b)
+    A, B = [_tok_str(t) for t in a], [_tok_str(t) for t in b]
+    Ao, Bo = [_ortho(t) for t in a], [_ortho(t) for t in b]
+    INF = 1e18
+    D = [[INF] * (m + 1) for _ in range(n + 1)]
+    P = [[None] * (m + 1) for _ in range(n + 1)]
+    D[0][0] = 0.0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            d = D[i][j]
+            if d >= INF:
+                continue
+            cands = []
+            if i < n and j < m:
+                c = 0.0 if A[i] == B[j] else (0.5 if Ao[i] and Ao[i] == Bo[j] else 1.0)
+                cands.append((i + 1, j + 1, c))
+                for k in (2, 3):
+                    if i + k <= n and Bo[j] and "".join(Ao[i:i + k]) == Bo[j]:
+                        cands.append((i + k, j + 1, 0.5))
+                    if j + k <= m and Ao[i] and "".join(Bo[j:j + k]) == Ao[i]:
+                        cands.append((i + 1, j + k, 0.5))
+            if i < n:
+                cands.append((i + 1, j, 1.0))
+            if j < m:
+                cands.append((i, j + 1, 1.0))
+            for ni, nj, c in cands:
+                if d + c < D[ni][nj] - 1e-12:
+                    D[ni][nj], P[ni][nj] = d + c, (i, j)
+    segs = []
+    i, j = n, m
+    while i or j:
+        pi, pj = P[i][j]
+        segs.append((list(range(pi, i)), list(range(pj, j))))
+        i, j = pi, pj
+    segs.reverse()
+    return segs
+
+
+def _span(toks: list[Tok], idx: list[int]) -> str:
+    return " ".join(_tok_str(toks[k]) for k in idx) if idx else ABSENT_ALT
+
+
+def _render_marker(alts: list[str]) -> str:
+    alts = sorted(set(alts))
+    if all(a == UNREADABLE_ALT for a in alts):
+        return MARK_UNK
+    return "⟦" + "|".join(alts) + "؟⟧"
+
+
+def _project(base: list[Tok], other: list[Tok]) -> tuple[dict, dict]:
+    """Map each base token to the other reading's paired span, and gaps to inserted spans."""
+    segs = pair_tokens(base, other)
+    per_tok, ins_before = {}, {}
+    for ia, ib in segs:
+        if ia:
+            for k in ia:
+                per_tok[k] = (ia, ib)
+        else:
+            nxt = next((s[0][0] for s in segs[segs.index((ia, ib)) + 1:] if s[0]), len(base))
+            ins_before.setdefault(nxt, []).extend(ib)
+    return per_tok, ins_before
+
+
+def build_line(a: list[Tok], b: list[Tok], a2: Optional[list[Tok]] = None, b2: Optional[list[Tok]] = None,
+               want_pieces: bool = False):
+    """One draft line from two votes (a, b) and optional second runs (a2 of a's
+    model, b2 of b's model). Consecutive non-unanimous segments merge into one
+    marker listing every distinct alternative, sorted."""
+    segs = pair_tokens(a, b)
+    proj = [(_project(a, a2), a2) if a2 is not None else None, (_project(b, b2), b2) if b2 is not None else None]
+    pieces, marked_words, words, markers = [], 0, 0, 0
+    pending: list = []
+
+    def alts_for(ia, ib):
+        out = [_span(a, ia), _span(b, ib)]
+        for side, (base_idx, base) in ((0, (ia, a)), (1, (ib, b))):
+            pj = proj[side]
+            if pj is None:
+                continue
+            (per_tok, ins), other = pj
+            if base_idx:
+                got, seen = [], set()
+                for k in base_idx:
+                    got += ins.get(k, [])
+                    sp = per_tok.get(k, ([], []))
+                    if id(sp) not in seen:
+                        seen.add(id(sp))
+                        got += sp[1]
+                out.append(_span(other, sorted(set(got))))
+        return out
+
+    def flush():
+        nonlocal marked_words, markers
+        if not pending:
+            return
+        alts = []
+        ia_all, ib_all = [], []
+        for ia, ib in pending:
+            ia_all += ia
+            ib_all += ib
+        alts = alts_for(ia_all, ib_all)
+        pieces.append((_render_marker(alts), min(ia_all, default=None), min(ib_all, default=None)))
+        markers += 1
+        marked_words += max(len(ia_all), len(ib_all), 1)
+        pending.clear()
+
+    for ia, ib in segs:
+        alts = alts_for(ia, ib)
+        flagged = any(t.marker for t in [a[k] for k in ia] + [b[k] for k in ib])
+        words += max(len(ia), len(ib))
+        if len(set(alts)) == 1 and not flagged:
+            flush()
+            pieces.append((alts[0], min(ia, default=None), min(ib, default=None)))
+        else:
+            pending.append((ia, ib))
+    flush()
+    st = {"words": words, "marked_words": marked_words, "markers": markers}
+    if want_pieces:
+        return pieces, st
+    return " ".join(p[0] for p in pieces), st
+
+
+def _line_key_toks(line: str) -> str:
+    return "".join(_ortho(t) for t in _surface_tokens(line))
+
+
+def align_lines(A: list[str], B: list[str], min_sim: float = DRAFT_LINE_SIM) -> list[tuple[list[int], list[int]]]:
+    """Monotone line alignment allowing 1-1, 1-2, 2-1 and unmatched lines."""
+    A = [l for l in A if strict_fold(l).strip()]
+    B = [l for l in B if strict_fold(l).strip()]
+    ka, kb = [_line_key_toks(x) for x in A], [_line_key_toks(x) for x in B]
+    n, m = len(A), len(B)
+    S = [[-1e18] * (m + 1) for _ in range(n + 1)]
+    P = [[None] * (m + 1) for _ in range(n + 1)]
+    S[0][0] = 0.0
+
+    def sim(x, y):
+        return char_sim(x, y) if (x or y) else 1.0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            v = S[i][j]
+            if v <= -1e17:
+                continue
+            opts = []
+            if i < n and j < m:
+                sc = sim(ka[i], kb[j])
+                if sc >= min_sim:
+                    opts.append((i + 1, j + 1, sc))
+            if i + 1 < n and j < m:
+                sc = sim(ka[i] + ka[i + 1], kb[j])
+                if sc >= DRAFT_MERGE_SIM:
+                    opts.append((i + 2, j + 1, sc + 0.6))
+            if i < n and j + 1 < m:
+                sc = sim(ka[i], kb[j] + kb[j + 1])
+                if sc >= DRAFT_MERGE_SIM:
+                    opts.append((i + 1, j + 2, sc + 0.6))
+            if i < n:
+                opts.append((i + 1, j, 0.0))
+            if j < m:
+                opts.append((i, j + 1, 0.0))
+            for ni, nj, g in opts:
+                if v + g > S[ni][nj] + 1e-12:
+                    S[ni][nj], P[ni][nj] = v + g, (i, j)
+    out = []
+    i, j = n, m
+    while i or j:
+        pi, pj = P[i][j]
+        out.append((list(range(pi, i)), list(range(pj, j))))
+        i, j = pi, pj
+    out.reverse()
+    return out
+
+
+def _second_run_lines(base: list[str], second: Optional[list[str]]) -> dict:
+    """For each base line index, the matching second-run line (or '')."""
+    if second is None:
+        return {}
+    base = [l for l in base if strict_fold(l).strip()]
+    second = [l for l in second if strict_fold(l).strip()]
+    out = {}
+    for ia, ib in align_lines(base, second):
+        txt = " ".join(second[k] for k in ib)
+        for k in ia:
+            out[k] = txt if len(ia) == 1 else ""
+    return out
+
+
+def build_draft(A: list[str], B: list[str], A2: Optional[list[str]] = None, B2: Optional[list[str]] = None) -> tuple[list[str], dict]:
+    """Owner's text-truth draft from two votes (first runs of two configurations)
+    and their second runs. Every non-unanimous span is a marker listing all
+    distinct alternatives in sorted order; a line found by only one vote is
+    wrapped whole as ⟦line|∅؟⟧; a line one vote breaks differently starts with ⟦↵؟⟧."""
+    A = [l for l in A if strict_fold(l).strip()]
+    B = [l for l in B if strict_fold(l).strip()]
+    a2map, b2map = _second_run_lines(A, A2), _second_run_lines(B, B2)
+    lines, st = [], {"lines": 0, "words": 0, "marked_words": 0, "markers": 0, "whole_line_marks": 0, "break_marks": 0}
+    for ia, ib in align_lines(A, B):
+        if not ia or not ib:
+            src = A if ia else B
+            for k in (ia or ib):
+                txt = " ".join(_tok_str(t) for t in _surface_tokens(src[k]))
+                lines.append(_render_marker([txt, ABSENT_ALT]))
+                n = len(_surface_tokens(src[k]))
+                st["words"] += n
+                st["marked_words"] += n
+                st["markers"] += 1
+                st["whole_line_marks"] += 1
+            continue
+        a_txt = " ".join(A[k] for k in ia)
+        b_txt = " ".join(B[k] for k in ib)
+        a2 = _surface_tokens(a2map[ia[0]]) if (len(ia) == 1 and A2 is not None) else None
+        b2 = _surface_tokens(b2map[ib[0]]) if (len(ib) == 1 and B2 is not None) else None
+        pieces, s1 = build_line(_surface_tokens(a_txt), _surface_tokens(b_txt), a2, b2, want_pieces=True)
+        if len(ia) == len(ib):
+            lines.append(" ".join(p[0] for p in pieces))
+        else:
+            # one reading breaks this printed line in two: emit the split, marked
+            two_a = len(ia) == 2
+            cut = len(_surface_tokens(A[ia[0]] if two_a else B[ib[0]]))
+            first, second = [], []
+            for text, ai, bi in pieces:
+                pos = ai if two_a else bi
+                (second if (pos is not None and pos >= cut and first) else first).append(text)
+            lines.append(LINE_BREAK_MARK + " " + " ".join(first))
+            lines.append(LINE_BREAK_MARK + " " + " ".join(second))
+            st["break_marks"] += 1
+        for k in ("words", "marked_words", "markers"):
+            st[k] += s1[k]
+    st["lines"] = len(lines)
+    st["marked_share"] = st["marked_words"] / st["words"] if st["words"] else 0.0
+    return lines, st
+
+
+def draft_hyp_tokens(lines: list[str]) -> list[Tok]:
+    """Draft as scorer tokens: plain words unmarked; each marker contributes the
+    tokens of its first (sorted) non-absent alternative, flagged as marked."""
+    toks, mid = [], 0
+    marker_re = re.compile("⟦([^⟧]*)⟧")
+    for ln, line in enumerate(lines):
+        line = line.replace(LINE_BREAK_MARK, " ")
+        pos = 0
+        for m in marker_re.finditer(line):
+            for w in line[pos:m.start()].split():
+                toks.append(Tok(w, ln))
+            mid += 1
+            inner = m.group(1).rstrip("؟")
+            alts = [x for x in inner.split("|") if x not in (ABSENT_ALT, UNREADABLE_ALT, "")]
+            words = alts[0].split() if alts else []
+            if not words:
+                toks.append(Tok(MARK_UNK, ln, "unk", mid))
+            for w in words:
+                toks.append(Tok(w, ln, "guess", mid))
+            pos = m.end()
+        for w in line[pos:].split():
+            toks.append(Tok(w, ln))
+    return toks
+
+
+def draft_vs_truth(truth: list[Tok], lines: list[str]) -> dict:
+    """How useful the draft would have been: errors inside markers vs in unmarked text."""
+    hyp = draft_hyp_tokens(lines)
+    marked = {i for i, t in enumerate(hyp) if t.marker}
+    out = {"draft_words": len(hyp), "marked_words": len(marked)}
+    for folding in ("strict", "lenient"):
+        base = "strict" if folding == "strict" else "ortho"
+        r, h = fold_tokens(truth, base), fold_tokens(hyp, base)
+        mk = {i for i, t in enumerate(h) if t.marker}
+        _, ops = align(_strs(r), _strs(h), joins=(folding == "lenient"))
+        ev = error_events(ops, _strs(r))
+        inside = sum(1 for e in ev if _covered(e, mk, set()))
+        out[folding] = {"errors": len(ev), "inside_markers": inside, "unmarked": len(ev) - inside,
+                        "n_truth": sum(1 for t in r if t.text != MARK_UNK)}
+    # does a marker's alternative list contain the truth?
+    marker_re = re.compile("⟦([^⟧]*)⟧")
+    flat_truth = " ".join(t.text for t in truth)
+    hits = total = 0
+    for line in lines:
+        for m in marker_re.finditer(line):
+            inner = m.group(1).rstrip("؟")
+            alts = [x for x in inner.split("|") if x not in (ABSENT_ALT, UNREADABLE_ALT, "")]
+            if not alts:
+                continue
+            total += 1
+            if any(a and a in flat_truth for a in alts):
+                hits += 1
+    out["markers_with_a_matching_alternative"] = [hits, total]
+    return out
+
+
+# --- line crops and the side-by-side page -----------------------------------
+
+def crop_alignment(widths: list[float], chars: list[int], skip_crop: float = 0.8, skip_line: float = 2.0,
+                   skip_wide: float = 2.5) -> list[Optional[int]]:
+    """Monotone assignment of crops (ink widths, top to bottom) to draft lines
+    (character counts). Returns, per draft line, a crop index or None. Crops
+    left over are probably not text lines (signatures, handwriting, stamps).
+    Leaving out a crop at least half as wide as a full line costs skip_wide."""
+    n, m = len(chars), len(widths)
+    if not n or not m:
+        return [None] * n
+    wide_ref = float(np.median(sorted(widths)[len(widths) // 2:]))
+    skip_cost = [skip_wide if w >= 0.5 * wide_ref else skip_crop for w in widths]
+    pairs = sorted(zip(chars, widths), key=lambda x: -x[0])[: max(3, n // 2)]
+    ratio = float(np.median([w / max(1, c) for c, w in pairs])) if pairs else 1.0
+    for _ in range(2):
+        INF = 1e18
+        D = [[INF] * (m + 1) for _ in range(n + 1)]
+        P = [[None] * (m + 1) for _ in range(n + 1)]
+        D[0][0] = 0.0
+        for i in range(n + 1):
+            for j in range(m + 1):
+                d = D[i][j]
+                if d >= INF:
+                    continue
+                if i < n and j < m:
+                    c = min(1.5, abs(math.log(max(1.0, widths[j]) / max(1.0, ratio * max(1, chars[i])))))
+                    if d + c < D[i + 1][j + 1]:
+                        D[i + 1][j + 1], P[i + 1][j + 1] = d + c, (i, j, "m")
+                if j < m:
+                    # crops above the first or below the last draft line are cheap to leave out
+                    sc = skip_crop if i in (0, n) else skip_cost[j]
+                    if d + sc < D[i][j + 1]:
+                        D[i][j + 1], P[i][j + 1] = d + sc, (i, j, "c")
+                if i < n and d + skip_line < D[i + 1][j]:
+                    D[i + 1][j], P[i + 1][j] = d + skip_line, (i, j, "l")
+        assign: list[Optional[int]] = [None] * n
+        i, j = n, m
+        while i or j:
+            pi, pj, k = P[i][j]
+            if k == "m":
+                assign[pi] = pj
+            i, j = pi, pj
+        got = [(chars[i], widths[c]) for i, c in enumerate(assign) if c is not None]
+        if got:
+            ratio = float(np.median([w / max(1, c) for c, w in got]))
+    return assign
+
+
+def page_gray(pid: str):
+    import fitz
+    slug, page = PAGES[pid]
+    pix, ppt, kind = band_source(slug, page)
+    g = pix if pix.n == 1 else fitz.Pixmap(fitz.csGRAY, pix)
+    return np.frombuffer(g.samples, np.uint8).reshape(g.height, g.width).astype(np.float32), ppt, kind
+
+
+def found_lines(pid: str) -> tuple[list, dict, float]:
+    """Line finder output on the native page: (text lines top to bottom, measurements, px/pt)."""
+    import line_finder as LF
+    gray, ppt, _ = page_gray(pid)
+    res = LF.find_lines(gray, use_mask=True)
+    lines = sorted([L for L in res["lines"] if L.kind == "text"], key=lambda L: float(L.y_at((L.x0 + L.x1) / 2)))
+    nontext = [L.kind for L in res["lines"] if L.kind != "text"]
+    meas = dict(res["measurements"], nontext_kinds=nontext)
+    return [(L, gray) for L in lines], meas, ppt
+
+
+def crop_png(L, gray, pad_frac: float = 0.35) -> bytes:
+    up, dn = L.up, L.dn
+    h = up + dn
+    L.up, L.dn = up + pad_frac * h, dn + pad_frac * h
+    try:
+        strip = L.rectify(gray)
+    finally:
+        L.up, L.dn = up, dn
+    arr = np.clip(np.rint(strip), 0, 255).astype(np.uint8)[..., None]
+    return png_from_array(arr)
+
+
+def _html_escape(t: str) -> str:
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _html_marks(t: str) -> str:
+    t = _html_escape(t)
+    return re.sub("(⟦[^⟧]*⟧)", r"<mark>\1</mark>", t)
+
+
+def page_html(page_no: int, draft: list[str], crop_names: list[Optional[str]], extra: list[tuple[str, str]],
+              n_markers: int) -> str:
+    sec = []
+    for i, (line, crop) in enumerate(zip(draft, crop_names), 1):
+        img = (f'<div class="img"><img src="{crop}" alt="line {i}" loading="lazy"></div>' if crop
+               else '<div class="miss">No crop matched this draft line: find it on the page by counting from the top.</div>')
+        sec.append(f'<section><div class="n">{i}</div>{img}<div class="t" dir="rtl" lang="fa">{_html_marks(line)}</div></section>')
+    for name, where in extra:
+        sec.append(f'<section class="x"><div class="n">extra crop, probably not a text line ({where})</div>'
+                   f'<div class="img"><img src="{name}" alt="extra" loading="lazy"></div></section>')
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Page {page_no} line check</title><style>
+:root{{--bg:#fafaf7;--fg:#1d1d1b;--mut:#6b6b66;--line:#ddd;--mark:#ffe08a}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#1b1b1a;--fg:#ecece8;--mut:#a0a09a;--line:#3a3a38;--mark:#7a5d00}}}}
+body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;margin:0;padding:16px}}
+header{{position:sticky;top:0;background:var(--bg);padding:8px 0;border-bottom:1px solid var(--line);z-index:1}}
+section{{border-bottom:1px solid var(--line);padding:14px 0}}
+section.x{{opacity:.6}}
+.n{{font-weight:700;color:var(--mut)}}
+.miss{{color:var(--mut);font-style:italic}}
+.img{{overflow-x:auto;background:#fff;border:1px solid var(--line)}}
+.img img{{display:block;width:var(--w,100%);max-width:none}}
+.t{{font-family:"Vazirmatn","Noto Naskh Arabic","Tahoma","DejaVu Sans Mono",monospace;font-size:26px;line-height:1.9;margin-top:6px;white-space:pre-wrap}}
+mark{{background:var(--mark);color:inherit;border-radius:3px;padding:0 2px}}
+</style></head><body>
+<header><b>Page {page_no}</b> &middot; {len(draft)} lines in draft, {n_markers} markers. Model-made DRAFT, not verified. Edit <code>{page_no:04d}.lines.txt</code>, not this page.
+Crop zoom: <input type="range" min="100" max="300" value="100" oninput="document.documentElement.style.setProperty('--w',this.value+'%')">
+<br><small>Each image is a printed line found automatically on the original photo and straightened. Lines were found without any audited geometry, so a crop can belong to a neighbouring draft line: if a crop does not match its text, count lines from the top of the page. Crops that matched no draft line are listed at the end, faded. Line numbers count non-empty lines of the .txt file.</small></header>
+{"".join(sec)}
+</body></html>"""
+
+
+def build_page_outputs(pid: str, draft: list[str], out_dir: Path, crop_dir_rel: str = "crops", prefix: Optional[str] = None) -> dict:
+    """Write line crops and the side-by-side HTML into out_dir (new files only)."""
+    slug, page = PAGES[pid]
+    prefix = prefix or f"p{page}"
+    lines, meas, ppt = found_lines(pid)
+    widths = [float(L.x1 - L.x0) for L, _ in lines]
+    chars = [len(_line_key_toks(l)) for l in draft]
+    assign = crop_alignment(widths, chars)
+    (out_dir / crop_dir_rel).mkdir(parents=True, exist_ok=True)
+    names: list[Optional[str]] = []
+    for i, c in enumerate(assign, 1):
+        if c is None:
+            names.append(None)
+            continue
+        name = f"{crop_dir_rel}/{prefix}_L{i:02d}.png"
+        path = out_dir / name
+        if path.exists():
+            raise SystemExit(f"refusing to overwrite {path}")
+        L, gray = lines[c]
+        path.write_bytes(crop_png(L, gray))
+        names.append(name)
+    used = {c for c in assign if c is not None}
+    extra = []
+    for k, (L, gray) in enumerate(lines):
+        if k in used:
+            continue
+        name = f"{crop_dir_rel}/{prefix}_X{k + 1:02d}.png"
+        path = out_dir / name
+        if path.exists():
+            raise SystemExit(f"refusing to overwrite {path}")
+        path.write_bytes(crop_png(L, gray))
+        before = sum(1 for c in assign if c is not None and c < k)
+        extra.append((name, f"found between draft lines {before} and {before + 1}"))
+    n_markers = sum(len(re.findall("⟦", l)) for l in draft)
+    html_path = out_dir / f"{page:04d}.lines.html"
+    if html_path.exists():
+        raise SystemExit(f"refusing to overwrite {html_path}")
+    html_path.write_text(page_html(page, draft, names, extra, n_markers), encoding="utf-8")
+    return {"text_lines_found": len(lines), "nontext_kinds": meas["nontext_kinds"], "draft_lines": len(draft),
+            "matched": len(used), "draft_lines_without_crop": sum(1 for c in assign if c is None),
+            "extra_crops": len(extra), "glyph_height_px": meas["glyph_height_px"],
+            "line_spacing_px": meas["line_spacing_px"], "px_per_pt": ppt, "assign": assign}
+
+
+def _first_lines(runner, arm: str, pid: str, rep: int) -> Optional[list[str]]:
+    rec = runner.cached(build_request(arm, pid, rep))
+    if rec is None:
+        return None
+    return output_of(rec, arm)["lines"]
+
+
+def draft_for(runner_a, runner_b, pid: str) -> tuple[list[str], dict]:
+    A = _first_lines(runner_a, DRAFT_VOTES[0], pid, 0)
+    B = _first_lines(runner_b, DRAFT_VOTES[1], pid, 0)
+    A2 = _first_lines(runner_a, DRAFT_VOTES[0], pid, 1)
+    B2 = _first_lines(runner_b, DRAFT_VOTES[1], pid, 1)
+    if A is None or B is None:
+        raise SystemExit(f"{pid}: first runs missing")
+    return build_draft(A, B, A2, B2)
+
+
+def cmd_freeze(_args) -> None:
+    if FREEZE_PATH.is_file():
+        raise SystemExit(f"{FREEZE_PATH} already exists; a freeze is written once")
+    rec = freeze_contents()
+    FREEZE_PATH.write_text(json.dumps(rec, ensure_ascii=False, indent=1))
+    print(json.dumps({k: rec[k] for k in ("frozen_at", "git_head", "script")}, indent=1))
+
+
+def cmd_heldout_read(_args) -> None:
+    release_held_out()
+    runner = Runner(cap=CAP_HELDOUT_USD, ledger_name=LEDGER_HELDOUT)
+    for arm, reps in HELDOUT_PLAN:
+        for rep in reps:
+            for pid in HELDOUT_PIDS:
+                req = build_request(arm, pid, rep)
+                try:
+                    rec = runner.call(req)
+                except (BudgetExceeded, AccessError) as exc:
+                    print(f"STOP: {type(exc).__name__}: {exc}")
+                    return
+                except RuntimeError as exc:
+                    print(f"{arm} {pid} rep{rep}: FAILED after one retry: {exc}")
+                    continue
+                print(f"{arm:9s} {pid} rep{rep} hit={rec['cache_hit']} in={rec['usage']['input_tokens']} "
+                      f"out={rec['usage']['output_tokens']} ${rec['cost']:.4f} stop={rec.get('stop_reason')} "
+                      f"ledger ${runner.ledger.total():.4f}", flush=True)
+
+
+def cmd_heldout_plan(_args) -> None:
+    release_held_out()
+    tot = 0.0
+    for arm, reps in HELDOUT_PLAN:
+        for rep in reps:
+            for pid in HELDOUT_PIDS:
+                r = build_request(arm, pid, rep)
+                tot += r.expected()
+                print(f"{arm:9s} {pid} rep{rep} in_est={r.input_est()} exp=${r.expected():.4f} worst=${r.worst_case():.4f}")
+    print(f"expected ${tot:.3f}  cap ${CAP_HELDOUT_USD:.2f}")
+
+
+def cmd_heldout_draft(_args) -> None:
+    release_held_out()
+    r = Runner(cap=CAP_HELDOUT_USD, ledger_name=LEDGER_HELDOUT)
+    truth_dir = ROOT / "books" / HADPI / "truth"
+    summary = {}
+    for pid in HELDOUT_PIDS:
+        page = PAGES[pid][1]
+        draft, st = draft_for(r, r, pid)
+        txt = truth_dir / f"{page:04d}.lines.txt"
+        if txt.exists():
+            raise SystemExit(f"refusing to overwrite {txt}")
+        txt.write_text("\n".join(draft) + "\n", encoding="utf-8")
+        out = build_page_outputs(pid, draft, truth_dir)
+        summary[pid] = {"draft": st, "crops": {k: v for k, v in out.items() if k != "assign"}}
+        print(pid, json.dumps(summary[pid]))
+    (OUT / "heldout_draft_summary.json").write_text(json.dumps(summary, indent=1))
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2312,10 +2951,14 @@ def main(argv=None) -> None:
     r2.add_argument("--pages", default=None)
     r2.add_argument("--rep", type=int, default=0)
     sub.add_parser("score2b")
+    for name in ("freeze", "heldout-plan", "heldout-read", "heldout-draft"):
+        sub.add_parser(name)
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "runpl": cmd_runpl, "score": cmd_score,
-     "plan2b": cmd_plan2b, "smoke2b": cmd_smoke2b, "run2b": cmd_run2b, "score2b": cmd_score2b}[args.cmd](args)
+     "plan2b": cmd_plan2b, "smoke2b": cmd_smoke2b, "run2b": cmd_run2b, "score2b": cmd_score2b,
+     "freeze": cmd_freeze, "heldout-plan": cmd_heldout_plan, "heldout-read": cmd_heldout_read,
+     "heldout-draft": cmd_heldout_draft}[args.cmd](args)
 
 
 if __name__ == "__main__":

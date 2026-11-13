@@ -332,6 +332,69 @@ def test_vendor_runner_flow():
             pass
 
 
+def test_draft_builder():
+    L, M = "\u27e6", "\u061f\u27e7"
+    # unanimous
+    d, st = te.build_draft(["الف بب جج"], ["الف بب جج"])
+    check(d == ["الف بب جج"] and st["markers"] == 0, f"unanimous {d}")
+    # two-way disagreement, alternatives sorted, independent of vote order
+    d1, _ = te.build_draft(["الف بب جج"], ["الف دد جج"])
+    d2, _ = te.build_draft(["الف دد جج"], ["الف بب جج"])
+    check(d1 == d2 == [f"الف {L}بب|دد{M} جج"], f"two-way sorted {d1} {d2}")
+    # three-way: the second run of one model adds a third alternative
+    d, _ = te.build_draft(["الف بب جج"], ["الف دد جج"], A2=["الف هه جج"])
+    check(d == [f"الف {L}بب|دد|هه{M} جج"], f"three-way {d}")
+    # same-model runs disagree although the first runs agree across models
+    d, st = te.build_draft(["الف بب جج"], ["الف بب جج"], B2=["الف بب ججج"])
+    check(d == [f"الف بب {L}جج|ججج{M}"] and st["markers"] == 1, f"same-model disagreement {d}")
+    # join/split difference is marked, both forms listed
+    d, _ = te.build_draft(["او وکتاب نامه"], ["او و کتاب نامه"])
+    check(d == [f"او {L}و کتاب|وکتاب{M} نامه"], f"join marked {d}")
+    # ZWNJ-only difference is marked too
+    d, _ = te.build_draft(["میرود"], ["می\u200cرود"])
+    check(len(d) == 1 and d[0].startswith(L), f"zwnj marked {d}")
+    # a line present in one reading only is wrapped whole
+    d, st = te.build_draft(["الف بب", "جج دد", "هه وو"], ["الف بب", "هه وو"])
+    check(d == ["الف بب", f"{L}جج دد|\u2205{M}", "هه وو"] and st["whole_line_marks"] == 1, f"missing line {d}")
+    # unreadable marker: all unreadable -> ⟦؟⟧; one reader unreadable -> ellipsis alternative
+    d, _ = te.build_draft(["الف ⟦؟⟧ جج"], ["الف ⟦؟⟧ جج"])
+    check(d == ["الف ⟦؟⟧ جج"], f"both unreadable {d}")
+    d, _ = te.build_draft(["الف ⟦؟⟧ جج"], ["الف بب جج"])
+    check(d == [f"الف {L}بب|\u2026{M} جج"], f"one unreadable {d}")
+    # a reader's guess marker forces a mark even when the words agree
+    d, _ = te.build_draft(["الف ⟦بب؟⟧ جج"], ["الف بب جج"])
+    check(d == [f"الف {L}بب{M} جج"], f"guess forces mark {d}")
+    # consecutive disagreements merge into one marker
+    d, _ = te.build_draft(["الف بب جج دد"], ["الف هه وو دد"])
+    check(d == [f"الف {L}بب جج|هه وو{M} دد"], f"merged marker {d}")
+    # one reading splits a printed line in two: break marker
+    d, st = te.build_draft(["الف بب جج دد هه وو"], ["الف بب جج", "دد هه وو"])
+    check(d == [te.LINE_BREAK_MARK + " الف بب جج", te.LINE_BREAK_MARK + " دد هه وو"] and st["break_marks"] == 1,
+          f"break mark split {d}")
+    # draft vs truth accounting: errors inside markers vs unmarked
+    truth = te.tokenize_lines(["الف بب جج دد"])
+    acc = te.draft_vs_truth(truth, [f"الف {L}بب|دد{M} جج زز"])
+    check(acc["lenient"]["errors"] == 1 and acc["lenient"]["unmarked"] == 1, f"unmarked error {acc}")
+    acc = te.draft_vs_truth(truth, [f"الف {L}زز|هه{M} جج دد"])
+    check(acc["lenient"]["errors"] == 1 and acc["lenient"]["inside_markers"] == 1, f"marked error {acc}")
+
+
+def test_crop_alignment():
+    chars = [40, 38, 10, 41]
+    widths = [800, 760, 200, 300, 820]   # one extra crop (a signature) between lines 3 and 4
+    a = te.crop_alignment(widths, chars)
+    check(a == [0, 1, 2, 4], f"crop alignment {a}")
+    check(te.crop_alignment([], [3]) == [None], "no crops")
+
+
+def test_heldout_guard():
+    try:
+        te.whole_page_image("hadpi-articles", 3)
+        check(False, "held-out page opened without release")
+    except SystemExit:
+        pass
+
+
 def test_stitch():
     a = ["سطر یک اول", "سطر دو دوم", "سطر سه سوم", "سطر چهار چهارم"]
     b = ["سطر سه سوم", "سطر چهار چهارم", "سطر پنج پنجم", "سطر شش ششم"]

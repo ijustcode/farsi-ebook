@@ -610,6 +610,21 @@ lever, not the cropping.
   about $0.09/page; keep Sonnet 5 for clean pages; use a second Opus reading by a different route
   as the review flag where wanted (+$0.09/page).
 
+**Held-out reading test, stage 1 (2026-11-12, $1.10 of a $1.50 cap): readings frozen and taken,
+drafts with the owner.** Configurations frozen on p1–p2 before any p3–p5 image was opened
+(`out/transcription_experiments/heldout_freeze.json`, with a byte-exact copy of the script):
+Opus 5.5 on native bands (2 runs per page), Sonnet 5 on the same bands (2 runs), the production
+whole-page Sonnet call (1 run). Per-line crops were not run (no audited outlines for these pages).
+All 15 readings succeeded first time; nothing was scored. Text height reaching the model on
+p3–p5: 27–29 px glyphs on bands, about 18 px on the production whole page (0.64–0.67× native).
+The owner's drafts (`books/hadpi-articles/truth/000{3,4,5}.lines.txt`, private) are built from
+the readers' votes with **every non-unanimous word marked with all alternatives in sorted
+order**: 31, 31 and 33 lines; 63, 88 and 87 markers; 41–46% of words inside markers. Built the
+same way on p1–p2, such a draft left 1 and 2 words wrong outside markers, all "as printed"
+differences (a join, a ZWNJ, punctuation spacing), with the caveat that p1–p2 truth was itself
+made from an Opus-class draft. Next: the owner corrects the three drafts; then the cached
+readings are scored once, with no further API calls.
+
 ### Step 3 — Line finding (research venv for L2/L3; $0)
 
 - Data: synthetic warped set (all font classes), hadpi p1–p2, majid ×2, p66.
