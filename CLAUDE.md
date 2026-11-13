@@ -77,6 +77,7 @@ Current engine (synthetic fixtures; no `books/` needed):
 ./venv/bin/python tests/transcription_experiments_regression.py # Step 2 scorer: WER foldings, T2 flags, band stitching, spend guard
 ./venv/bin/python tests/line_finder_regression.py            # Step 3 line finder (research): recall, masking, rectification, determinism
 ./venv/bin/python tests/word_placer_regression.py            # Step 4 word placer (research): O1/O2 cases, statuses, determinism
+./venv/bin/python tests/text_audit_regression.py             # text audit tool: marker parsing, exact export, undo, resume
 ./venv/bin/python tests/bbox_metrics_regression.py           # v6 instrument (tests/bbox_metrics.py)
 ./venv/bin/python tests/bbox_benchmark_regression.py         # benchmark export contracts
 ./venv/bin/python tests/bbox_annotation_workflow_regression.py
@@ -120,6 +121,11 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - `tests/real_truth_eval.py freeze` records each audited `books/<slug>/truth/NNNN.geometry.audit.json` in a private `truth_freeze.json` (content SHA without the audit tool's `cursor`/`revision`, image SHA, counts, excluded lines). Lines with an owner text flag are excluded automatically (hadpi p1 line 0). `run` refuses a page whose audit no longer matches its freeze, and always refuses hadpi p3–p5 (held out). bachehaye_ghali p66 is `agent_audited` and is never pooled with owner-audited pages.
 - `run` (about 6 minutes, offline, forces a dead API base URL) scores line finders (`find_lines(page) -> [Region]`) and word placers (`place(page, targets) -> [{status, segments}]`) by page and by provenance/class, with Wilson intervals (optimistic: pages, not words, are the real unit). Word "correct" is **stricter than plan §1**: ≥90% of the truth word covered, under 0.5 letter taken from any other word, ≤25% blank overreach, so over-wide boxes fail; the plan-literal and covering-only rates are printed beside it. O1 cascades and O2 boundary errors (plan §13) are counted separately.
 - Baseline (2026-11-11, $0, evidence already on disk only): the live engine places 0 words correctly on all five pages. Hadpi p1–p2 and majid p23/p109 show no box at all (no reader evidence for those pages, so this says nothing about the engine with evidence); p66 is all `estimated` (boxes cover the target for 52/60 spans but are several times too wide: median IoU 0.15). `_scan_page_lines` clean line recall: hadpi 25/60 with 10 merges, majid 54/54, p66 31/32. Results: `out/real_truth/`.
+
+## Text audit tool (held-out text truth, hadpi p3–p5)
+
+- `./venv/bin/python tests/text_audit.py serve [--port 8771] [--root DIR] [--open]` (127.0.0.1 only, stdlib): the owner corrects the three model-drafted transcriptions in the browser, choosing among marked alternatives per printed line. State in `books/hadpi-articles/truth/000N.text_audit.json` plus an append-only `.text_audit.undo.jsonl`; the original draft is kept byte for byte as `000N.lines.draft.txt` and never rewritten; the export `000N.lines.txt` is rewritten after every action and **is final only when the state says `status: audited` (`export.final: true`)**; only `⟦؟⟧` may remain in a final export. Pages other than 3–5 are refused. Strip-to-line alignment is automatic; strips no line uses appear in place with "add a line" / "not text". `/?w=1800&h=900` previews the wide layout scaled.
+- **Do not edit those three pages' text outside the tool, and do not tune anything on them: they are the held-out test.** Test: `./venv/bin/python tests/text_audit_regression.py` (synthetic, no `books/`).
 
 ## Line finder for warped pages (plan Step 3; research code, not wired in)
 
