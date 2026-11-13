@@ -953,6 +953,46 @@ S, G, R agrees with it on both side edges (within half a letter). No tuned part.
 - Not done: readings other than the first repeat; model text plus further corruption; held-out
   p3–p5.
 
+**Step 4: joined and split words scored; stricter line assignment tested and rejected
+(2026-11-13, $0; committed 2dfdf5f).** Side-edge measure. Scoring completion only; no box moved.
+
+Words a model joins or splits differently from the truth with identical letters are matched as
+groups (never across a printed or model line) and a group is correct only if all its tokens are
+located and the union of their boxes passes the side-edge test against the union of its words.
+
+| Line text from | hadpi: read / misread / joined / split / not read | T | TA | S∧T |
+|---|---|---|---|---|
+| Owner's truth | 729 / 0 / 0 / 0 / 0 | 91.5%, 96.4% | 86.0%, 97.5% | 66.4%, 99.6% |
+| Opus 5.5, bands | 658 / 9 / 8 / 31 / 23 | 87.4%, 94.0% | 79.1%, 95.1% | 61.7%, 96.4% |
+| Opus 5.5, line crops | 649 / 11 / 4 / 42 / 23 | 87.5%, 95.5% | 82.6%, 96.3% | 60.4%, 98.2% |
+| Sonnet 5, bands | 535 / 62 / 14 / 14 / 104 | 64.3%, 89.0% | 56.7%, 96.3% | 46.8%, 99.4% |
+
+- This supersedes the lower-bound figures in the previous block. With Opus text only 23 of 729
+  hadpi words are genuinely not read. majid with any reader: T 96%, S∧T 97%, TA 97.5%, precision
+  99.0–99.8%. Wrong-line boxes: 0 for every reader.
+- Agreement is rarer on joined or split tokens (TA confirms 89–93% of one-to-one tokens T shows,
+  but 57–65% of joined or split ones), because S and T put the internal boundary of a split word
+  in different places. That is why TA loses more than T with model text. A line-faithful reading
+  that keeps joins as typed (T4/T7) would reduce it.
+- **Gate G2, corrected:** the two "boxes on a non-text line" reported with Sonnet text were both on
+  real printed text: the running head on majid p23 (inside the truth's own ignore zone; now
+  counted separately as "ignored"), and a typed line under the signature on hadpi p2 that is not
+  in the owner's truth. No box has been shown on a signature, stamp, handwriting or logo for any
+  reader. **Owner decision open:** whether typed text below the signatures belongs in the truth
+  or in an ignore zone.
+- **A stricter line-text assignment (`--la T2`: the given text must explain a line's ink almost
+  as well as an unconstrained letter sequence does) is rejected: it fails gate G1.** With truth
+  text, p66 falls from 98.3% to 95.2% (S∧T) and from 95.8% to 93.3% (T), with 12 words left
+  unresolved; with 5% corrupted text hadpi T falls from 86.6% to 81.3% and majid from 93.0% to
+  89.9%. The committed assignment (`--la T`) stays. The code remains behind the switch.
+- **Open risk, synthetic only:** on one synthetic page type an invented or dropped text line
+  shifts the following text by one line (19–24 wrong-line boxes), where a truth line has no
+  detected line of its own in a stamp and signature zone. It has not occurred on a real page.
+  `tests/word_placer_g2.py` is the harness for it.
+- **Configuration to freeze for the held-out pages (hadpi p3–p5):** L1 lines; line-text assignment
+  `--la T`; shared vertical rule; arms T with S, G, R; `located` by TA on hard pages and S∧T on
+  printed pages (D13); side-edge measure; code at commit 2dfdf5f. Nothing is to be tuned on p3–p5.
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases
