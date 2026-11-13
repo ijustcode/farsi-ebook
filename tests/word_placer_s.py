@@ -218,3 +218,66 @@ def vertical_line_comp(li, results, sw, unit, hc):
         v0, v1 = max(float(vv.min()), band[0] - 0.5), min(float(vv.max()), band[1] + 0.5)
         out.append(dict(x, quad=WP_._quad_from(li, li.uref - iv[1], li.uref - iv[0], v0, v1, 0.0)))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Follow-up 2a: rules between T alone and S&T (defined before scoring)
+# ---------------------------------------------------------------------------
+GP = dict(
+    OVER_WIDTH=1.5,    # T guard: aligned width > this x the width arm G's table predicts ...
+    OVER_ABS=1.0,      # ... plus this many letter units -> over-extended
+)
+
+
+def t_guard_line(L, al, gwidth, unit):
+    """Per logical token of a line: True when arm T's box is guarded out:
+    (1) a word next to (in visual order) a word T bypassed: a bypass lets the
+    neighbour stretch over the bypassed word's ink (p66 line 28 word 5);
+    (2) over-extension: the aligned width exceeds OVER_WIDTH x the width G's
+    letter table predicts for the word's units, plus OVER_ABS letters."""
+    n = len(L.tokens)
+    out = [False] * n
+    if al is None:
+        return out
+    W = al.words
+    for w, d in enumerate(W):
+        ti = L.order[w]
+        nb = any(W[v]["deleted"] for v in (w - 1, w + 1) if 0 <= v < len(W))
+        over = False
+        if not d["deleted"] and d.get("t0") is not None:
+            pred = sum(gwidth(k) for k, u in zip(L.ukeys, L.uword) if u == w)
+            width = (d["t1"] - d["t0"] + 1) * L.cs
+            over = width > GP["OVER_WIDTH"] * pred + GP["OVER_ABS"] * unit
+        out[ti] = bool(nb or over)
+    return out
+
+
+def apply_guard(res, guard):
+    out = []
+    for x, g in zip(res, guard):
+        if g and x.get("status") == "located":
+            out.append(dict(x, status="line" if x.get("line_quad") else "unresolved",
+                            reason="T guard: next to a bypassed word or over-extended"))
+        else:
+            out.append(dict(x))
+    return out
+
+
+def t_any_agree(li, t_all, others: dict, unit):
+    """T's box, located when at least one of the other arms (S, G, R)
+    agrees with it on both side edges (agree_pair)."""
+    out = []
+    names = list(others)
+    for ti, x in enumerate(t_all):
+        q = x.get("quad")
+        ok = (q is not None and "bypassed" not in (x.get("reason") or "")
+              and x.get("status") in ("located", "line")
+              and any(agree_pair(li, q, (others[n][ti] or {}).get("quad"), unit) for n in names))
+        if ok:
+            out.append(dict(x, status="located", reason="T agrees with another arm"))
+        elif x.get("status") == "unresolved":
+            out.append(dict(x))
+        else:
+            out.append(dict(x, status="line" if x.get("line_quad") else "unresolved",
+                            reason="no other arm agrees with T"))
+    return out

@@ -885,6 +885,59 @@ assignment, side-edge measure, "located and correct, precision":
   G2 text-line counts, synthetic untouched seeds) is on disk under `out/word_placer/` but has not
   been reported or reviewed.
 
+**Step 4: a rule that meets the hard-page targets with truth text, and the first end-to-end run
+on model-read text (2026-11-13, $0; `tests/word_placer_e2e.py`, rules in `tests/word_placer_s.py`).**
+Side-edge measure only.
+
+Rule **TA**, defined before scoring: arm T's box, shown as `located` only when at least one of
+S, G, R agrees with it on both side edges (within half a letter). No tuned part.
+
+| Rule, end to end with the owner's line text (B) | hadpi | majid | p66 |
+|---|---|---|---|
+| T alone | 91.5%, precision 96.4% | 97.2%, 99.5% | 95.8%, 99.1% |
+| **TA** | **86.0%, 97.5%** | 98.7%, 99.7% | 98.6%, 99.2% |
+| S∧T (printed-page rule, D13) | 66.4%, 99.6% | 97.9%, 99.7% | 98.3%, 99.4% |
+
+- **TA meets both hard-page targets (≥ 85% at ≥ 97%) on hadpi with truth line text**, with
+  audited lines as well (85.6% at 97.3%). Per page: p1 98.0% precision, p2 96.9%. Wrong-line boxes
+  0. On printed pages TA is equal to or better than S∧T in recall at about the same precision
+  (p66: 351 correct with 3 wrong, against 350 with 2). Development pages; not yet confirmed on
+  held-out p3–p5.
+- Why agreement works: T's `located` boxes next to a word T bypassed are wrong 17 of 38 times;
+  all its other located boxes are wrong 54 of 3,264 times. Agreement rules drop the first kind
+  (the p66 line 28 over-extension is this class). A direct guard against it (rule TQ) costs
+  recall on clean pages and is not adopted.
+- Vertical extent, settled: of the 79 earlier "vertical only" failures, 78 were audited boxes
+  taller than the ink and 1 was an arm box too short. This matches the owner's account (D12).
+
+**End to end with a model's reading as the line text** (cached Step 2 responses; no API call):
+
+| Line text from | hadpi: words read / misread / no counterpart | hadpi T | hadpi S∧T | hadpi TA | majid TA |
+|---|---|---|---|---|---|
+| Owner's truth | 729 / 0 / 0 | 91.5%, 96.4% | 66.4%, 99.6% | 86.0%, 97.5% | 98.7%, 99.7% |
+| Opus 5.5, native bands | 658 / 9 / 62 | 82.4%, 94.1% | 60.8%, 97.1% | 76.3%, 96.0% | 96.7%, 99.7% |
+| Opus 5.5, line crops | 649 / 11 / 69 | 81.6%, 95.5% | 60.2%, 99.1% | 79.0%, 97.0% | 95.9%, 99.5% |
+| Sonnet 5, native bands | 535 / 62 / 132 | 60.9%, 88.6% | 46.0%, 100% | 55.4%, 96.7% | 97.6%, 99.8% |
+
+- **Printed pages hold with model-read text**: 95–98% at ≥ 99% for every reader.
+- **hadpi with Opus text: 76–79% located and correct at 96–97% precision** (TA). No rule reaches
+  85% at 97% with model text. The loss against truth text is mostly not misreading: of the 62–69
+  truth words with no counterpart, most are words the model joined or split differently from the
+  owner's truth with the same letters (on p2, 36 of 54), so they cannot be matched one to one.
+  Their boxes were drawn but not scored ("extra": T 78, TA 44). **The recall figures for model
+  text are therefore a lower bound**; scoring joined or split tokens against the union of their
+  truth words is still to do.
+- Boxes on misread words (wrong text pointing at the right ink): Opus 5–7 per two hadpi pages,
+  nearly all in the right place; Sonnet 53, of which 30 in the right place.
+- Wrong-line boxes: 0 for every reader, arm and page.
+- **First breach of gate G2:** with Sonnet 5's reading, 2 boxes on hadpi p2 and 2 on majid p23
+  were shown on a non-text detected line, because Sonnet produced more lines than are printed
+  (33 for 31; 28 for 27) and the extra lines were paired with non-text detections. No breach with
+  Opus readings or truth text. **Must be fixed before any reader that can invent lines is used:**
+  a text line may be paired with a detected line only if the template score confirms it.
+- Not done: readings other than the first repeat; model text plus further corruption; held-out
+  p3–p5.
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases

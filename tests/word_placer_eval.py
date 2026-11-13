@@ -1164,7 +1164,7 @@ def run_R(page, exp, *, ev, texts=None, src=None):
 INSTRUMENT_NOTE = ("h1 (word_correct_h1, owner decision D12) is the headline on every page; the strict area rule "
                    "word_correct_v1 is printed beside it. The difference between the two columns is an instrument "
                    "change, not a placement improvement.")
-T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3")
+T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3", "TA", "TQ", "TAQ")
 R_DEP = ("TR", "Rc", "RcG", "R", "RG", "SR", "M2", "M3")
 T_OPTS = dict(init="G", with_R=True, keep=None, vert="old", la="length")
 # set from the command line (--tinit, --no-tr, --vert, --la). vert "old": each
@@ -1307,6 +1307,12 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
         for name, rule in (("SR", ("S", "R")), ("SG", ("S", "G")), ("ST", ("S", "T")), ("M2", ("M", 2)), ("M3", ("M", 3))):
             if (rule[0] == "M" and with_R) or (rule[0] != "M" and all(a in per for a in rule)):
                 d[name] = Ss.agreement_line(li, {k: per[k] for k in (rule if rule[0] != "M" else per)}, unit, rule)
+        # follow-up 2a: rules between T and S&T, defined before scoring (word_placer_s)
+        guard = Ss.t_guard_line(L, al, lambda k: T.g_width(gm, k), unit)
+        others = {k: per[k] for k in ("S", "G", "R") if k in per}
+        d["TA"] = Ss.t_any_agree(li, tall, others, unit)
+        d["TQ"] = Ss.apply_guard(tres, guard)
+        d["TAQ"] = Ss.apply_guard(d["TA"], guard)
         done[i] = d
     if T_OPTS.get("vert") in ("line", "comp"):
         for (i, li, toks) in todo:

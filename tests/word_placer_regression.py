@@ -18,6 +18,7 @@ neighbours kept, a monotone objective after round 1 without collapse or drift,
 determinism. Arm S and the agreement rules (section 10). The shared vertical
 rule on a tight-leading page (section 11) and the template-scored line-text
 assignment with an inserted non-text line and a dropped text line (section 12).
+The rules between T and S&T and the end-to-end token alignment (section 13).
 
 Floors are set below the values measured when the test was written (listed
 beside each), so they catch regressions, not noise.
@@ -25,6 +26,7 @@ beside each), so they catch regressions, not noise.
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -287,6 +289,7 @@ def main() -> int:
     arm_t_checks()
     arm_s_checks()
     vertical_and_assignment_checks()
+    rules_2a_and_e2e_checks()
 
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
@@ -507,6 +510,50 @@ def vertical_and_assignment_checks():
         check(g2 == 0, f"G2: boxes shown on non-text detected lines {g2} == 0")
     finally:
         E.T_OPTS["la"] = "length"
+
+
+def rules_2a_and_e2e_checks():
+    """Follow-up 2a rules (TA, TQ, TAQ) and the end-to-end token alignment
+    (word_placer_e2e), synthetic input only; no cache, no network."""
+    print("13. rules between T and S&T; end-to-end alignment")
+    import word_placer_e2e as X
+    page = page_of("typewriter", 211, preset="tw_photo_medium")
+    ev = WP.page_evidence(page["gray"])
+    texts = [list(t) for t in page["texts"]]
+    src = [[(li, wi) for wi in range(len(t))] for li, t in enumerate(texts)]
+    subs = []
+    for li, t in enumerate(texts):
+        if len(t) >= 6 and len(subs) < 6:
+            t[3] = "ققققق"            # a word whose letters are not printed anywhere on the line
+            subs.append(li)
+    arms, info = E.run_T(page, "A", ev=ev, texts=texts, src=src)
+    for nm in ("TA", "TQ", "TAQ"):
+        check(statuses(arms[nm]) <= ALLOWED, f"{nm} statuses only located/line/unresolved")
+    loc = lambda nm: {k for k, v in arms[nm].items() if v["status"] == "located"}  # noqa: E731
+    check(loc("TA") <= loc("Tall"), "TA locates only words that T shows a box for")
+    check(loc("TAQ") <= loc("TA") and loc("TQ") <= loc("T"), "the guard only removes boxes")
+    byp = [li for li in subs if "bypassed" in arms["T"][(li, 3)]["reason"]]
+    nb_loc = sum(1 for li in byp for w in (2, 4) if arms["TQ"][(li, w)]["status"] == "located")
+    check(byp and nb_loc == 0, f"TQ: neighbours of {len(byp)} bypassed words are never located ({nb_loc})")
+    _, _, smQ = _ok_map(page, arms["TQ"])
+    check((smQ["located_precision"]["rate"] or 0) >= 0.93, f"TQ precision {smQ['located_precision']['k']}/{smQ['located_precision']['n']} >= 93%")
+    truth = [["aa", "bb", "cc"], ["dd", "ee"]]
+    model = [["aa", "bx", "cc"], ["ee", "zz"]]
+    src2, st2 = X.align_to_truth(truth, model)
+    check(st2[(0, 0)] == "read" and st2[(0, 1)] == "misread" and st2[(1, 0)] == "missing" and st2[(1, 1)] == "read",
+          f"e2e alignment: read / misread / missing classified ({st2})")
+    check(src2[1][1][0] == "x" and src2[1][0] == (1, 1), "e2e alignment: extra token is unmatched, shifted token found")
+    old_env = os.environ.pop("ANTHROPIC_BASE_URL", None)
+    try:
+        refused = False
+        try:
+            X.run(keys=["none/0"], readers=())
+        except SystemExit:
+            refused = True
+        check(refused, "e2e refuses to run unless the API base URL is a dead local address")
+    finally:
+        if old_env is not None:
+            os.environ["ANTHROPIC_BASE_URL"] = old_env
 
 
 T_FLOORS = dict(photo_rate=0.70, photo_prec=0.93, o2_rate=0.70)
