@@ -547,6 +547,88 @@ def grade_target(page: TruthPage, target: list, placed: dict | None) -> dict:
     return row
 
 
+# ---------------------------------------------------------------------------
+# word_correct_h1 (added 2026-11-12, owner decision D12): the side-edge rule,
+# headline on every page. Additive: word_correct_v1 and every existing output
+# field are unchanged; callers opt in by calling grade_target_h1.
+# ---------------------------------------------------------------------------
+H1_EDGE_LETTERS = 0.5      # each horizontal edge within this many letters of the audited edge
+H1_MAX_HEIGHT = 1.5        # box height at most this x the target line's audited outline height
+DEFINITIONS["word_correct_h1"] = (
+    "Owner decision D12: audited word boxes are authoritative horizontally and loose vertically. "
+    "A box (union of its segments) is correct_h1 for target words T when, for every line holding "
+    "targets (each segment is attributed to the nearest line): (1) right line: the centre of every segment is nearer (across the line, in each "
+    "line's frame) to the centre of a target line's audited outline than to that of any other graded "
+    "line, and the segments' extent across that line overlaps the targets' audited v-range (no "
+    "area test, since neighbouring audited boxes are loose in height too); (2) each horizontal "
+    "edge of the segments, measured along the line in its frame, is within 0.5 letter of the targets' "
+    "audited edge (letter = audited width / letters of the edge word); (3) the box takes less than "
+    "0.5 letter from any other word of the same line, measured horizontally (overlap along the line / "
+    "that word's audited width x its letters), counting only words whose audited v-range the box "
+    "overlaps; (4) the box is at most 1.5 x the line's audited outline height (a box spanning two "
+    "lines fails). No area-coverage test against the audited box's height. CHOICE: intrusion is "
+    "measured horizontally because the neighbours' audited heights are loose too; other-line "
+    "intrusion is left to (1) and (4). Owner decision D12 (2026-11-12): this side-edge rule is the "
+    "headline on every page (owner-audited, agent-audited and synthetic); word_correct_v1 is printed "
+    "beside it as the secondary number. The difference between the two is an instrument change, not "
+    "a placement change.")
+
+
+def grade_target_h1(page: TruthPage, target: list, placed: dict | None, v1_row: dict | None = None) -> dict:
+    """word_correct_h1 (see DEFINITIONS). Returns dict(correct, reason, edges, height_ratio)."""
+    target = [tuple(t) for t in target]
+    segs = (placed or {}).get("segments") or []
+    if not segs:
+        return {"correct": False, "reason": "no_box"}
+    polys = [region_poly(sg, page.W, page.H) for sg in segs]
+    lines_t = sorted({li for li, _ in target})
+    by_line = {li: [] for li in lines_t}
+    graded = [L for L in page.lines if not L.excluded]
+    for poly in polys:
+        cx = sum(p[0] for p in poly) / len(poly); cy = sum(p[1] for p in poly) / len(poly)
+
+        def dist(L):
+            v = ba.page_to_frame(L.frame, cx, cy)[1]
+            return abs(v - (L.box[1] + L.box[3]) / 2)
+        nearest = min(graded, key=dist) if graded else None
+        if nearest is None or nearest.index not in by_line:
+            return {"correct": False, "reason": "wrong line"}
+        by_line[nearest.index].append(poly)
+    out = {"correct": True, "reason": "", "edges": [], "height_ratio": []}
+    for li in lines_t:
+        L = page.lines[li]
+        tw = sorted([page.word(a, b) for a, b in target if a == li], key=lambda w: w.fbox[0])
+        if not by_line[li]:
+            return {"correct": False, "reason": "no segment on a target line"}
+        fb = ba.quad_to_frame_box(L.frame, [p for poly in by_line[li] for p in poly])
+        v0 = min(w.fbox[1] for w in tw); v1 = max(w.fbox[3] for w in tw)
+        if fb[3] <= v0 or fb[1] >= v1:
+            return {"correct": False, "reason": "no vertical overlap with the target line"}
+        lh = max(1e-6, L.box[3] - L.box[1])
+        hr = (fb[3] - fb[1]) / lh
+        out["height_ratio"].append(round(hr, 3))
+        if hr > H1_MAX_HEIGHT:
+            return dict(out, correct=False, reason="taller than the line allows")
+        wl, wr = tw[0], tw[-1]
+        let_l = (wl.fbox[2] - wl.fbox[0]) / max(1.0, wl.letters)
+        let_r = (wr.fbox[2] - wr.fbox[0]) / max(1.0, wr.letters)
+        el, er = (fb[0] - wl.fbox[0]) / let_l, (fb[2] - wr.fbox[2]) / let_r
+        out["edges"].append([round(el, 3), round(er, 3)])
+        if abs(el) > H1_EDGE_LETTERS or abs(er) > H1_EDGE_LETTERS:
+            out.update(correct=False, reason="horizontal edge off")
+        tset = set(target)
+        for w in L.words:
+            if (w.li, w.wi) in tset:
+                continue
+            if fb[3] <= w.fbox[1] or fb[1] >= w.fbox[3]:
+                continue
+            ov = max(0.0, min(fb[2], w.fbox[2]) - max(fb[0], w.fbox[0]))
+            take = ov / max(1e-6, w.fbox[2] - w.fbox[0]) * w.letters
+            if take >= INTRUDE_LETTERS:
+                out.update(correct=False, reason="takes half a letter of another word")
+    return out
+
+
 def cascades(page: TruthPage, rows: list[dict]) -> list[dict]:
     """O1: maximal runs of >= 2 consecutive same-line words shifted the same way."""
     by = {tuple(r["target"][0]): r for r in rows if len(r["target"]) == 1}

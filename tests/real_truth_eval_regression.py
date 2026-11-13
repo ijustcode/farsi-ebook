@@ -145,6 +145,30 @@ def main():
                       100 / H - 20 / H, 0.9, 300 / H]}))
         check(not envelope["correct"], "the envelope of a wrapped span is not correct (segments are graded)")
 
+        # --- word_correct_h1 (D12: horizontal rule, loose height) -------------
+        def h(target, *regions):
+            return rt.grade_target_h1(t, target, placed(*regions))
+        check(h([(1, 2)], rect_of_frame(t, 1, word_box(2)))["correct"], "h1: exact box is correct")
+        tallh = h([(1, 2)], rect_of_frame(t, 1, [b[0], b[1] - 15, b[2], b[3]]))
+        check(tallh["correct"],
+              f"h1: a box taller than the audited box (within 1.5 x the line) is correct ({tallh})")
+        shorth = h([(1, 2)], rect_of_frame(t, 1, [b[0], b[1] + 15, b[2], b[3]]))
+        check(shorth["correct"] and not g([(1, 2)], rect_of_frame(t, 1, [b[0], b[1] + 15, b[2], b[3]]))["correct"],
+              "h1: a box shorter than the audited box is correct (v1 fails it on area)")
+        check(not h([(1, 2)], rect_of_frame(t, 1, [b[0] - GAP - WORD_W, b[1], b[2], b[3]]))["correct"],
+              "h1: swallowing the neighbour fails")
+        check(not h([(1, 2)], rect_of_frame(t, 1, [b[0] - 1.0 * LETTER, b[1], b[2], b[3]]))["correct"],
+              "h1: an edge one letter wide of the audited edge fails")
+        check(h([(1, 2)], rect_of_frame(t, 1, [b[0] + 0.3 * LETTER, b[1], b[2], b[3]]))["correct"],
+              "h1: an edge 0.3 letter inside the audited edge is correct")
+        check(not h([(1, 2)], rect_of_frame(t, 2, word_box(2)))["correct"], "h1: the same word position on the next line fails")
+        check(not h([(1, 2)], rect_of_frame(t, 1, [b[0], b[1] - 60, b[2], b[3] + 20]))["correct"],
+              "h1: a box spanning into the neighbouring lines (over 1.5 x line height) fails")
+        check(h([(1, 4), (2, 0)], rect_of_frame(t, 1, word_box(4)), rect_of_frame(t, 2, word_box(0)))["correct"],
+              "h1: a two-segment span across a line wrap is correct")
+        check(rt.grade_target(t, [(1, 2)], placed(rect_of_frame(t, 1, word_box(2))))["correct"],
+              "v1 unchanged by the h1 addition")
+
         # --- word-map summary: O1 cascade, denominators ----------------------
         words, spans = rt.build_targets(t, 7, 30)
         check(len(words) == 20 and all(k[0] != 0 for tg in words + spans for k in tg.words),

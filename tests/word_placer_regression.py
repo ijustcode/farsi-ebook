@@ -15,7 +15,9 @@ Arm T (tests/word_placer_t.py, section 9): templates learned from a synthetic
 typewriter photo page with no face rendered, a tight-gap (O2) page resolved by
 appearance where G fails, the O1 marks, substituted words flagged with their
 neighbours kept, a monotone objective after round 1 without collapse or drift,
-determinism. Arm S and the agreement rules (section 10).
+determinism. Arm S and the agreement rules (section 10). The shared vertical
+rule on a tight-leading page (section 11) and the template-scored line-text
+assignment with an inserted non-text line and a dropped text line (section 12).
 
 Floors are set below the values measured when the test was written (listed
 beside each), so they catch regressions, not noise.
@@ -284,6 +286,7 @@ def main() -> int:
 
     arm_t_checks()
     arm_s_checks()
+    vertical_and_assignment_checks()
 
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
@@ -426,6 +429,84 @@ def arm_s_checks():
     n2 = sum(p["status"] == "located" for p in arms["M2"].values())
     n3 = sum(p["status"] == "located" for p in arms["M3"].values())
     check(n2 >= n3, f"M2 locates at least as many words as M3 ({n2} >= {n3})")
+
+
+def vertical_and_assignment_checks():
+    """Follow-ups: the shared vertical rule (word_placer_s.vertical_line_comp)
+    on a tight-leading page with dots and marks; the template-scored line-text
+    assignment (word_placer_la) with an extra non-text line and a dropped
+    text line."""
+    print("11. shared vertical rule (tight leading)")
+    page = E.synth_page("modern_naskh", dict(preset="clean", leading=1.35), 218)
+    ev = WP.page_evidence(page["gray"])
+    res = {}
+    for v in ("old", "comp"):
+        E.T_OPTS["vert"] = v
+        res[v] = E.run_T(page, "A", ev=ev, with_R=False)[0]
+    E.T_OPTS["vert"] = "old"
+    _, wO, smO = _ok_map(page, res["old"]["T"])
+    _, wC, smC = _ok_map(page, res["comp"]["T"])
+    check(smC["located_correct"]["k"] >= smO["located_correct"]["k"] - 0.01 * smO["n"],
+          f"comp rule keeps strict correct: {smC['located_correct']['k']} vs old {smO['located_correct']['k']} of {smO['n']}")
+    check(smC["wrong_line"]["k"] == 0, f"comp rule: wrong line {smC['wrong_line']['k']} == 0 at leading 1.35")
+    intr = sum(1 for r in wC if r["status"] == "located" and r.get("intrusion_other_line_letters", 0) >= 0.5)
+    check(intr == 0, f"comp rule: no located box takes half a letter of another line ({intr})")
+    tp = page["truth_page"]
+    import box_audit as ba
+    cov = tot = 0
+    for r in wC:
+        if r["status"] != "located" or not r["correct"]:
+            continue
+        li, wi = r["target"][0]; w = tp.word(li, wi); L = tp.lines[li]
+        pts = [p for sg in res["comp"]["T"][(li, wi)]["segments"] for p in rt.region_poly(sg, tp.W, tp.H)]
+        fb = ba.quad_to_frame_box(L.frame, pts)
+        tot += 1
+        cov += fb[1] <= w.fbox[1] + 1.0 and fb[3] >= w.fbox[3] - 1.0
+    check(tot and cov >= 0.95 * tot, f"comp rule: box spans the word's full ink height (dots, marks) for {cov}/{tot} correct boxes")
+
+    print("12. template-scored line-text assignment")
+    E.T_OPTS["la"] = "T"
+    try:
+        page = page_of("typewriter", 219, preset="clean")
+        tp = page["truth_page"]
+        gray = page["gray"].copy()
+        # an extra non-text line: a handwritten-looking stroke between lines 4 and 5
+        a, b = tp.lines[4], tp.lines[5]
+        ya = max(p[1] for w in a.words for p in w.quad); yb = min(p[1] for w in b.words for p in w.quad)
+        xs = [p[0] for w in a.words for p in w.quad]
+        x0, x1 = min(xs), max(xs)
+        yc = (ya + yb) / 2
+        X = np.arange(int(x0 + 0.2 * (x1 - x0)), int(x1 - 0.1 * (x1 - x0)))
+        Y = yc + 0.25 * (yb - ya) * np.sin(X / 9.0)
+        for dx in range(-1, 2):
+            for dy in range(-2, 3):
+                gray[np.clip((Y + dy).astype(int), 0, gray.shape[0] - 1), np.clip(X + dx, 0, gray.shape[1] - 1)] = 25.0
+        page2 = dict(page, gray=gray)
+        ev = WP.page_evidence(gray)
+        arms, info = E.run_T(page2, "B", ev=ev, with_R=False)
+        _, w, sm = _ok_map(page2, arms["T"])
+        la = info.get("la_template", {})
+        check(sm["wrong_line"]["k"] == 0, f"extra non-text line: wrong-line boxes {sm['wrong_line']['k']} == 0")
+        check(la.get("trusted_after", 0) >= la.get("trusted_before", 99) - 1,
+              f"extra non-text line: trusted text lines {la.get('trusted_after')} (length assignment {la.get('trusted_before')})")
+        base, _ = E.run_T(page, "B", ev=WP.page_evidence(page["gray"]), with_R=False)
+        _, _, sm0 = _ok_map(page, base["T"])
+        check(sm["located_correct"]["k"] >= sm0["located_correct"]["k"] - 0.02 * sm["n"],
+              f"extra non-text line: T located&correct {sm['located_correct']['k']} vs {sm0['located_correct']['k']} without it (of {sm['n']})")
+        # a dropped text line: the reading misses printed line 6
+        texts = [list(t) for li_, t in enumerate(page["texts"]) if li_ != 6]
+        src = [[(li_, wi) for wi in range(len(t))] for li_, t in enumerate(page["texts"]) if li_ != 6]
+        ev = WP.page_evidence(page["gray"])
+        arms, info = E.run_T(page, "B", ev=ev, texts=texts, src=src, with_R=False)
+        _, w, sm = _ok_map(page, arms["T"])
+        check(sm["wrong_line"]["k"] == 0, f"dropped text line: wrong-line boxes {sm['wrong_line']['k']} == 0")
+        lost = [r for r in w if r["target"][0][0] == 6 and r["status"] == "located"]
+        check(not lost, "dropped text line: no word of the missing line is located (it has no text)")
+        check((sm["located_precision"]["rate"] or 0) >= 0.97, f"dropped text line: precision {sm['located_precision']['k']}/{sm['located_precision']['n']} >= 97%")
+        g2 = info.get("g2_boxes_on_nontext", {}).get("T", 0)
+        check(g2 == 0, f"G2: boxes shown on non-text detected lines {g2} == 0")
+    finally:
+        E.T_OPTS["la"] = "length"
 
 
 T_FLOORS = dict(photo_rate=0.70, photo_prec=0.93, o2_rate=0.70)

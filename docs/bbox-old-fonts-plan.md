@@ -838,6 +838,53 @@ half a letter. Strict scorer; A = audited lines + truth text, B = L1 lines + tru
 - D5 (kraken): not asked yet. A recogniser would help the about 30 horizontally wrong boxes and
   the missing confidence, not the vertical issue or line-text assignment.
 
+**Step 4, side-edge measure and template-scored line assignment (2026-11-12/13, $0;
+`tests/word_placer_la.py`, additive `word_correct_h1` in `tests/real_truth_eval.py`).** From here
+on every word-placement number uses the side-edge measure (D12): right line, each horizontal edge
+within half a letter of the truth edge, under half a letter taken from a neighbour, not grossly
+taller than the line. **This is an instrument change. Numbers below are not comparable with the
+blocks above.** The implementer was stopped by a usage limit before writing its report; the
+numbers were read by the planner from `out/word_placer/real_R13_old_h1.json` (code of 246c39c,
+re-scored on identical boxes) and `real_R14_new_h1.json` (new line assignment and shared vertical
+rule), and the regression suites were re-run.
+
+Bridging table (instrument change only; same boxes, audited lines + truth text, hadpi 729 words):
+
+| Arm | Old area rule | Side-edge measure |
+|---|---|---|
+| T | 74.3%, precision 80.1% | 88.2%, precision 95.0% |
+| S∧T | 63.5%, 95.3% | 66.4%, 99.6% |
+| Majority ≥ 3 | 65.0%, 89.3% | 71.6%, 98.3% |
+| S | 68.3%, 68.3% | 70.4%, 70.4% |
+| R∧G | 49.0%, 85.0% | 54.9%, 95.2% |
+
+End to end (experiment B: L1 lines + truth line text), before and after the template-scored line
+assignment, side-edge measure, "located and correct, precision":
+
+| Arm | hadpi before | **hadpi after** | majid before | **majid after** | p66 (unchanged) |
+|---|---|---|---|---|---|
+| T | 74.9%, 95.6% | **91.5%, 96.4%** | 83.7%, 99.4% | **97.2%, 99.5%** | 95.8%, 99.1% |
+| S∧T | 54.7%, 99.5% | **66.4%, 99.6%** | 84.2%, 99.6% | **97.9%, 99.7%** | 98.3%, 99.4% |
+| Majority ≥ 3 | 58.3%, 97.7% | **70.2%, 98.7%** | 85.3%, 99.4% | **99.4%, 99.7%** | 98.3%, 99.4% |
+| Majority ≥ 2 | 69.7%, 91.9% | **86.7%, 93.8%** | 85.4%, 99.4% | **99.5%, 99.5%** | 98.9%, 99.2% |
+| S | 56.1%, 69.6% | 67.8%, 68.7% | 84.7%, 98.5% | 98.7%, 98.7% | 99.2%, 99.2% |
+
+- Words unresolved because their line's text was not trusted: hadpi 141 → 10; majid 89 → 0.
+  Wrong-line boxes: 0 on every real page for every arm (gate G2 holds on that count).
+- **Printed pages meet the clean-page targets end to end with truth line text** (≥ 95% at ≥ 98%):
+  S∧T 97.9% at 99.7% on majid, 98.3% at 99.4% on p66 (which has one known truth error, D13).
+- **Hard pages:** T alone is 91.5% at 96.4% (target ≥ 85% at ≥ 97%: recall met, precision 0.6
+  point short). S∧T meets precision (99.6%) at 66.4%. No single rule meets both yet.
+- With 5% of words corrupted (C5): hadpi T 86.6% at 95.5%, S∧T 60.4% at 99.8%; majid T 93.0% at
+  98.0%, S∧T 85.3% at 99.1%.
+- **Caveats.** (1) All of this uses the owner's corrected line text; production text comes from a
+  model. (2) hadpi p1–p2 were looked at throughout development, including for the new line
+  assignment; these are development numbers, and only held-out p3–p5 can confirm them. (3) Run
+  time on a hadpi page with all arms is 13.5 s, over the 10 s target. (4) The implementer's own
+  account (what the vertical measurement showed, the cause of T's over-extension on p66 line 28,
+  G2 text-line counts, synthetic untouched seeds) is on disk under `out/word_placer/` but has not
+  been reported or reviewed.
+
 ### Step 5 — Correction-level paired comparison ($0)
 
 - Population, frozen before running: every hadpi correction, the 86 `ghessehaye-majid` cases

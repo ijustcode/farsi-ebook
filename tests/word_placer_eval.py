@@ -403,6 +403,8 @@ def grade_page(page, per_word, seed=7, n_spans=60):
         row = dict(rt.grade_target(tp, tg.words, pl), tid=tg.tid)
         row["within1"] = bool(within_one_letter(tp, tg.words[0], pl, row))
         row["withinhalf"] = bool(within_half_letter(tp, tg.words[0], pl, row))
+        # instrument change (D12): the horizontal rule word_correct_h1, beside the strict v1
+        row["correct_h1"] = bool(row["status"] == "located" and rt.grade_target_h1(tp, tg.words, pl, row)["correct"])
         wrows.append(row)
     for tg in spans:
         srows.append(dict(rt.grade_target(tp, tg.words, span_placed([per_word.get(k) for k in tg.words])), tid=tg.tid))
@@ -515,6 +517,7 @@ def corruption_metrics(wrows, status):
     bad = [r for r in wrows if status.get(tuple(r["target"][0])) in ("sub", "del")]
     sub = [r for r in wrows if status.get(tuple(r["target"][0])) == "sub"]
     return dict(kept=len(kept), kept_correct=sum(r["status"] == "located" and r["correct"] for r in kept),
+                kept_correct_h1=sum(bool(r.get("correct_h1")) for r in kept),
                 corrupted=len(bad), corrupted_not_located=sum(r["status"] != "located" for r in bad),
                 sub=len(sub), sub_not_located=sum(r["status"] != "located" for r in sub),
                 sub_located_correct_box=sum(r["status"] == "located" and r["correct"] for r in sub))
@@ -591,6 +594,7 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
             ss_ = rt.summarize_targets([(tp, srows)], False)
             row = dict(page=page["name"], exp=exp, arm=arm, words=_slim(sw_), spans=_slim(ss_),
                        within1=sum(r_["within1"] for r_ in wrows), withinhalf=sum(r_["withinhalf"] for r_ in wrows),
+               h1_correct=sum(r_["correct_h1"] for r_ in wrows),
                        seconds=round(secs + (ev.seconds if arm != "draft" else 0.0), 2),
                        info={k: v for k, v in info.items() if k not in ("rounds", "_r")})
             if status is not None:
@@ -604,13 +608,12 @@ def run_page(page, exps, arms, seed=7, verbose=True, ev=None):
                 extra = ""
                 if "corruption" in row:
                     c = row["corruption"]
-                    extra = f" kept {c['kept_correct']}/{c['kept']} corrupt-notloc {c['corrupted_not_located']}/{c['corrupted']}"
+                    extra = f" kept (side-edge) {c['kept_correct_h1']}/{c['kept']} corrupt-notloc {c['corrupted_not_located']}/{c['corrupted']}"
                 if "line_assignment" in info:
                     la = info["line_assignment"]
                     extra += f" LA wrong {la['text_lines_wrong_detected']} unassigned {la['text_lines_unassigned']} nontext->text {la['nontext_detected_given_text']}/{la['nontext_detected']}"
-                print(f"    {page['name'][:34]:34s} {exp:3s} {arm:5s} loc&corr {lc['k']:3d}/{lc['n']:3d} = {lc['rate']:.3f}"
-                      f"  prec {pr['k']}/{pr['n']}  wl {sw_['wrong_line']['k']}  O1 {sw_['O1_cascades']['count']}"
-                      f"  O2 {sw_['O2_boundary']['k']}  {secs:.1f}s{extra}", flush=True)
+                print(f"    {page['name'][:34]:34s} {exp:3s} {arm:5s} side-edge {row['h1_correct']:3d}/{lc['n']:3d} = {row['h1_correct'] / max(1, lc['n']):.3f}"
+                      f"  prec {row['h1_correct']}/{pr['n']}  {secs:.1f}s{extra}", flush=True)
     return rows
 
 
@@ -621,6 +624,7 @@ def _score_arm(page, exp, name, pw, info, status, secs, verbose):
     ss_ = rt.summarize_targets([(tp, srows)], False)
     row = dict(page=page["name"], exp=exp, arm=name, words=_slim(sw_), spans=_slim(ss_),
                within1=sum(r_["within1"] for r_ in wrows), withinhalf=sum(r_["withinhalf"] for r_ in wrows),
+               h1_correct=sum(r_["correct_h1"] for r_ in wrows),
                seconds=round(secs, 2), info=info,
                outcomes_located_wrong=rt._count(x["outcome"] for x in wrows if x["status"] == "located" and not x["correct"]))
     if status is not None:
@@ -630,10 +634,9 @@ def _score_arm(page, exp, name, pw, info, status, secs, verbose):
         extra = ""
         if "corruption" in row:
             c = row["corruption"]
-            extra = f" kept {c['kept_correct']}/{c['kept']} corrupt-notloc {c['corrupted_not_located']}/{c['corrupted']}"
-        print(f"    {page['name'][:34]:34s} {exp:3s} {name:5s} loc&corr {lc['k']:3d}/{lc['n']:3d} = {lc['rate']:.3f}"
-              f"  prec {pr['k']}/{pr['n']}  within1 {row['within1']}  wl {sw_['wrong_line']['k']}  O1 {sw_['O1_cascades']['count']}"
-              f"  O2 {sw_['O2_boundary']['k']}  {secs:.1f}s {info.get('font')}{extra}", flush=True)
+            extra = f" kept (side-edge) {c['kept_correct_h1']}/{c['kept']} corrupt-notloc {c['corrupted_not_located']}/{c['corrupted']}"
+        print(f"    {page['name'][:34]:34s} {exp:3s} {name:5s} side-edge {row['h1_correct']:3d}/{lc['n']:3d} = {row['h1_correct'] / max(1, lc['n']):.3f}"
+              f"  prec {row['h1_correct']}/{pr['n']}  within1 {row['within1']}  {secs:.1f}s {info.get('font')}{extra}", flush=True)
     return row
 
 
@@ -659,11 +662,12 @@ def aggregate(rows, key):
                                                                           span_n=0, span_loc_correct=0, span_located=0,
                                                                           kept=0, kept_correct=0, corrupted=0, within1=0,
                                                                           corrupted_not_located=0, sub=0, sub_not_located=0,
-                                                                          withinhalf=0))
+                                                                          withinhalf=0, h1=0, kept_correct_h1=0))
         w = r["words"]
         d["pages"] += 1
         d["within1"] += r.get("within1", 0)
         d["withinhalf"] += r.get("withinhalf", 0)
+        d["h1"] += r.get("h1_correct", 0)
         d["n"] += w["n"]
         d["loc_correct"] += w["located_correct"]["k"]
         d["located"] += w["located_precision"]["n"]
@@ -677,8 +681,8 @@ def aggregate(rows, key):
         d["span_n"] += s["n"]; d["span_loc_correct"] += s["located_correct"]["k"]; d["span_located"] += s["located_precision"]["n"]
         c = r.get("corruption")
         if c:
-            for k in ("kept", "kept_correct", "corrupted", "corrupted_not_located", "sub", "sub_not_located"):
-                d[k] += c[k]
+            for k in ("kept", "kept_correct", "corrupted", "corrupted_not_located", "sub", "sub_not_located", "kept_correct_h1"):
+                d[k] += c.get(k, 0)
     for g in out.values():
         for d in g.values():
             secs = d.pop("seconds")
@@ -694,14 +698,14 @@ def fmt_agg(agg):
         for ea in sorted(agg[g]):
             d = agg[g][ea]
             n = max(1, d["n"])
-            s = (f"    {ea:10s} loc&corr {d['loc_correct']:5d}/{d['n']:<5d} = {d['loc_correct'] / n:6.1%}"
-                 f"  prec {d['loc_correct'] if False else ''}{_prec(d)}  wrong-line {d['wrong_line']}/{d['n']}"
-                 f"  O1 {d['o1']} ({d['o1_words']} w)  O2 {d['o2']}  line {d['line']}  unres {d['unresolved']}"
-                 f"  [diag: located&within-1-letter {d['within1']}/{d['n']} = {d['within1'] / n:.1%}"
-                 f"; within-half-letter, horizontal only {d['withinhalf']}/{d['n']} = {d['withinhalf'] / n:.1%}]"
-                 f"  spans {d['span_loc_correct']}/{d['span_n']}")
+            # D12: the side-edge rule (word_correct_h1) only; the strict area rule stays in the
+            # stored rows (reproducibility) but is not printed
+            s = (f"    {ea:10s} side-edge correct {d['h1']:5d}/{d['n']:<5d} = {d['h1'] / n:6.1%}"
+                 f"  precision {d['h1']}/{d['located']} = {d['h1'] / max(1, d['located']):.1%}"
+                 f"  line {d['line']}  unres {d['unresolved']}"
+                 f"  [diag: located&within-1-letter {d['within1']}/{d['n']} = {d['within1'] / n:.1%}]")
             if d["kept"]:
-                s += (f"  | kept correct {d['kept_correct']}/{d['kept']} = {d['kept_correct'] / d['kept']:.1%}"
+                s += (f"  | kept correct (side-edge) {d['kept_correct_h1']}/{d['kept']} = {d['kept_correct_h1'] / d['kept']:.1%}"
                       f"  corrupted not-located {d['corrupted_not_located']}/{d['corrupted']}"
                       f" = {d['corrupted_not_located'] / max(1, d['corrupted']):.1%} (subs {d['sub_not_located']}/{d['sub']})")
             s += f"  t<= {d['seconds_max']}s"
@@ -745,6 +749,8 @@ def main(argv=None) -> int:
     s.add_argument("--out", default=None)
     s.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     s.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
+    s.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
+    s.add_argument("--la", choices=("length", "T"), default="length", help="line-text assignment under B/C")
     s.add_argument("--seeds", nargs="*", type=int, default=None, help="override the seed set")
     r = sub.add_parser("real")
     r.add_argument("--exps", nargs="*", default=list(EXPS))
@@ -754,6 +760,8 @@ def main(argv=None) -> int:
     r.add_argument("--out", default=None)
     r.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     r.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
+    r.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
+    r.add_argument("--la", choices=("length", "T"), default="length", help="line-text assignment under B/C")
     v = sub.add_parser("vrun")
     v.add_argument("--mode", choices=("mark", "coord"), default="mark")
     v.add_argument("--model", choices=("sonnet", "opus"), default="sonnet")
@@ -780,7 +788,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     if getattr(a, "tinit", None):
-        T_OPTS.update(init=a.tinit, with_R=not a.no_tr)
+        T_OPTS.update(init=a.tinit, with_R=not a.no_tr, vert=a.vert, la=a.la)
     if a.cmd == "synth":
         cfgs = [c for c in synth_configs() if a.configs is None or c[0] in a.configs]
         rows = eval_synth(a.seeds or SEEDS[a.set], cfgs, a.exps, a.arms)
@@ -795,7 +803,9 @@ def main(argv=None) -> int:
                     if rs:
                         print(f"  sweep {grp} {exp}/{arm}: " + "  ".join(f"t{x['tau']}:{x['rate']:.3f}/{x['precision']:.3f}" for x in sweep(rs)))
         out = Path(a.out) if a.out else OUT / f"synth_{a.set}.json"
-        out.write_text(json.dumps(dict(created_at=now(), version=WP.VERSION, params=WP.PARAMS, seeds=SEEDS[a.set],
+        out.write_text(json.dumps(dict(created_at=now(), version=WP.VERSION, params=WP.PARAMS, seeds=a.seeds or SEEDS[a.set],
+                                       definitions={k: rt.DEFINITIONS[k] for k in ("word_correct_v1", "word_correct_h1")},
+                                       instrument_note=INSTRUMENT_NOTE, t_opts={k: v for k, v in T_OPTS.items() if k != "keep"},
                                        rows=rows, by_config=agg_cfg, clean_vs_hard=agg_cls),
                                   ensure_ascii=False, indent=1, default=_np), encoding="utf-8")
         print(f"\nwrote {out}")
@@ -879,18 +889,19 @@ def cmd_real(a):
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(a.out) if a.out else OUT / f"real_{stamp}.json"
     out.write_text(json.dumps(dict(created_at=now(), version=WP.VERSION, code=code_fingerprint(), params=WP.PARAMS,
+                                   definitions={k: rt.DEFINITIONS[k] for k in ("word_correct_v1", "word_correct_h1")},
+                                   instrument_note=INSTRUMENT_NOTE, t_opts={k: v for k, v in T_OPTS.items() if k != "keep"},
                                    note=a.note, pages=pages_meta, rows=rows, by_group=agg, by_page=agg_page),
                               ensure_ascii=False, indent=1, default=_np), encoding="utf-8")
     log = OUT / "run_log.txt"
     with log.open("a", encoding="utf-8") as f:
         f.write(f"\n[{now()}] real scoring -> {out.name}  code {code_fingerprint()}  exps {a.exps} arms {a.arms}"
-                + (f"  T init {T_OPTS['init']} TP {_tp_digest()}" if "T" in a.arms else "") + "\n")
+                + (f"  T init {T_OPTS['init']} vert {T_OPTS['vert']} la {T_OPTS['la']} TP {_tp_digest()}" if "T" in a.arms else "") + "\n")
         f.write(f"  pages: {[m['key'] for m in pages_meta]}\n  note: {a.note}\n")
         for g in sorted(agg):
             for ea in sorted(agg[g]):
                 d = agg[g][ea]
-                f.write(f"  {g:34s} {ea:8s} loc&corr {d['loc_correct']}/{d['n']}  prec {_prec(d)}  wl {d['wrong_line']}"
-                        f"  O1 {d['o1']}  O2 {d['o2']}\n")
+                f.write(f"  {g:34s} {ea:8s} side-edge {d['h1']}/{d['n']}  prec {d['h1']}/{d['located']}  unres {d['unresolved']}\n")
     print(f"\nwrote {out}; appended {log}")
     return 0
 
@@ -1150,9 +1161,16 @@ def run_R(page, exp, *, ev, texts=None, src=None):
     return arms, dict(font=os.path.basename(font) if font else None, font_costs=fcosts)
 
 
+INSTRUMENT_NOTE = ("h1 (word_correct_h1, owner decision D12) is the headline on every page; the strict area rule "
+                   "word_correct_v1 is printed beside it. The difference between the two columns is an instrument "
+                   "change, not a placement improvement.")
 T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3")
 R_DEP = ("TR", "Rc", "RcG", "R", "RG", "SR", "M2", "M3")
-T_OPTS = dict(init="G", with_R=True, keep=None)     # set from the command line (--tinit, --no-tr)
+T_OPTS = dict(init="G", with_R=True, keep=None, vert="old", la="length")
+# set from the command line (--tinit, --no-tr, --vert, --la). vert "old": each
+# arm's own vertical extent (the runs of record); "line": one shared rule
+# (word_placer_s.vertical_box). la "length": §4.2 length assignment; "T":
+# template-scored assignment (word_placer_la).
 
 
 def _todo_lines(r, texts_used, gexp):
@@ -1187,11 +1205,13 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     pwG, ginfo = run_G(page, gexp, texts=texts, src=src, ev=ev)
     r = ginfo["_r"]
     texts_used = texts if texts is not None else page["texts"]
+    info = dict(init=init)
+    if gexp != "A" and T_OPTS.get("la") == "T":
+        r = template_reassign(page, ev, r, texts_used, src, ginfo, info)
     todo = _todo_lines(r, texts_used, gexp)
     W, H = page["truth_page"].W, page["truth_page"].H
     gm = r["model"]
     unit = gm.unit
-    info = dict(init=init)
     # arm R (font render) for TR, Rc and the R init
     rv_by, rg_by, riv_by = {}, {}, {}
     if with_R or init == "R":
@@ -1269,7 +1289,7 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     t0 = time.perf_counter()
     squads = Ss.s_page(page["gray"], [(i, li.geom, toks) for i, li, toks in todo], ev.S)
     info["seconds_S"] = round(time.perf_counter() - t0, 2)
-    arms = {k: {} for k in T_ARMS}
+    arms = {k: {} for k in T_ARMS + (("Gv",) if T_OPTS.get("vert") in ("line", "comp") else ())}
     done = {}
     for (i, li, toks), L, al in zip(todo, lines, aligns):
         tres, _ = T.word_results(L, al, ev.sw, unit, ev.hc)
@@ -1288,9 +1308,21 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
             if (rule[0] == "M" and with_R) or (rule[0] != "M" and all(a in per for a in rule)):
                 d[name] = Ss.agreement_line(li, {k: per[k] for k in (rule if rule[0] != "M" else per)}, unit, rule)
         done[i] = d
+    if T_OPTS.get("vert") in ("line", "comp"):
+        for (i, li, toks) in todo:
+            band = Ss.line_band(li)
+            if band is None:
+                continue
+            done[i]["Gv"] = [dict(x) for x in r["results"][i]]
+            for name in list(done[i]):
+                if T_OPTS["vert"] == "line":
+                    done[i][name] = [dict(x, quad=Ss.vertical_box(li, x.get("quad"), band)) if x.get("quad") else x
+                                     for x in done[i][name]]
+                else:
+                    done[i][name] = Ss.vertical_line_comp(li, done[i][name], ev.sw, unit, ev.hc)
     for i, toks in enumerate(texts_used):
         g_line = r["results"][i]
-        for name in T_ARMS:
+        for name in T_ARMS + (("Gv",) if T_OPTS.get("vert") in ("line", "comp") else ()):
             res = done.get(i, {}).get(name)
             if res is None:
                 if name in R_DEP and not with_R:
@@ -1320,6 +1352,31 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
             g2[name] = n
         info["g2_boxes_on_nontext"] = g2
     return arms, info
+
+
+def template_reassign(page, ev, r, texts_used, src, ginfo, info):
+    """Follow-up 2: replace the length assignment by the template-scored one
+    (word_placer_la); arm G is re-run with it, and the G2 report redone."""
+    import word_placer_la as LA
+    import word_placer_t as T
+    t0 = time.perf_counter()
+    gm0 = r["model"]
+    todo0 = _todo_lines(r, texts_used, "B")
+    lines0 = [T.make_line(li, toks, ev.hc, ev.sw) for _, li, toks in todo0]
+    ivs0 = [[None if d["deleted"] else (d["s0"], d["s1"]) for d in r["diag"]["aligns"][i].words] for i, _, _ in todo0]
+    m0 = T.initial_model(lines0, ivs0, lambda k: T.g_width(gm0, k), gm0.unit)
+    T.train(lines0, m0, gm0.unit, iters=LA.LP["TRAIN_ITERS"])
+    dets = WP.l1_lines(ev)
+    kinds = [k for _, k in dets]
+    old_trusted = sum(1 for i in range(len(texts_used)) if r["assign"][i] is not None
+                      and r["la"]["margin"][i] >= WP.P["LA_MARGIN"])
+    la = LA.template_assign(ev, r, kinds, texts_used, m0)
+    r2 = LA.place_with_assignment(ev, r, kinds, texts_used, la)
+    ginfo["line_assignment"] = line_assignment_report(page, r2, dets, texts_used, src)
+    info["la_template"] = dict(trusted_before=old_trusted, trusted_after=sum(la["trusted"]),
+                               changed=sum(1 for a, b in zip(r["assign"], la["assign"]) if a != b),
+                               seconds=round(time.perf_counter() - t0, 2))
+    return r2
 
 
 def run_T_pooled(pages, exp="A"):
@@ -1381,9 +1438,10 @@ def cmd_tx(a):
         wrows, _ = grade_page(page, pw)
         sm = rt.summarize_targets([(page["truth_page"], wrows)], True)
         row = dict(page=page["name"], mode=mode, arm=arm, n=sm["n"], correct=sm["located_correct"]["k"],
+                   h1=sum(r_["correct_h1"] for r_ in wrows),
                    located=sm["located_precision"]["n"], within1=sum(r_["within1"] for r_ in wrows), **(extra or {}))
         rows.append(row)
-        print(f"  {page['name'][:34]:34s} {mode:14s} {arm:5s} loc&corr {row['correct']}/{row['n']}  prec {row['correct']}/{row['located']}"
+        print(f"  {page['name'][:34]:34s} {mode:14s} {arm:5s} side-edge {row['h1']}/{row['n']}  prec {row['h1']}/{row['located']}"
               f"  within1 {row['within1']}", flush=True)
 
     models = []
@@ -1415,7 +1473,7 @@ def cmd_tx(a):
             f.write(f"\n[{now()}] arm T transfer/pooling real scoring -> {path.name}  code {code_fingerprint()}  TP {_tp_digest()}\n"
                     f"  pages: {[p['name'] for p in pages]}\n  note: {a.note}\n")
             for r_ in rows:
-                f.write(f"  {r_['page']:24s} {r_['mode']:8s} {r_['arm']:5s} loc&corr {r_['correct']}/{r_['n']}  prec {r_['correct']}/{r_['located']}\n")
+                f.write(f"  {r_['page']:24s} {r_['mode']:8s} {r_['arm']:5s} side-edge {r_['h1']}/{r_['n']}  prec {r_['h1']}/{r_['located']}\n")
     print(f"wrote {path}")
     return 0
 

@@ -144,3 +144,77 @@ def agreement_line(li, per_arm: dict, unit: float, rule) -> list:
             out.append(dict(status="line" if lq else "unresolved", quad=None, line_quad=lq, margin=None, z=None,
                             reason="arms disagree or a box is missing"))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Shared vertical extent (follow-up 1): one rule for every arm
+# ---------------------------------------------------------------------------
+VP = dict(
+    BAND_Q=0.0,        # line band: the line's own ink v quantiles BAND_Q .. 1 - BAND_Q (0: its full extent; 0.005 clipped the tallest strokes)
+)
+
+
+def line_band(li):
+    """(v_lo, v_hi) of a line's own ink: all pixels of the components
+    assigned to this line (nearest line centre, word_placer.assign_components),
+    robust to a few far pixels of another line's tall stroke."""
+    if not len(li.v):
+        return None
+    return float(np.quantile(li.v, VP["BAND_Q"])), float(np.quantile(li.v, 1 - VP["BAND_Q"]))
+
+
+def vertical_box(li, quad, band=None):
+    """The same horizontal extent, re-measured vertically: the box spans all
+    ink of this line (every pixel of its assigned components, detached dots
+    and marks included) inside the box's horizontal span, bounded by the line
+    band. Returns a quad in page px (None stays None)."""
+    if quad is None or not len(li.u):
+        return quad
+    band = band or line_band(li)
+    a, b = _extent(li, quad)            # reading coordinate s
+    s = li.uref - li.u
+    sel = (s >= a - 0.5) & (s <= b + 0.5) & (li.v >= band[0]) & (li.v <= band[1])
+    if sel.sum() < 2:
+        return quad
+    v0, v1 = float(li.v[sel].min()) - 0.5, float(li.v[sel].max()) + 0.5
+    import word_placer as WP_
+    return WP_._quad_from(li, li.uref - b, li.uref - a, v0, v1, 0.0)
+
+
+def vertical_line_comp(li, results, sw, unit, hc):
+    """Shared vertical rule, component version (the one adopted): every arm's
+    boxes on one line keep their horizontal extent; the vertical extent is
+    that of the ink the word owns, decided once for all words of the line by
+    word_placer.snap_words (components to the word holding most of their core
+    pixels; detached dots and marks to the word containing their centre, when
+    they lie within the line's glyph zone: its core-attached ink's v range
+    widened by DOT_PAD x glyph height, which keeps the neighbouring lines'
+    ink out), bounded by the line's own ink band.
+    Tried and rejected on synthetic development pages (see the run log):
+    (a) the pixel version above (``vertical_box``: all of the line's pixels in
+    the word's span) takes other words' tails and dots that cross the span
+    (nastaliq T 168 -> 151 of 172 correct); with the band at the 0.5% / 99.5%
+    quantiles it also clipped the tallest strokes (clean dev T 90.3% -> 85.1%);
+    (b) the detached-ink gate set to the bare core-attached range (no DOT_PAD)
+    drops dots above lines without tall letters (tight-leading naskh T 541 ->
+    478). For T, R and G this rule reproduces their own boxes; it changes S,
+    whose draft routine measured height from its own band."""
+    import word_placer as WP_
+    ivs = []
+    for x in results:
+        q = x.get("quad") if x else None
+        ivs.append(_extent(li, q) if q is not None else None)
+    if not any(iv is not None for iv in ivs) or not len(li.u):
+        return results
+    band = line_band(li)
+    owned = WP_.snap_words(li, ivs, sw, unit, hc)
+    out = []
+    for x, iv, qo in zip(results, ivs, owned):
+        if iv is None or qo is None:
+            out.append(x)
+            continue
+        xs = np.array([p[0] for p in qo]); ys = np.array([p[1] for p in qo])
+        _, vv = li.geom.uv(xs, ys)
+        v0, v1 = max(float(vv.min()), band[0] - 0.5), min(float(vv.max()), band[1] + 0.5)
+        out.append(dict(x, quad=WP_._quad_from(li, li.uref - iv[1], li.uref - iv[0], v0, v1, 0.0)))
+    return out
