@@ -750,7 +750,7 @@ def main(argv=None) -> int:
     s.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     s.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
     s.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
-    s.add_argument("--la", choices=("length", "T"), default="length", help="line-text assignment under B/C")
+    s.add_argument("--la", choices=("length", "T", "T2"), default="length", help="line-text assignment under B/C")
     s.add_argument("--seeds", nargs="*", type=int, default=None, help="override the seed set")
     r = sub.add_parser("real")
     r.add_argument("--exps", nargs="*", default=list(EXPS))
@@ -761,7 +761,7 @@ def main(argv=None) -> int:
     r.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     r.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
     r.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
-    r.add_argument("--la", choices=("length", "T"), default="length", help="line-text assignment under B/C")
+    r.add_argument("--la", choices=("length", "T", "T2"), default="length", help="line-text assignment under B/C")
     v = sub.add_parser("vrun")
     v.add_argument("--mode", choices=("mark", "coord"), default="mark")
     v.add_argument("--model", choices=("sonnet", "opus"), default="sonnet")
@@ -1206,7 +1206,7 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     r = ginfo["_r"]
     texts_used = texts if texts is not None else page["texts"]
     info = dict(init=init)
-    if gexp != "A" and T_OPTS.get("la") == "T":
+    if gexp != "A" and T_OPTS.get("la") in ("T", "T2"):
         r = template_reassign(page, ev, r, texts_used, src, ginfo, info)
     todo = _todo_lines(r, texts_used, gexp)
     W, H = page["truth_page"].W, page["truth_page"].H
@@ -1345,18 +1345,31 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     la = ginfo.get("line_assignment")
     if la is not None:
         under = la["under"]
-        bad_lines = {i for i, j in enumerate(r["assign"]) if j is not None and under[j] is None}
+        tp_ = page["truth_page"]
+        ign = set()
+        for j, li_ in enumerate(r["inks"]):
+            if under[j] is None and li_.M and tp_.ignore_zones:
+                q = WP.line_quad(li_, float(li_.s0[0]), float(li_.s1[-1]), 1.0)
+                if rt._ignored(tp_, rt.region_poly({"quad": [[a / tp_.W, b / tp_.H] for a, b in q]}, tp_.W, tp_.H)):
+                    ign.add(j)
+        bad_all = {i for i, j in enumerate(r["assign"]) if j is not None and under[j] is None}
+        bad_lines = {i for i in bad_all if r["assign"][i] not in ign}
+        info["g2_text_lines_on_ignored"] = len(bad_all - bad_lines)
         info["g2_text_lines_on_nontext"] = len(bad_lines)
-        g2 = {}
-        for name, pw in arms.items():
-            n = 0
-            for i in bad_lines:
-                for ti in range(len(texts_used[i])):
-                    key = src[i][ti] if src is not None else (i, ti)
-                    x = pw.get(key) if key is not None else None
-                    n += bool(x and x["status"] in ("located", "line") and x["segments"])
-            g2[name] = n
-        info["g2_boxes_on_nontext"] = g2
+        def shown_on(lines_):
+            g = {}
+            for name, pw in arms.items():
+                n = 0
+                for i in lines_:
+                    for ti in range(len(texts_used[i])):
+                        key = src[i][ti] if src is not None else (i, ti)
+                        x = pw.get(key) if key is not None else None
+                        n += bool(x and x["status"] in ("located", "line") and x["segments"])
+                g[name] = n
+            return g
+        info["g2_boxes_on_nontext"] = shown_on(bad_lines)
+        # detected lines inside the truth's ignore zones (running heads): printed but not graded
+        info["g2_boxes_on_ignored"] = shown_on(bad_all - bad_lines)
     return arms, info
 
 
@@ -1376,10 +1389,10 @@ def template_reassign(page, ev, r, texts_used, src, ginfo, info):
     kinds = [k for _, k in dets]
     old_trusted = sum(1 for i in range(len(texts_used)) if r["assign"][i] is not None
                       and r["la"]["margin"][i] >= WP.P["LA_MARGIN"])
-    la = LA.template_assign(ev, r, kinds, texts_used, m0)
+    la = LA.template_assign(ev, r, kinds, texts_used, m0, confirm=T_OPTS.get("la") == "T2")
     r2 = LA.place_with_assignment(ev, r, kinds, texts_used, la)
     ginfo["line_assignment"] = line_assignment_report(page, r2, dets, texts_used, src)
-    info["la_template"] = dict(trusted_before=old_trusted, trusted_after=sum(la["trusted"]),
+    info["la_template"] = dict(trusted_before=old_trusted, trusted_after=sum(la["trusted"]), unconfirmed=la.get("unconfirmed", 0),
                                changed=sum(1 for a, b in zip(r["assign"], la["assign"]) if a != b),
                                seconds=round(time.perf_counter() - t0, 2))
     return r2

@@ -42,6 +42,11 @@ LP = dict(
     GAIN_REL=0.5,      # ... and gain per text letter >= this x the page's median over matched pairs
                        # (a partial or wrong line explains at most part of the text)
     TRAIN_ITERS=2,     # T rounds for the scoring model (trusted lines of the length assignment)
+    DEF_K=3.0,         # --la T2: a trusted pairing's deficit per letter against the free loop (free_cost) must be
+    DEF_ABS=5.0,       # <= page median + DEF_K x MAD + DEF_ABS (over the page's trusted pairings); set on synthetic dev
+    CONFIRM_FRAC=0.5,  # --la T2: a trusted pairing needs at least this share of the text's letters aligned
+                       # (not bypassed) on that ink. Requiring every word (1.0) cost a quarter of the
+                       # located words on synthetic hard pages (words under stamps are bypassed by design)
 )
 
 
@@ -147,9 +152,40 @@ def candidates(base_assign, n, mt):
     return pos
 
 
-def template_assign(ev, r, kinds, texts, m: T.TModel):
+def confirm_pairs(ev, inks, texts, pairs, m: T.TModel, unit: float) -> dict:
+    """G2 follow-up: for each (i, j) pairing, align text i to line j with the
+    page templates and report whether at least CONFIRM_FRAC of its letters
+    aligned (were not bypassed): the text is positively on this ink."""
+    lines, keys = [], []
+    for i, j in pairs:
+        L = T.make_line(inks[j], list(texts[i]), ev.hc, ev.sw, cs=m.cs)
+        if L.T and L.ukeys:
+            lines.append(L); keys.append((i, j))
+    out = {}
+    if not lines:
+        return out
+    m.n_hint_unit = getattr(m, "n_hint_unit", unit)
+    aligns, _tot, _B, live = T.align_all(m, lines, margins=False, unit_px=unit)
+    for (i, j), al, L in zip(keys, aligns, lines):
+        if al is None:
+            out[(i, j)] = False
+            continue
+        nl = [sum(1 for k, u in zip(L.ukeys, L.uword) if u == w) for w in range(L.nwords)]
+        kept = sum(n for n, d in zip(nl, al.words) if not d["deleted"])
+        out[(i, j)] = kept >= LP["CONFIRM_FRAC"] * max(1, sum(nl))
+    return out
+
+
+def template_assign(ev, r, kinds, texts, m: T.TModel, confirm: bool = False):
     """New assignment for an arm-G placement result ``r`` (length assignment)
-    -> dict(assign, margin (trusted lines LA_MARGIN, else 0), gains, raw_margin, trusted)."""
+    -> dict(assign, margin (trusted lines LA_MARGIN, else 0), gains, raw_margin, trusted).
+
+    confirm=True (``--la T2``, G2 follow-up): every trusted pairing must also
+    pass confirm_pairs (most of the text's letters aligned on that ink) and the
+    free-loop test (its alignment cost per letter within DEF_K MAD + DEF_ABS of
+    the page median above what an unconstrained loop over the page's letters
+    achieves on that ink: the text, not just any text, is printed there), and
+    the 'length assignment agrees' route also requires an L1 text line."""
     inks = r["inks"]
     cands = candidates(r["assign"], len(inks), len(texts))
     G = pair_gains(ev, inks, texts, cands, m)
@@ -162,10 +198,33 @@ def template_assign(ev, r, kinds, texts, m: T.TModel):
         ok = (j is not None and G[i, j] > 0 and kinds[j] == "text" and G[i, j] / nlet[i] >= floor
               and mg >= max(LP["MARGIN_ABS"], LP["MARGIN_REL"] * G[i, j]))
         # the length assignment already trusted this same pairing: two sources agree
-        both = (j is not None and r["assign"][i] == j and r["la"]["margin"][i] >= WP.P["LA_MARGIN"] and G[i, j] > 0)
+        both = (j is not None and r["assign"][i] == j and r["la"]["margin"][i] >= WP.P["LA_MARGIN"] and G[i, j] > 0
+                and (kinds[j] == "text" or not confirm))
         trusted.append(bool(ok or both))
+    confirmed = {}
+    deficit = {}
+    if confirm:
+        pairs = [(i, j) for i, (j, t) in enumerate(zip(assign, trusted)) if t]
+        confirmed = confirm_pairs(ev, inks, texts, pairs, m, r["model"].unit)
+        trusted = [t and confirmed.get((i, assign[i]), False) for i, t in enumerate(trusted)]
+        # "some text of this print" hypothesis: the given text must explain the ink nearly as
+        # well as the free loop over the page's letters does (page-relative threshold)
+        frees = {}
+        for i, j in pairs:
+            if j not in frees:
+                frees[j] = free_cost(T.make_line(inks[j], ["x"], ev.hc, ev.sw, cs=m.cs), m)
+            Lf = T.make_line(inks[j], list(texts[i]), ev.hc, ev.sw, cs=m.cs)
+            align = null_cost(Lf, m) - G[i, j]
+            deficit[i] = (align - frees[j]) / nlet[i]
+        vals = np.array([deficit[i] for i, _ in pairs if trusted[i]]) if pairs else np.zeros(0)
+        if len(vals):
+            med = float(np.median(vals)); mad = float(np.median(np.abs(vals - med))) * 1.4826
+            th = med + LP["DEF_K"] * mad + LP["DEF_ABS"]
+            trusted = [t and (i not in deficit or deficit[i] <= th) for i, t in enumerate(trusted)]
     return dict(assign=assign, margin=[WP.P["LA_MARGIN"] if t else 0.0 for t in trusted], raw_margin=margin,
-                trusted=trusted, gains=G, total=total, det_text=[None] * len(inks))
+                trusted=trusted, gains=G, total=total, det_text=[None] * len(inks),
+                unconfirmed=sum(1 for v in confirmed.values() if not v),
+                deficit={int(k): round(float(v), 2) for k, v in deficit.items()})
 
 
 def place_with_assignment(ev, r, kinds, texts, la, *, nottext=True):
@@ -184,3 +243,95 @@ def place_with_assignment(ev, r, kinds, texts, la, *, nottext=True):
             det_text[j] = i
     la = dict(la, det_text=det_text)
     return dict(results=res, model=model, diag=diag, inks=inks, assign=la["assign"], la=la, kinds=kinds)
+
+
+# ---------------------------------------------------------------------------
+# G2 follow-up: perturbed line text for synthetic development
+# ---------------------------------------------------------------------------
+def perturb_lines(texts, seed, n_invent=1, n_repeat=1, n_drop=1, pool=None):
+    """Seeded perturbation of line-broken text as a reader might produce it:
+    invented lines (words from ``pool``, text not printed on the page),
+    repeated lines (a line given twice in a row) and dropped lines. Returns
+    (texts, src) with src[l][t] = truth (li, wi) or ('x', l, t) for words not
+    printed (invented lines, the second copy of a repeated line)."""
+    import random
+    rnd = random.Random(seed)
+    lines = [(li, list(t)) for li, t in enumerate(texts)]
+    idx = [k for k, (_, t) in enumerate(lines) if t]
+    drop = set(rnd.sample(idx, min(n_drop, len(idx))))
+    rep = set(rnd.sample([k for k in idx if k not in drop], min(n_repeat, len(idx) - len(drop))))
+    out = []
+    for k, (li, t) in enumerate(lines):
+        if k in drop:
+            continue
+        out.append([(li, wi, w) for wi, w in enumerate(t)])
+        if k in rep:
+            out.append([(None, None, w) for w in t])
+    pool = pool or [w for t in texts for w in t]
+    for _ in range(n_invent):
+        n = rnd.randint(3, 8)
+        pos = rnd.randint(0, len(out))
+        out.insert(pos, [(None, None, w) for w in rnd.sample(pool, min(n, len(pool)))])
+    texts2 = [[w for _, _, w in row] for row in out]
+    src = [[(li, wi) if li is not None else ("x", l, t) for t, (li, wi, _w) in enumerate(row)] for l, row in enumerate(out)]
+    return texts2, src
+
+
+# ---------------------------------------------------------------------------
+# G2 follow-up: "any text here" hypothesis (free loop over the page's units)
+# ---------------------------------------------------------------------------
+def free_cost(L: T.TLine, m: T.TModel, min_occ: int = 2) -> float:
+    """Viterbi cost of a line's columns under an unconstrained loop over the
+    page's learned letter templates (units seen at least ``min_occ`` times),
+    with blank and not-text states: how well *some* text in this print
+    explains the ink. A given text can never beat it by much (it is one of
+    the loop's paths, apart from the unit-choice costs); the deficit
+    align(text) - free is small when the text is printed there and large when
+    it is not."""
+    import math
+    keys = [k for k in sorted(m.tmpl, key=str) if m.occ.get(k, 0) >= min_occ]
+    if not keys or L.T == 0:
+        return float("inf")
+    tot = float(sum(m.occ[k] for k in keys))
+    R = m.R
+    first, last, means, stay, adv, skip, entry = [], [], [], [], [], [], []
+    pos = 0
+    for k in keys:
+        mu = m.tmpl[k]
+        n = len(mu)
+        ps, pa, pk = m.tr(k)
+        first.append(pos); last.append(pos + n - 1)
+        means.append(mu)
+        stay += [T._nl(ps)] * n; adv += [T._nl(pa)] * n; skip += [T._nl(pk)] * n
+        entry.append(-math.log(m.occ[k] / tot))
+        pos += n
+    S = pos + 2                      # + blank, junk
+    B, J = pos, pos + 1
+    M = np.zeros((S, R)); M[:pos] = np.concatenate(means)
+    junk = np.zeros(S, bool); junk[J] = True
+    g = T.Graph(S, M, junk, None, None, None, None, [], [], [], [])
+    E = T.emissions(L, g, m).astype(np.float64)
+    stay, adv, skip = np.array(stay), np.array(adv), np.array(skip)
+    first, last, entry = np.array(first), np.array(last), np.array(entry)
+    isfirst = np.zeros(pos, bool); isfirst[first] = True
+    pb = m.gap[T.WORD][1]
+    bstay, bexit = T._nl(pb), T._nl(1 - pb)
+    INF = 1e30
+    F = np.full(S, INF)
+    F[first] = entry + E[0, first]; F[B] = E[0, B]; F[J] = T.TP["J_ENTER"] + E[0, J]
+    for t in range(1, L.T):
+        prev = F
+        new = np.full(S, INF)
+        u = prev[:pos] + stay
+        a = np.full(pos, INF); a[1:] = prev[:pos - 1] + adv[1:]
+        a[isfirst] = INF
+        k2 = np.full(pos, INF); k2[2:] = prev[:pos - 2] + skip[2:]
+        k2[isfirst] = INF; k2[np.r_[first + 1][first + 1 < pos]] = INF
+        endbest = min(float(np.min(prev[last] + adv[last])), prev[B] + bexit, prev[J])
+        en = np.full(pos, INF); en[first] = endbest + entry
+        new[:pos] = np.minimum(np.minimum(u, a), np.minimum(k2, en))
+        endu = float(np.min(prev[last] + adv[last]))
+        new[B] = min(prev[B] + bstay, endu, prev[J])
+        new[J] = min(prev[J], endu + T.TP["J_ENTER"], prev[B] + T.TP["J_ENTER"])
+        F = new + E[t]
+    return float(min(np.min(F[last]), F[B], F[J]))

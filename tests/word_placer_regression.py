@@ -19,6 +19,7 @@ determinism. Arm S and the agreement rules (section 10). The shared vertical
 rule on a tight-leading page (section 11) and the template-scored line-text
 assignment with an inserted non-text line and a dropped text line (section 12).
 The rules between T and S&T and the end-to-end token alignment (section 13).
+Re-segmentation groups and gate G2 with perturbed line text (section 14).
 
 Floors are set below the values measured when the test was written (listed
 beside each), so they catch regressions, not noise.
@@ -290,6 +291,7 @@ def main() -> int:
     arm_s_checks()
     vertical_and_assignment_checks()
     rules_2a_and_e2e_checks()
+    groups_and_g2_checks()
 
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
@@ -554,6 +556,63 @@ def rules_2a_and_e2e_checks():
     finally:
         if old_env is not None:
             os.environ["ANTHROPIC_BASE_URL"] = old_env
+
+
+def groups_and_g2_checks():
+    """Follow-ups: re-segmented words in the end-to-end alignment (joins,
+    splits, letter changes, line ends) and gate G2 with perturbed reader text
+    (invented, repeated and dropped lines; --la T2), synthetic only."""
+    print("14. re-segmentation groups; G2 with perturbed line text")
+    import word_placer_e2e as X
+    import word_placer_la as LA
+    truth = [["ab", "cd", "ef"], ["gh", "ij", "kl"], ["mn", "op"]]
+    g = []
+    src, st = X.align_to_truth(truth, [["abcd", "ef"], ["g", "h", "ij", "kl"], ["mn", "op"]], g)
+    check([x["kind"] for x in g] == ["join", "split"] and st[(0, 0)] == st[(0, 1)] == "join" and st[(1, 0)] == "split",
+          f"2-into-1 join and 1-into-2 split found as groups ({[x['kind'] for x in g]})")
+    g = []
+    _, st = X.align_to_truth(truth, [["abce", "ef"], ["gh", "ij", "kl"], ["mn", "op"]], g)
+    check(not g and st[(0, 0)] in ("missing", "misread") and st[(0, 1)] in ("missing", "misread"),
+          "a join that also changes a letter is not a group")
+    g = []
+    _, st = X.align_to_truth(truth, [["ab", "cd", "ef"], ["gh", "ij", "klmn"], ["op"]], g)
+    check(not g, "a join across a printed line end is not a group (model tokens on one line only)")
+    g = []
+    src, st = X.align_to_truth(truth, [["ab", "cd", "ef"], ["gh", "ijkl"], ["mn", "op"]], g)
+    check([x["kind"] for x in g] == ["join"] and g[0]["truth"] == [(1, 1), (1, 2)] and src[1][1] == ("g", 0, 0),
+          "a join at a line end is a group of that line")
+    # G2 with perturbed text, confirmed assignment
+    page = page_of("typewriter", 216, preset="tw_photo_medium")
+    ev = WP.page_evidence(page["gray"])
+    E.T_OPTS.update(la="T2")
+    try:
+        base, _ = E.run_T(page, "C", ev=ev, texts=[list(t) for t in page["texts"]],
+                          src=[[(li, wi) for wi in range(len(t))] for li, t in enumerate(page["texts"])], with_R=False)
+        _, _, sm0 = _ok_map(page, base["T"])
+        pool = [w for t in page_of("typewriter", 1216, preset="clean")["texts"] for w in t]
+        n = len(page["texts"])
+        for name, kw in (("invented line", dict(n_invent=1, n_repeat=0, n_drop=0)),
+                         ("repeated line", dict(n_invent=0, n_repeat=1, n_drop=0)),
+                         ("dropped line", dict(n_invent=0, n_repeat=0, n_drop=1))):
+            t2, s2 = LA.perturb_lines(page["texts"], seed=17, pool=pool, **kw)
+            if name == "invented line":     # at the end, next to the signature and stamp zone
+                k = next(i for i, row in enumerate(s2) if row and row[0][0] == "x")
+                t2.append(t2.pop(k)); s2.append(s2.pop(k))
+            arms, info = E.run_T(page, "C", ev=ev, texts=t2, src=s2, with_R=False)
+            _, w, sm = _ok_map(page, arms["T"])
+            unprinted = sum(1 for kk, x in arms["T"].items() if kk[0] == "x" and x["status"] == "located"
+                            and name == "invented line")
+            check(info.get("g2_boxes_on_nontext", {}).get("T", 0) == 0, f"{name}: no box on a non-text detected line")
+            check(sm["wrong_line"]["k"] == 0, f"{name}: wrong-line boxes {sm['wrong_line']['k']} == 0")
+            if name == "invented line":
+                check(unprinted == 0, f"{name}: no located box for the invented words ({unprinted})")
+            lost = sm0["located_correct"]["k"] - sm["located_correct"]["k"]
+            # a dropped line loses its own words; the free-loop test may also leave a neighbour
+            # unresolved (conservative), but nothing may shift (wrong-line 0 above)
+            allow = (2 * max(len(t) for t in page["texts"]) + 2) if name == "dropped line" else 3
+            check(lost <= allow, f"{name}: other words keep their boxes (lost {lost} <= {allow} of {sm0['located_correct']['k']})")
+    finally:
+        E.T_OPTS.update(la="length")
 
 
 T_FLOORS = dict(photo_rate=0.70, photo_prec=0.93, o2_rate=0.70)
