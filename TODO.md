@@ -114,6 +114,10 @@ def qc_verify_page(client, png_bytes, text_md, model, page_no) -> tuple[QCReport
 def transcribe_page(..., extra_hint: Optional[str] = None)   # appended to the user text
 ```
 
+## Deferred by the owner (find these here)
+
+- [ ] **Cross-vendor reader comparison (plan Step 2b; deferred 2026-11-12).** Compare the strongest vision readers from other vendors (OpenAI, Google) with Claude Opus 5.5 on hard pages, under decision D7 (best reader from any vendor unless about 3× the cost) and D9 (no image silently resized). Everything that does not need a key is built and tested offline in `tests/transcription_experiments.py` (`plan2b`, `smoke2b`, `run2b`, `score2b`; adapters never exercised live). **To start:** put a real `OPENAI_API_KEY` in the shell profile (the 8-character placeholder in `~/.zshrc` shadows `.env`) and/or `GEMINI_API_KEY` in `.env`; expected spend about $2.50. Open points recorded in `docs/bbox-old-fonts-plan.md` §10: Gemini's image sizing is undocumented and needs a resolution probe; Gemini is the only vendor documenting bounding-box output, so word pointing (arm V) should be re-tested with it; OpenAI's flagship is about 3.6× Opus per hard page.
+
 ## Phase 3 — bbox locator accuracy (loop rebuilt 2026-07-27)
 
 The measurement loop was rebuilt so that iterations are free and comparable:

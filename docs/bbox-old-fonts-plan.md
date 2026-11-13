@@ -987,6 +987,8 @@ disagreement marked**, so that no single model's errors are favoured. Also re-te
 (arm V) with any model documented to return bounding boxes: arm V was closed on Anthropic models
 only. Needs the owner's API keys for the other vendors.
 
+**Deferred by the owner on 2026-11-12 ("not for now"); tracked in `TODO.md` under "Deferred by the owner". Until it runs, D7 is applied with Anthropic models only (Opus 5.5 for hard pages), and the held-out test (D8) uses a draft built from Opus 5.5 and Sonnet 5 readings with every disagreement marked.**
+
 **Step 2b phase 1 status (2026-11-12, $0.115, Anthropic only): blocked on keys.** `.env` holds
 only the Anthropic key. The shell has a placeholder `OPENAI_API_KEY` (set in `~/.zshrc`) that
 OpenAI rejects (401), and it would shadow a real key added to `.env`, because `llm.load_env` does
