@@ -47,7 +47,8 @@ def _run_page(conf, flags, model, resolution, embedded=None):
              patch.object(transcribe, 'extract_embedded_text', return_value=embedded), \
              patch.object(transcribe, 'extract_heading_candidates', return_value=[]), \
              patch.object(transcribe.qc, 'record_event', side_effect=AssertionError('history write')):
-            transcribe._transcribe_one(ws, None, 1, 5, model, resolution, transcribe.RunState())
+            transcribe._transcribe_one(ws, None, 1, 5, model, resolution, transcribe.RunState(),
+                                       hard_pages=False)   # the second reader has its own test
         return json.loads((root/'0001.json').read_text()), calls
 
 

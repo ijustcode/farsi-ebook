@@ -12,7 +12,7 @@ from pathlib import Path
 import click
 
 from . import epub, qc, review, transcribe
-from .config import LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_STRONG, RES_HI, RES_STD, estimate_cost
+from .config import HARD_PAGE_COST_USD, LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_HARD, MODEL_STRONG, RES_HI, RES_STD, estimate_cost
 from .render import classify_pdf, render_page_to
 from .workspace import Workspace, parse_pages_spec
 
@@ -98,6 +98,9 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
         click.echo(f"Page range:        {page_range} ({est_pages} pages)")
     click.echo(f"Estimated cost:    ${cost_hi:.2f} (default: {MODEL_STRONG} + hi-res input)")
     click.echo(f"Economy estimate:  ${cost_std:.2f} (transcribe --res std; failing pages escalate to hi-res)")
+    if source_type != "digital":
+        click.echo(f"Hard pages:        + about ${HARD_PAGE_COST_USD:.2f} for each scanned page that trips the review gate "
+                   f"({MODEL_HARD}; not in the estimates above; transcribe --hard-pages off to skip)")
     click.echo("")
     click.echo(f"Next: farsi2epub transcribe {slug}")
 
@@ -110,12 +113,13 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--concurrency", type=int, default=4, help="Number of pages to transcribe concurrently.")
 @click.option("--model", "model", default=None, help="Model to use for transcription (default: Sonnet; failing pages escalate to Sonnet + hi-res).")
 @click.option("--res", "resolution", type=click.Choice([RES_HI, RES_STD]), default=RES_HI, help="Page-image resolution: hi (2576px, default — best character accuracy) or std (1568px, ~30% cheaper; use for crisp large-print sources or very long books; failing pages escalate to hi-res).")
+@click.option("--hard-pages", "hard_pages", type=click.Choice(["opus", "all", "off"]), default="opus", show_default=True, help="Second reader (Opus on native-resolution bands, about $0.09 a page, counted in --max-cost) for pages with no embedded text: opus = pages that trip the review gate; all = every such page (for a book you know is typewritten or badly photographed, since the gate rests on the first reader's own confidence); off = keep the first pass.")
 @click.option("--qc", "qc_mode", type=click.Choice(["auto", "manual", "skip", "ask"]), default="ask", help="Run a QC pass after transcription: auto (automated), manual (review UI), skip (none), or ask (prompt if TTY).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the auto-QC cost confirmation prompt.")
 @click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default="auto", show_default=True)
 @click.option("--bbox-model", default=MODEL_STRONG, show_default=True)
 @click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5., show_default=True, help="Separate geometry budget in dollars.")
-def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, qc_mode: str, assume_yes: bool, bbox_mode: str, bbox_model: str, bbox_max_cost: float):
+def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, hard_pages: str, qc_mode: str, assume_yes: bool, bbox_mode: str, bbox_model: str, bbox_max_cost: float):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
     ws = _load_workspace(slug)
     from .scan import Budget
@@ -155,7 +159,8 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
 
         try:
             transcribe.transcribe_pages(
-                ws, pages, model=model, max_cost=max_cost, concurrency=concurrency, resolution=resolution
+                ws, pages, model=model, max_cost=max_cost, concurrency=concurrency, resolution=resolution,
+                hard_pages={"opus": True, "all": "all", "off": False}[hard_pages],
             )
         except NotImplementedError:
             click.echo("")

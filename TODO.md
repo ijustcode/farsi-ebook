@@ -114,6 +114,13 @@ def qc_verify_page(client, png_bytes, text_md, model, page_no) -> tuple[QCReport
 def transcribe_page(..., extra_hint: Optional[str] = None)   # appended to the user text
 ```
 
+## Hard-page reader: open items (integrated 2026-11-14, D17)
+
+- [ ] **A trigger that does not rest on the first reader's confidence.** Held-out hadpi p3 reported confidence 0.75 in one run and was not re-read (28 errors of 343 stayed; `--hard-pages all` gives 8). Candidates: disagreement between two readings (plan T2/T3), image measurements (photo, skew, glyph size). Must be chosen on development pages, never on hadpi p3–p5.
+- [ ] **Pages with verse, tables or footnotes are not re-read**, because the reader returns plain printed lines and that structure cannot be carried over yet.
+- [ ] **First live run.** The integration was verified from cached responses only (the request is byte-identical to the Step 2 calls). The first real `transcribe` on a hard page should be checked: sidecar `hard_reader.adopted`, `text/NNNN.first.md`, cost.
+- [ ] Review UI: show `hard_reader.guessed_words` and the first-pass text beside the page (two readings are a useful review flag).
+
 ## Deferred by the owner (find these here)
 
 - [ ] **Remove unwanted marks from the page image before transcription (owner idea, 2026-11-13).** Stamps, signatures, handwriting and scanner watermarks (for example the CamScanner logo) distract the reader: on hadpi p2 Sonnet 5 read two extra "lines" from the stamp and the watermark. Pre-process pages so the reader sees only the document's text, then measure whether transcription improves (plan T5, image clean-up, as an A/B test; resampling can also hurt). The Step 3 line finder already classifies oversized components, rules and isolated marks (`tests/line_finder.py` masking), which is the natural starting point; colour is an unused cue (stamps and pens are often blue). Must not erase text that a stamp overlaps. Not started.

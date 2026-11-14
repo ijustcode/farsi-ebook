@@ -4,11 +4,18 @@ from __future__ import annotations
 
 MODEL_FAST = "claude-haiku-4-5"
 MODEL_STRONG = "claude-sonnet-5"
+# Second reader for hard pages only (farsi2epub/hard_reader.py): pages with no
+# embedded-text oracle that still trip the review gate after the normal pass.
+# Measured on held-out typewritten pages at 2.5% word error against 13% for
+# the normal pass (docs/bbox-old-fonts-plan.md, Step 2). About $0.09 a page.
+MODEL_HARD = "claude-opus-5-5"
+HARD_PAGE_COST_USD = 0.09
 
 # USD per million tokens (MTok).
 PRICES = {
     MODEL_FAST: {"in": 1.0, "out": 5.0},
     MODEL_STRONG: {"in": 2.0, "out": 10.0},
+    MODEL_HARD: {"in": 4.0, "out": 20.0},
 }
 
 # Long-edge pixel targets when rendering PDF pages to images.

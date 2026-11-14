@@ -15,7 +15,12 @@ Per page:
   4. Repair headings the model declared but omitted from text_md: promote an
      exact-matching body/bold line in place (free), else retry once with a
      hint listing the missing headings; keep whichever result scores better.
-  5. Only pages that still fail are marked needs_review for the human pass.
+  5. A page with no embedded-text oracle that still trips the review gate is
+     read again by the hard-page reader (hard_reader.py: MODEL_HARD on
+     native-resolution bands). Its words replace the first pass; paragraph
+     breaks and headings are carried over from the first pass, whose text is
+     kept as NNNN.first.md. The page stays marked for review.
+  6. Only pages that still fail are marked needs_review for the human pass.
 
 Pages are independent (cross-page paragraph joins are resolved at build time
 from the starts_mid_paragraph/continues_next fields), so transcription runs
@@ -32,8 +37,8 @@ from dataclasses import dataclass, field
 
 import click
 
-from . import llm, qc, validators
-from .config import LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_FAST, MODEL_STRONG, RES_HI, RES_STD
+from . import hard_reader, llm, qc, validators
+from .config import LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_FAST, MODEL_HARD, MODEL_STRONG, RES_HI, RES_STD
 from .render import extract_embedded_text, extract_heading_candidates, render_page_to
 from .workspace import Workspace
 
@@ -46,6 +51,7 @@ class RunState:
     total_cost: float = 0.0
     ok: int = 0
     escalated: int = 0
+    hard_read: int = 0
     flagged: int = 0
     failed: list = field(default_factory=list)
     budget_exceeded: bool = False
@@ -130,8 +136,38 @@ def _page_image(ws: Workspace, n: int, resolution: str) -> bytes:
     return path.read_bytes()
 
 
+def _hard_read(ws: Workspace, client, n: int, page_count: int, result, state: RunState) -> tuple[dict, float, dict]:
+    """Re-read a hard page with the band reader and put its words into `result`.
+
+    Returns (sidecar record, cost, usage). On failure the first pass stands
+    and the record says why; a credit or access error is not hidden.
+    """
+    first_md = result.text_md
+    try:
+        lines, info, usage, cost = hard_reader.read_page(
+            client, ws.pdf_path, n, page_count, ws.meta.get("title_fa"), _page_image(ws, n, RES_HI))
+    except Exception as exc:
+        return {"adopted": False, "reason": f"{type(exc).__name__}: {exc}"[:300]}, 0.0, {}
+    state.add_cost(cost, None)
+    plain, guessed, unread = hard_reader.plain_lines(lines)
+    text_md, headings, report = hard_reader.lines_to_markdown(plain, first_md)
+    record = {"model": MODEL_HARD, "reader_version": hard_reader.READER_VERSION, **info, **report,
+              "printed_lines": len(plain), "guessed_words": guessed, "unreadable_words": unread,
+              "first_pass": {"confidence": result.confidence, "flags": list(result.flags),
+                             "text": f"{n:04d}.first.md"}}
+    if not text_md.strip():
+        return {**record, "adopted": False, "reason": "reader returned no lines"}, cost, usage
+    ws.page_md_path(n).with_suffix(".first.md").write_text(first_md, encoding="utf-8")
+    result.text_md = text_md
+    result.headings = headings
+    if unread and "illegible" not in result.flags:
+        result.flags = list(result.flags) + ["illegible"]
+    return {**record, "adopted": True}, cost, usage
+
+
 def _transcribe_one(
-    ws: Workspace, client, n: int, page_count: int, model: str, resolution: str, state: RunState
+    ws: Workspace, client, n: int, page_count: int, model: str, resolution: str, state: RunState,
+    hard_pages: bool | str = True,
 ) -> str:
     """Process one page end to end. Returns a one-line status string."""
     title_hint = ws.meta.get("title_fa")
@@ -217,6 +253,28 @@ def _transcribe_one(
 
     review = validators.needs_review(result.confidence, result.flags, checks, result.is_blank)
 
+    # Hard page with no oracle: second reading on native bands ---------------
+    hard = None
+    stale_first = ws.page_md_path(n).with_suffix(".first.md")
+    if stale_first.is_file():
+        stale_first.unlink()
+    # hard_pages: True = pages the review gate flags; "all" = every page without an oracle
+    if hard_pages and (review or hard_pages == "all") and not result.is_blank \
+            and checks.get("embedded_similarity") is None:
+        if hard_reader.structure_blocks(result.text_md) is None:
+            hard = {"adopted": False, "reason": "first pass has verse, a table or footnotes; not re-read"}
+        else:
+            hard, cost_h, usage_h = _hard_read(ws, client, n, page_count, result, state)
+            cost += cost_h
+            usage = {k: usage[k] + usage_h.get(k, 0) for k in usage}
+            if hard["adopted"]:
+                model_used = MODEL_HARD
+                checks = validators.evaluate(
+                    result.text_md, result.confidence, result.flags, embedded,
+                    headings=result.headings, heading_candidates=heading_candidates,
+                )
+                review = True      # a hard page stays in front of the reviewer
+
     ws.page_md_path(n).write_text(result.text_md, encoding="utf-8")
     sidecar = {
         "page": n,
@@ -224,6 +282,7 @@ def _transcribe_one(
         "resolution": res_used,
         "escalated": escalated,
         "heading_retry": heading_retry,
+        "hard_reader": hard,
         "is_blank": result.is_blank,
         "confidence": result.confidence,
         "quality_score": checks["quality_score"],
@@ -261,12 +320,16 @@ def _transcribe_one(
         state.ok += 1
         if escalated:
             state.escalated += 1
+        if hard and hard["adopted"]:
+            state.hard_read += 1
         if review:
             state.flagged += 1
 
     marks = []
     if escalated:
         marks.append("escalated")
+    if hard:
+        marks.append("hard-page reader" if hard["adopted"] else "hard-page reader not used")
     if review:
         marks.append("REVIEW")
     suffix = f"  [{', '.join(marks)}]" if marks else ""
@@ -280,6 +343,7 @@ def transcribe_pages(
     max_cost: float | None = None,
     concurrency: int = 4,
     resolution: str = RES_HI,
+    hard_pages: bool | str = True,
 ) -> None:
     # Measured escalation rates under the strict validators: 22/23 scanned
     # pages and 16/17 digital pages failed the Haiku pass, so the two-pass
@@ -298,7 +362,9 @@ def transcribe_pages(
 
     click.echo(
         f"Transcribing {len(pages)} page(s) with {model} at {resolution}-res "
-        f"(escalation: {MODEL_STRONG} + hi-res) ..."
+        f"(escalation: {MODEL_STRONG} + hi-res"
+        + (f"; {'every page' if hard_pages == 'all' else 'flagged pages'} without embedded text: {MODEL_HARD} on bands, about $0.09 each" if hard_pages else "")
+        + ") ..."
     )
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
@@ -306,7 +372,7 @@ def transcribe_pages(
         for n in pages:
             if state.budget_exceeded:
                 break
-            futures[pool.submit(_transcribe_one, ws, client, n, page_count, model, resolution, state)] = n
+            futures[pool.submit(_transcribe_one, ws, client, n, page_count, model, resolution, state, hard_pages)] = n
         for fut in as_completed(futures):
             n = futures[fut]
             if max_cost is not None and state.total_cost >= max_cost:
@@ -319,7 +385,7 @@ def transcribe_pages(
                 click.echo(f"  page {n:>4}  FAILED: {exc}")
 
     click.echo("")
-    click.echo(f"Done: {state.ok} page(s) transcribed, {state.escalated} escalated, {state.flagged} flagged for review.")
+    click.echo(f"Done: {state.ok} page(s) transcribed, {state.escalated} escalated, {state.hard_read} re-read by the hard-page reader, {state.flagged} flagged for review.")
     if state.failed:
         click.echo(f"Failed pages (rerun with --pages): {','.join(str(n) for n in sorted(state.failed))}")
     if state.budget_exceeded:
