@@ -18,6 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import text_audit as T  # noqa: E402
+import text_audit_reflow as R  # noqa: E402
 
 ZW = "‌"
 DRAFT = (
@@ -49,7 +50,7 @@ def fresh(draft: str = DRAFT):
 
 
 def store(root):
-    return T.Store(root, geometry=geometry, log=lambda *a: None)
+    return T.Store(root, geometry=geometry, log=lambda *a: None, consolidate=False)   # the draft's own lines
 
 
 def act(s, op, rev=None, **args):
@@ -464,11 +465,164 @@ def test_unmatched_strips_and_crop_actions():
     shutil.rmtree(root, ignore_errors=True)
 
 
+# --- strip-first rebuild (text_audit_reflow) ---------------------------------
+
+def _compose(tokens, mapping, k):
+    """Text of the refined tokens when every small marker takes the piece of alternative k."""
+    import copy
+    toks = copy.deepcopy(tokens)
+    pick = dict(mapping[k])
+    for x in toks:
+        if isinstance(x, dict):
+            x["choice"] = {"k": "alt", "i": pick[x["id"]]}
+    return T.render_segs(R.segs_of(["پیش"] + toks + ["پس"]))
+
+
+def test_reflow_refine():
+    ids = T.Ids(50, 1)
+    cases = [
+        ["تعیین میگرد ند", "تعیین میگردند اداره خواهد شد .", "نعیین میگردند"],
+        ["مدت سه ماه پس از انقضاء سال", "مدت … ماه پس ازانقضا … سال"],
+        ["شرکت (اصالتا یا وکالتا ) در مجمع حضور داشته باشند", "شرکت (اصالتاً یاوکالتاً) در مجمع حضورداشته باشند",
+         "شرکت (اصالتاً یاوکالتاً) درمجمع حضورداشته باشند"],
+        ["، اسناد ، سفته ها وچکها وتنزیل", "، اسناد ، سفته هاوچکهاوتنزیل", "،اسناد ،سفته ها وچکها ارتنزیل"],
+        ["راد ارد ازجمله تغییر اساسنامه ،", "راداراست ازجمله تغییراساسنامه .", "راداردازجمله تغییراساسنامه ."],
+    ]
+    for alts in cases:
+        m = {"t": "mark", "id": 7, "alts": sorted(alts), "choice": None}
+        toks, mp, counts = R.refine(m, ids.mark)
+        assert mp is not None, alts
+        marks = [x for x in toks if isinstance(x, dict)]
+        assert max(len(a) for x in marks for a in x["alts"]) < max(len(a) for a in alts), alts
+        for k, a in enumerate(m["alts"]):                  # every reading can still be composed, exactly
+            # (a lone "…" piece is offered as "could not be read", which exports as ⟦؟⟧)
+            assert _compose(toks, mp, k).replace("⟦؟⟧", "…") == "پیش " + a + " پس", (a, _compose(toks, mp, k))
+        assert len(counts) == len(toks) and all(counts[-1][k] == len(a.split(" ")) for k, a in enumerate(m["alts"]))
+    toks, mp, _ = R.refine({"t": "mark", "id": 7, "alts": sorted(cases[0]), "choice": None}, ids.mark)
+    got = [x if isinstance(x, str) else x["alts"] for x in toks]
+    assert got == [["تعیین", "نعیین"], ["میگرد ند", "میگردند"], ["اداره خواهد شد .", "∅"]], got
+    toks, _, _ = R.refine({"t": "mark", "id": 7, "alts": sorted(cases[1]), "choice": None}, ids.mark)
+    assert [x for x in toks if isinstance(x, str)] == ["مدت", "ماه", "پس", "سال"], toks      # agreed words become plain text
+    # left alone: one-word readings, a marker that may be absent, an unreadable reading, a marker already decided
+    for alts, choice in ((["خوب", "خواب"], None), (["خوب تر", "خوب", "∅"], None), (["ب …", "بد", "…"], None),
+                         (["یک دو", "یکدو سه"], {"k": "alt", "i": 0})):
+        m = {"t": "mark", "id": 7, "alts": alts, "choice": choice}
+        assert R.refine(m, ids.mark) == ([m], None, None)
+    # tokens <-> segments round trip, and lines that are not plain space-separated tokens are refused
+    segs = T.parse_text("ماده ⟦(۱۶)|۱۶)؟⟧ حد نصاب ⟦:|و؟⟧", T.Ids())
+    assert T.render_segs(R.segs_of(R.tokens_of(segs))) == T.render_segs(segs)
+    assert R.tokens_of(T.parse_text("دو  فاصله", T.Ids())) is None and R.tokens_of(T.parse_text("چسبیده⟦الف|ب؟⟧", T.Ids())) is None
+    assert R.tokens_of(T.parse_text("⟦↵؟⟧ ", T.Ids()))[1:] == []
+
+
+PX = 15
+LONG1 = "این سطر نخست صفحه است و هیچ اختلافی در آن میان خوانندگان دیده نمیشود"
+LONG4 = "این سطر پایانی صفحه است و هیچ اختلافی در آن میان خوانندگان دیده نمیشود"
+A2, A3 = "هیئت مدیره از طرف مجمع صاحبان سهام تعیین میگردند و شرکت بوسیله آنان", "پس ازانقضاء دوره تصدی هیئت مدیره تشریفات مربوط صورت نگرفته است"
+REFLOW_DRAFT = (
+    LONG1 + "\n"
+    "⟦↵؟⟧ " + A2 + " ⟦اداره خواهد شد .|∅؟⟧\n"                 # reader A ends the long line with the short one
+    "⟦↵؟⟧ ⟦اداره خواهند شد . پس|پس؟⟧ " + A3[3:] + "\n"         # reader B starts the next line with it
+    + LONG4 + "\n"
+)
+
+
+def geometry_reflow(root, page):
+    widths = [len(LONG1) * PX, len(A2) * PX, len("اداره خواهد شد .") * PX, len(A3) * PX, len(LONG4) * PX]
+    crops = synth_crops(widths, [100, 180, 260, 340, 420])
+    return crops, dict(file="x.png", width=100, height=100, kind="synthetic", sha256="0"), None
+
+
+def test_reflow_lines():
+    root = fresh(REFLOW_DRAFT)
+    s = T.Store(root, geometry=geometry_reflow, log=lambda *a: None)
+    d = s.get(3)
+    out = [l["out"] for l in d["lines"]]
+    assert len(out) == 5 and [l["crop"] for l in d["lines"]] == ["c01", "c02", "c03", "c04", "c05"], out
+    assert out[1] == A2 and out[3] == A3, out                    # the short printed line stands alone on its strip
+    assert out[2] == "اداره ⟦خواهد|خواهند؟⟧ شد .", out[2]
+    assert "↵" not in export(root) and "∅" not in export(root) and d["pairs"] == {}
+    assert [l.get("reflowed", False) for l in d["lines"]] == [False, True, True, True, False]
+    assert d["lines"][2]["src"] == [2, 3] and d["reflow"]["zones"] == [dict(lines=[2, 3], strips=3, result="3 lines")]
+    assert (T.truth_dir(root) / "0003.lines.draft.txt").read_bytes().decode() == REFLOW_DRAFT   # the draft itself is untouched
+    # a reader that broke one printed line into pieces is put back together on the one strip there is
+    frag = (LONG1 + "\n⟦شرکت (اصالتا|∅؟⟧\n⟦یا وکالتا|∅؟⟧\n"
+            "⟦) در مجمع حضور داشته باشند و تصمیمات این مجمع معتبر است|شرکت (اصالتاً یاوکالتاً) در مجمع حضورداشته باشند و تصمیمات این مجمع معتبر است|∅؟⟧\n"
+            + LONG4 + "\n")
+
+    def geo(root, page):
+        crops = synth_crops([len(LONG1) * PX, 75 * PX, len(LONG4) * PX], [100, 180, 260])
+        return crops, dict(file="x.png", width=100, height=100, kind="synthetic", sha256="0"), None
+    root = fresh(frag)
+    d = T.Store(root, geometry=geo, log=lambda *a: None).get(3)
+    assert len(d["lines"]) == 3 and d["lines"][1]["crop"] == "c02", [l["out"] for l in d["lines"]]
+    mid = d["lines"][1]
+    assert "∅" not in mid["out"] and mid["out"].startswith("شرکت ⟦") and "و تصمیمات این مجمع معتبر است" in mid["out"], mid["out"]
+    assert max(len(a) for sg in mid["segs"] if sg["t"] == "mark" for a in sg["alts"]) <= 20
+    # no strip to go by: the draft's lines stay, with their disputed-break marks
+    def geo0(root, page):
+        return [], dict(file="x.png", width=100, height=100, kind="synthetic", sha256="0"), None
+    root = fresh(DRAFT)
+    d = T.Store(root, geometry=geo0, log=lambda *a: None).get(3)
+    assert d["pairs"]["1"] == [1, 2] and len(d["lines"]) == 7
+
+
+def test_migration():
+    root = fresh(REFLOW_DRAFT)
+    s = T.Store(root, geometry=geometry_reflow, log=lambda *a: None, consolidate=False)     # a version 1 state
+    act(s, "accept", line=0)
+    d = s.get(3)
+    act(s, "choose", line=2, mark=mark_ids(d, 2)[0], choice={"k": "alt", "i": 0})
+    act(s, "brk", line=1, which="one")
+    P = T.paths_for(root, 3)
+    old = json.loads(P["state"].read_bytes())
+    old["tool_version"] = "text_audit/1"
+    P["state"].write_bytes(T.canonical(old))
+    old_state, old_undo = P["state"].read_bytes(), P["undo"].read_bytes()
+    logs = []
+    s2 = T.Store(root, geometry=geometry_reflow, log=logs.append)
+    d = s2.get(3)
+    t = T.truth_dir(root)
+    assert (t / "0003.text_audit.v1.json").read_bytes() == old_state and (t / "0003.text_audit.undo.v1.jsonl").read_bytes() == old_undo
+    assert not P["undo"].exists() and d["revision"] == 0 and d["tool_version"] == T.TOOL_VERSION
+    assert [l["out"] for l in d["lines"]][1:4] == [A2, "اداره ⟦خواهد|خواهند؟⟧ شد .", A3]
+    assert d["lines"][0]["state"] == "accepted" and d["migrated"]["lines_kept_accepted"] == 1
+    assert d["migrated"]["choices_not_carried"] == [dict(old_line=2, choice="اداره خواهند شد . پس")], d["migrated"]
+    assert export(root) == "\n".join(l["out"] for l in d["lines"]) + "\n" and logs
+    # it happens once; the new state works and undoes like any other
+    s3 = T.Store(root, geometry=geometry_reflow, log=lambda *a: None)
+    assert s3.get(3)["migrated"]["at"] == d["migrated"]["at"]
+    r = s3.act(3, "choose", dict(line=2, mark=mark_ids(d, 2)[0], choice={"k": "alt", "i": 1}), 0)
+    assert r["lines"][2]["out"] == "اداره خواهند شد ."
+    s3.undo(3, 1)
+    assert s3.get(3)["lines"][2]["out"] == "اداره ⟦خواهد|خواهند؟⟧ شد ."
+    # choices on markers that were only split word by word are carried, and the line stays accepted
+    draft = LONG1 + "\nپایان ⟦یک دو سه|یک دوسه؟⟧ است\n" + LONG4 + "\n"
+
+    def geo(root, page):
+        crops = synth_crops([len(LONG1) * PX, 17 * PX, len(LONG4) * PX], [100, 180, 260])
+        return crops, dict(file="x.png", width=100, height=100, kind="synthetic", sha256="0"), None
+    root = fresh(draft)
+    s = T.Store(root, geometry=geo, log=lambda *a: None, consolidate=False)
+    act(s, "choose", line=1, mark=mark_ids(s.get(3), 1)[0], choice={"k": "alt", "i": 1})
+    act(s, "accept", line=1)
+    P = T.paths_for(root, 3)
+    old = json.loads(P["state"].read_bytes())
+    old["tool_version"] = "text_audit/1"
+    P["state"].write_bytes(T.canonical(old))
+    d = T.Store(root, geometry=geo, log=lambda *a: None).get(3)
+    assert d["lines"][1]["out"] == "پایان یک دوسه است" and d["lines"][1]["state"] == "accepted", d["lines"][1]
+    assert d["migrated"]["choices_carried"] == 1 and d["migrated"]["lines_kept_accepted"] == 1
+    from text_audit_ui import PAGE_HTML
+    assert "Edit the reading you chose for this spot" in PAGE_HTML and "s.alts[s.choice.i]" in PAGE_HTML
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     order = [test_parse, test_roundtrip, test_export_formatting, test_draft_copy, test_line_ops_and_undo,
              test_break, test_accept_and_audited, test_resume_and_stale, test_page_refusal, test_http,
-             test_auto_assign, test_unmatched_strips_and_crop_actions]
+             test_auto_assign, test_unmatched_strips_and_crop_actions,
+             test_reflow_refine, test_reflow_lines, test_migration]
     assert set(order) == set(tests)
     made = []
     for t in order:

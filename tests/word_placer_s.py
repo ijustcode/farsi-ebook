@@ -281,3 +281,74 @@ def t_any_agree(li, t_all, others: dict, unit):
             out.append(dict(x, status="line" if x.get("line_quad") else "unresolved",
                             reason="no other arm agrees with T"))
     return out
+
+
+# ---------------------------------------------------------------------------
+# D14 follow-up: group boxes (agreement on a run's outer edges only)
+# ---------------------------------------------------------------------------
+GROUP_MAX = 3      # longest run of adjacent tokens a group box may cover
+
+
+def union_quad(li, quads):
+    """One box over several word boxes of a line (their s and v ranges)."""
+    import word_placer as WP_
+    us, vs = [], []
+    for q in quads:
+        xs = np.array([p[0] for p in q]); ys = np.array([p[1] for p in q])
+        u, v = li.geom.uv(xs, ys)
+        us += [float(u.min()), float(u.max())]; vs += [float(v.min()), float(v.max())]
+    return WP_._quad_from(li, min(us), max(us), min(vs), max(vs), 0.0)
+
+
+def _run_extent(li, res, run):
+    ex = []
+    for ti in run:
+        x = res[ti] or {}
+        q = x.get("quad")
+        if q is None or "bypassed" in (x.get("reason") or ""):
+            return None
+        ex.append(_extent(li, q))
+    return min(a for a, _ in ex), max(b for _, b in ex)
+
+
+def group_boxes(li, ta, t_all, others: dict, unit, order):
+    """TA plus group boxes. A token TA does not locate gets a box when, for
+    some run of 2..GROUP_MAX adjacent tokens (visual order) containing it, T's
+    boxes and at least one other arm's boxes (S, G or R) agree on the run's
+    two outer edges (within AGREE_TOL letter) whatever they do inside. The
+    shortest such run is used (then the rightmost in reading order); every
+    token of the run that TA did not locate gets T's union box, status
+    located, with ``_group`` = the run's logical token indices. Decidable from
+    the arms' outputs alone."""
+    out = [dict(x) for x in ta]
+    n = len(order)
+    pos = {ti: w for w, ti in enumerate(order)}
+    tol = AGREE_TOL * unit
+    for ti in range(len(out)):
+        if out[ti].get("status") == "located" or ti not in pos:
+            continue
+        w = pos[ti]
+        done = False
+        for L in range(2, GROUP_MAX + 1):
+            for start in range(max(0, w - L + 1), min(w, n - L) + 1):
+                run = [order[k] for k in range(start, start + L)]
+                et = _run_extent(li, t_all, run)
+                if et is None:
+                    continue
+                ok = False
+                for nm, res in others.items():
+                    eo = _run_extent(li, res, run)
+                    if eo is not None and abs(et[0] - eo[0]) <= tol and abs(et[1] - eo[1]) <= tol:
+                        ok = True
+                        break
+                if not ok:
+                    continue
+                q = union_quad(li, [t_all[k]["quad"] for k in run])
+                for k in run:
+                    if out[k].get("status") != "located":
+                        out[k] = dict(out[k], status="located", quad=q, reason="group box", _group=list(run))
+                done = True
+                break
+            if done:
+                break
+    return out

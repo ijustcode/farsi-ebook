@@ -230,11 +230,22 @@ def run(keys=None, readers=READERS, names=("T", "ST", "TA", "TQ", "TAQ", "M3", "
                        la=info.get("la_template"), la_mode=la, g2_text_lines_on_nontext=info.get("g2_text_lines_on_nontext"),
                        g2_boxes_on_nontext=info.get("g2_boxes_on_nontext", {}),
                        g2_text_lines_on_ignored=info.get("g2_text_lines_on_ignored"),
-                       g2_boxes_on_ignored=info.get("g2_boxes_on_ignored", {}), seconds=round(time.perf_counter() - t0, 1),
+                       g2_boxes_on_ignored=info.get("g2_boxes_on_ignored", {}),
+                       g2_text_lines_on_marks=info.get("g2_text_lines_on_marks"),
+                       g2_boxes_on_marks=info.get("g2_boxes_on_marks", {}),
+                       mark_lines=info.get("mark_lines"), mark_pairings_blocked=info.get("mark_pairings_blocked"),
+                       mark_pairings_exempt=info.get("mark_pairings_exempt"), seconds=round(time.perf_counter() - t0, 1),
                        arms=sc, groups=dict(join=sum(g["kind"] == "join" for g in groups),
                                              split=sum(g["kind"] == "split" for g in groups),
                                              regroup=sum(g["kind"] == "regroup" for g in groups)),
                        agreement=agreement_on_tokens(arms, src))
+            # D14 follow-up: word level with group boxes, and passage level
+            import word_placer_passage as PS
+            row["words_D14"] = {nm: PS.score_words(page, arms[nm], src, status, groups) for nm in ("TA", "TAG", "ST")}
+            row["passages_seeded"] = PS.score_passages(page, arms, src, groups, PS.spans_seeded(page, src, groups), info["unit"])
+            row["passages_review"] = PS.score_passages(page, arms, src, groups,
+                                                       PS.spans_review(lines, src, seed=E.hash_seed(page["name"], "review")),
+                                                       info["unit"])
             rows.append(row)
             t = sc.get("T", {})
             print(f"  {page['name'][:22]:22s} {reader:9s} lines {len(lines)}/{len(page['texts'])}  read {t.get('read')}"
@@ -250,7 +261,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--keys", nargs="*", default=None)
     ap.add_argument("--readers", nargs="*", default=list(READERS))
-    ap.add_argument("--la", choices=("T", "T2"), default="T")
+    ap.add_argument("--la", choices=("T", "T2", "TM", "TZ", "TZ2"), default="T")
     ap.add_argument("--note", required=True)
     a = ap.parse_args(argv)
     rows = run(a.keys, a.readers, la=a.la)

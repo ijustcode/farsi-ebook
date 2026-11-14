@@ -158,7 +158,7 @@ table.k td{padding:2px 12px 2px 0;vertical-align:top}
  <p><b>Symbols.</b> An orange group is a spot the readers disagreed on: each button is one reading (all may be wrong). <i class="sp">&#9251;</i> is a space, <i class="zw">ZWNJ</i> is a half-space (zero-width non-joiner). Two readings with the same letters but different spaces are a word-join question: look at how it was typed. "Nothing here" removes the word and its space. "Could not be read" / <b>Unreadable</b> keeps <b>&#10214;&#1567;&#10215;</b> in the final text, for a word you cannot read either.</p>
  <table class="k">
   <tr><td><kbd>1</kbd>&ndash;<kbd>9</kbd></td><td>choose that reading for the highlighted spot (for a disputed line break: 1 = one line, 2 = two lines)</td></tr>
-  <tr><td><kbd>T</kbd></td><td>type something else (<kbd>Alt+Z</kbd> inserts ZWNJ, <kbd>Alt+U</kbd> inserts &#10214;&#1567;&#10215;, <kbd>Enter</kbd> uses it, <kbd>Esc</kbd> cancels)</td></tr>
+  <tr><td><kbd>T</kbd></td><td>type something else; if a reading is already chosen for the spot, the box starts from it so you only edit it (<kbd>Alt+Z</kbd> inserts ZWNJ, <kbd>Alt+U</kbd> inserts &#10214;&#1567;&#10215;, <kbd>Enter</kbd> uses it, <kbd>Esc</kbd> cancels)</td></tr>
   <tr><td><kbd>U</kbd> / <kbd>N</kbd></td><td>unreadable / nothing here</td></tr>
   <tr><td><kbd>Tab</kbd> <kbd>Shift+Tab</kbd></td><td>next / previous spot on the line</td></tr>
   <tr><td><kbd>Enter</kbd></td><td>accept the line (when no spot is left) and go to the next line</td></tr>
@@ -168,6 +168,7 @@ table.k td{padding:2px 12px 2px 0;vertical-align:top}
  </table>
  <p>Click any word to correct it, or to start a new line at it. Unmarked words can be wrong too: read them.</p>
  <p><b>Writing rules.</b> Write what is printed, as typed: keep word joins and splits; add no ZWNJ of your own; leave out stretched letters (kashida); Persian digits, ی and ک; keep the page-number line; do not write stamps, signatures or handwriting. One printed line per line.</p>
+ <p><b>One printed line at a time.</b> Lines follow the printed strips found on the page, not the readers' own line breaks: where readers broke a line differently, their words were put back on the strip they fit. If a word still sits on the wrong line, click it and use "Start a new line at this word", or "Join with next line".</p>
  <p><b>Strips.</b> The strip above each line was matched automatically. If it is the wrong one, press "Wrong strip?" and click the right one; you are then asked whether it is for this line only or for this line and all lines after it. A grey dashed row in the list marks a printed strip that no line uses: add a line for it (for example the page number) or mark it "not text".</p>
  <p><b>Done.</b> A line is done only after you press accept; any later edit re-opens it. A page is audited when every line is done. Until then the exported <code>000N.lines.txt</code> still contains the unresolved markers and the page shows NOT FINISHED.</p>
 </div></div>
@@ -235,7 +236,10 @@ async function loadPage(p){try{var d=await call("GET","/api/page?page="+p);
  if(!d.ok){toast(d.error,"err");return false}
  S.page=p;S.doc=d.doc;S.undo=d.undo_depth;S.tb=null;S.focusCrop=null;store("ta_page",String(p));
  S.cur={line:Math.min(d.doc.cursor.line||0,Math.max(0,d.doc.lines.length-1)),mark:null};S.cur.mark=firstUnres(curLine());
- closeCropPanel();render();loadPages();return true}catch(e){if(!e.down)toast(e.msg||String(e),"err");return false}}
+ closeCropPanel();render();loadPages();
+ var mg=d.doc.migrated;if(mg&&store("ta_mig_"+p)!==mg.at){store("ta_mig_"+p,mg.at);
+  toast("This page was rebuilt so that every printed strip is one line and choices are word by word. Kept: "+mg.lines_kept_accepted+" accepted line(s), "+mg.choices_carried+" choice(s). To redo: "+(mg.accepted_lines_to_redo.length)+" accepted line(s), "+(mg.choices_not_carried.length)+" choice(s). The earlier state is saved beside it.","warn")}
+ return true}catch(e){if(!e.down)toast(e.msg||String(e),"err");return false}}
 /* ---------- helpers ---------- */
 function curLine(){return S.doc&&S.doc.lines[S.cur.line]||null}
 function spots(L){return L?L.segs.filter(function(s){return s.t==="mark"||s.t==="brk"}):[]}
@@ -379,7 +383,9 @@ function askScope(cid){var d=S.doc,L=curLine(),cur=cropOf(L),c=cropById(cid);S.s
 function openTb(mode,o){var L=curLine();S.tb=Object.assign({mode:mode},o||{});var tb=$("tb");tb.hidden=false;
  var head="",val="",extra="",alts="";
  if(mode==="choose"){head="Type what is printed for this spot";var s=spots(L).find(function(x){return x.id===o.mark});
-  val=s&&s.choice&&s.choice.k==="custom"?s.choice.v:"";
+  /* start from what is already chosen for this spot (typed text, or the selected reading), so it is edited, not retyped */
+  val="";if(s&&s.choice){if(s.choice.k==="custom")val=s.choice.v;else if(s.choice.k==="alt"){var ca=s.alts[s.choice.i];if(ca!=="∅"&&ca!=="…"&&ca!=="")val=ca}}
+  if(val)head="Edit the reading you chose for this spot";
   if(s)s.alts.forEach(function(a,i){if(a!=="∅"&&a!=="…"&&a!=="")alts+='<button class="sm" data-tbalt="'+i+'" title="copy this reading into the box">start from '+(i+1)+'</button>'})}
  else if(mode==="word"){head="Correct this word";val=o.text;extra='<button class="sm" data-tbx="split">Start a new line at this word</button><button class="sm" data-tbx="delword">Delete this word</button>'}
  else{head="Whole line as text (unresolved spots stay as ⟦...⟧; resolved ones become plain text)";val=L.out}

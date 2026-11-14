@@ -28,7 +28,7 @@ import word_placer as WP  # noqa: E402
 import word_placer_eval as E  # noqa: E402
 import word_placer_la as LA  # noqa: E402
 
-SEEDS = {"dev": [201, 202], "final": [401, 402]}
+SEEDS = {"dev": [201, 202], "final": [401, 402], "fresh": [601, 602]}   # fresh: first used for --la TZ2
 CONFIGS = [("typewriter", "tw_photo_medium"), ("typewriter", "tw_photo_hard"), ("modern_naskh", "tw_photo_medium"),
            ("book_naskh", "clean")]
 PERTURB = [("invent1", dict(n_invent=1, n_repeat=0, n_drop=0)), ("invent2", dict(n_invent=2, n_repeat=0, n_drop=0)),
@@ -58,6 +58,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", choices=sorted(SEEDS), default="dev")
     ap.add_argument("--la", nargs="*", default=["length", "T", "T2"])
+    ap.add_argument("--tag", default="", help="suffix for the output file (g2_<set><tag>.json)")
     a = ap.parse_args(argv)
     rows = []
     for cls, preset in CONFIGS:
@@ -80,7 +81,7 @@ def main(argv=None):
                           f" g2 {t['g2_boxes']} unprinted {t['unprinted_boxes']} wl {t['wrong_line']}"
                           f" | TA {m['TA']['correct']}/{m['TA']['located']} g2 {m['TA']['g2_boxes']} unprinted {m['TA']['unprinted_boxes']}",
                           flush=True)
-    out = HERE.parent / "out" / "word_placer" / f"g2_{a.set}.json"
+    out = HERE.parent / "out" / "word_placer" / f"g2_{a.set}{a.tag}.json"
     out.write_text(json.dumps(rows, indent=1), encoding="utf-8")
     tot = {}
     for r in rows:

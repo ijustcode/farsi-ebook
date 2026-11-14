@@ -17,6 +17,13 @@ Files, all under ``<root>/books/hadpi-articles/truth/`` and only for pages 3-5:
     000N.lines.txt              the export, rewritten atomically after every action
     000N.page.png               page image used for display (only when rendered here)
 
+Since version 2 the state is built strip-first (``tests/text_audit_reflow.py``): where the draft's
+readers disagreed about line breaks, the text is cut again to fit the printed strips, and markers
+with several-word alternatives are split into word-level markers. The draft file itself is never
+changed. A version 1 state is migrated on first open: the old state and undo log are kept beside it
+as ``000N.text_audit.v1.json`` / ``000N.text_audit.undo.v1.jsonl`` and choices that still apply are
+carried over.
+
 The export is "not finished" until the state file says ``status: "audited"``
 (every line accepted and no unresolved marker); ``export.final`` repeats it.
 Until then the export still contains the draft's unresolved markers. In a
@@ -47,7 +54,7 @@ REPO = HERE.parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-TOOL_VERSION = "text_audit/1"
+TOOL_VERSION = "text_audit/2"
 SCHEMA = "farsi2epub.text-audit/v1"
 SLUG = "hadpi-articles"
 ALLOWED_PAGES = (3, 4, 5)
@@ -403,9 +410,12 @@ def auto_assign(crops: list, exp: list, texts: list | None = None) -> dict:
     return assign
 
 
-def build_state(page: int, draft_bytes: bytes, crops: list, image: dict, auto_files: dict | None = None) -> dict:
+def build_state(page: int, draft_bytes: bytes, crops: list, image: dict, auto_files: dict | None = None,
+                consolidate: bool = True, info: dict | None = None) -> dict:
     """New state from the draft. ``crops`` is the inventory (top to bottom);
-    ``auto_files`` maps a draft line number (1-based among non-empty lines) to a crop id."""
+    ``auto_files`` maps a draft line number (1-based among non-empty lines) to a crop id.
+    With ``consolidate`` the lines are rebuilt strip-first (see text_audit_reflow); ``info``
+    receives what a migration needs (marker mappings, the first marker id that is new)."""
     page = check_page(page)
     try:
         text = draft_bytes.decode("utf-8")
@@ -424,20 +434,78 @@ def build_state(page: int, draft_bytes: bytes, crops: list, image: dict, auto_fi
     if auto_files is None:
         auto_files = auto_assign(crops, [expected_chars(parsed[i]) for i in nonblank],
                                  [plain_first(parsed[i]) for i in nonblank])
-    lines, ordinal = [], 0
-    for i, raw in enumerate(raw_lines):
-        if raw.strip():
-            ordinal += 1
-            lines.append(new_line(ids, parsed[i], crop=auto_files.get(ordinal)))
-        else:
-            lines.append(new_line(ids, parsed[i], state="accepted"))
+    lines, ordinal, reflow = [], 0, None
+    first_new = ids.nm
+    if consolidate:
+        import text_audit_reflow as RF
+        pre = []
+        for i, raw in enumerate(raw_lines):
+            if raw.strip():
+                ordinal += 1
+                pre.append(dict(segs=parsed[i], crop=auto_files.get(ordinal), blank=False))
+            else:
+                pre.append(dict(segs=parsed[i], crop=None, blank=True))
+        new, maps, reflow = RF.consolidate(pre, crops, ids.mark)
+        for n in new:
+            blank = not n["reflowed"] and pre[n["src"][0]]["blank"]
+            line = new_line(ids, n["segs"], crop=n["crop"], state="accepted" if blank else "open")
+            line["src"] = [k + 1 for k in n["src"]]          # draft line numbers this line was built from
+            if n["reflowed"]:
+                line["reflowed"] = True
+            lines.append(line)
+        if info is not None:
+            info.update(maps=maps, first_new_mark=first_new)
+    else:
+        for i, raw in enumerate(raw_lines):
+            if raw.strip():
+                ordinal += 1
+                lines.append(new_line(ids, parsed[i], crop=auto_files.get(ordinal)))
+            else:
+                lines.append(new_line(ids, parsed[i], state="accepted"))
     doc = dict(schema=SCHEMA, tool_version=TOOL_VERSION, slug=SLUG, page=page,
                draft=dict(file=f"{page:04d}.lines.draft.txt", sha256=sha_bytes(draft_bytes), bytes=len(draft_bytes)),
                final_newline=final_nl, revision=0, log_n=0, next_mark=ids.nm, next_line=ids.nl,
                cursor=dict(line=0, mark=None), image=image, crops=crops, lines=lines,
                ignored=[], status="in_progress", created_at=now_iso(), updated_at=now_iso(),
                export=dict(file=f"{page:04d}.lines.txt", sha256=sha_bytes(draft_bytes), prev=None, final=False))
+    if reflow is not None:
+        doc["reflow"] = reflow
     return doc
+
+
+def carry_choices(doc: dict, old: dict, maps: dict, first_new_mark: int) -> dict:
+    """Carry an earlier state's work into a freshly built one: choices on markers that still
+    exist (or were split word by word), and "accepted" for untouched lines whose text comes out
+    the same. Anything that cannot be carried is listed, never guessed."""
+    marks = {s["id"]: (line, s) for line in doc["lines"] for s in line["segs"] if s["t"] == "mark"}
+    carried, lost = 0, []
+    for ol in old.get("lines", []):
+        for s in ol["segs"]:
+            if s["t"] != "mark" or s.get("choice") is None or s["id"] >= first_new_mark:
+                continue
+            c, mid = s["choice"], s["id"]
+            if mid in marks and marks[mid][1]["alts"] == s["alts"]:
+                marks[mid][1]["choice"] = copy.deepcopy(c)
+                carried += 1
+            elif mid in maps and c.get("k") == "alt" and all(x in marks for x, _ in maps[mid][c["i"]]):
+                for sub, k in maps[mid][c["i"]]:
+                    marks[sub][1]["choice"] = {"k": "alt", "i": k}
+                carried += 1
+            else:
+                lost.append(dict(old_line=ol["id"], choice=mark_value(s) if mark_value(s) != SENT else ""))
+    accepted, reopened = 0, []
+    by_src = {l["src"][0]: l for l in doc["lines"] if not l.get("reflowed") and len(l.get("src", [])) == 1}
+    for ol in old.get("lines", []):
+        if ol["state"] != "accepted" or not ol["segs"]:
+            continue
+        nl = by_src.get(ol["id"])
+        if nl is not None and nl["segs"] and not unresolved_count(nl) and render_segs(nl["segs"]) == render_segs(ol["segs"]):
+            nl["state"] = "accepted"
+            accepted += 1
+        else:
+            reopened.append(dict(old_line=ol["id"], text=render_segs(ol["segs"])))
+    return dict(choices_carried=carried, choices_not_carried=lost, lines_kept_accepted=accepted,
+                accepted_lines_to_redo=reopened)
 
 
 def export_text(doc: dict) -> str:
@@ -922,7 +990,8 @@ def rel_to(p: Path, root: Path, src: Path) -> str:
 # Store
 # ---------------------------------------------------------------------------
 class Store:
-    def __init__(self, root: Path, source_root: Path | None = None, geometry=None, log=print):
+    def __init__(self, root: Path, source_root: Path | None = None, geometry=None, log=print, consolidate=True):
+        self.consolidate = consolidate    # strip-first rebuild of the draft's lines (False: the draft's own lines)
         self.root = Path(root)
         self.source_root = Path(source_root or root)
         self.geometry = geometry          # callable(root, page) -> (crops, image, auto); tests inject
@@ -972,7 +1041,10 @@ class Store:
                     raise AuditError(f"the draft copy {P['draft'].name} is missing; refusing to continue")
                 if sha_file(P["draft"]) != doc["draft"]["sha256"]:
                     raise AuditError(f"{P['draft'].name} does not match the draft this state was created from; refusing")
-                self._heal(doc, P)
+                if self.consolidate and doc.get("tool_version") != TOOL_VERSION:
+                    doc = self._migrate(doc, P, page)
+                else:
+                    self._heal(doc, P)
             else:
                 if P["draft"].exists():
                     src = P["draft"].read_bytes()
@@ -990,7 +1062,7 @@ class Store:
                         crops, image, auto = prepare_geometry(self.root, page, self.source_root, self.log)
                 except AuditError:
                     raise
-                doc = build_state(page, src, crops, image, auto)
+                doc = build_state(page, src, crops, image, auto, consolidate=self.consolidate)
                 if not P["draft"].exists():
                     with P["draft"].open("xb") as f:
                         f.write(src)
@@ -1002,6 +1074,33 @@ class Store:
                 self._write_export(doc, P)
             self.docs[page] = doc
             return doc
+
+    def _migrate(self, old, P, page):
+        """Rebuild an older state strip-first. The old state and undo log are kept beside the new one."""
+        self._heal(old, P)
+        tag = str(old.get("tool_version", "text_audit/1")).split("/")[-1]
+        bak_state = P["state"].with_name(f"{page:04d}.text_audit.v{tag}.json")
+        bak_undo = P["state"].with_name(f"{page:04d}.text_audit.undo.v{tag}.jsonl")
+        if bak_state.exists() or bak_undo.exists():
+            raise AuditError(f"{bak_state.name} already exists; refusing to migrate this page twice")
+        atomic_write(bak_state, P["state"].read_bytes())
+        info: dict = {}
+        doc = build_state(page, P["draft"].read_bytes(), old["crops"], old["image"], None, consolidate=True, info=info)
+        rep = carry_choices(doc, old, info["maps"], info["first_new_mark"])
+        doc["ignored"] = list(old.get("ignored", []))
+        doc["created_at"] = old.get("created_at", doc["created_at"])
+        doc["export"]["sha256"], doc["export"]["prev"] = old["export"]["sha256"], old["export"].get("prev")
+        doc["migrated"] = dict(from_version=old.get("tool_version"), at=now_iso(), old_revision=old.get("revision"),
+                               backup=[bak_state.name] + ([bak_undo.name] if P["undo"].exists() else []), **rep)
+        if P["undo"].exists():
+            os.replace(P["undo"], bak_undo)
+        self._write_state(doc, P)
+        self._write_export(doc, P)
+        self._write_state(doc, P)
+        self.log(f"page {page}: rebuilt strip-first from {old.get('tool_version')}: "
+                 f"{rep['lines_kept_accepted']} accepted lines kept, {rep['choices_carried']} choices carried, "
+                 f"{len(rep['choices_not_carried'])} choices and {len(rep['accepted_lines_to_redo'])} accepted lines to redo")
+        return doc
 
     def _heal(self, doc, P):
         recs = self._log_records(P)
@@ -1158,7 +1257,7 @@ def make_handler(store: Store, port: int):
     from text_audit_ui import PAGE_HTML
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "text-audit/1"
+        server_version = "text-audit/2"
 
         def log_message(self, fmt, *a):
             pass

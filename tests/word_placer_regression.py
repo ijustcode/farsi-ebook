@@ -20,6 +20,7 @@ rule on a tight-leading page (section 11) and the template-scored line-text
 assignment with an inserted non-text line and a dropped text line (section 12).
 The rules between T and S&T and the end-to-end token alignment (section 13).
 Re-segmentation groups and gate G2 with perturbed line text (section 14).
+Group boxes, passage scoring and mark lines (section 15).
 
 Floors are set below the values measured when the test was written (listed
 beside each), so they catch regressions, not noise.
@@ -292,6 +293,7 @@ def main() -> int:
     vertical_and_assignment_checks()
     rules_2a_and_e2e_checks()
     groups_and_g2_checks()
+    d14_d15_checks()
 
     print(f"\n{'PASS' if not FAILS else 'FAIL'}: {len(FAILS)} failure(s)")
     for f in FAILS:
@@ -581,10 +583,10 @@ def groups_and_g2_checks():
     src, st = X.align_to_truth(truth, [["ab", "cd", "ef"], ["gh", "ijkl"], ["mn", "op"]], g)
     check([x["kind"] for x in g] == ["join"] and g[0]["truth"] == [(1, 1), (1, 2)] and src[1][1] == ("g", 0, 0),
           "a join at a line end is a group of that line")
-    # G2 with perturbed text, confirmed assignment
+    # G2 with perturbed text, assignment with the mark-line guard (TM)
     page = page_of("typewriter", 216, preset="tw_photo_medium")
     ev = WP.page_evidence(page["gray"])
-    E.T_OPTS.update(la="T2")
+    E.T_OPTS.update(la="TM")
     try:
         base, _ = E.run_T(page, "C", ev=ev, texts=[list(t) for t in page["texts"]],
                           src=[[(li, wi) for wi in range(len(t))] for li, t in enumerate(page["texts"])], with_R=False)
@@ -613,6 +615,91 @@ def groups_and_g2_checks():
             check(lost <= allow, f"{name}: other words keep their boxes (lost {lost} <= {allow} of {sm0['located_correct']['k']})")
     finally:
         E.T_OPTS.update(la="length")
+
+
+def d14_d15_checks():
+    """D14: group boxes and passage scoring; D15: mark lines (synthetic only)."""
+    print("15. group boxes, passage scoring, mark lines")
+    import word_placer_la as LA
+    import word_placer_passage as PS
+    page = page_of("typewriter", 211, preset="clean")
+    tp = page["truth_page"]
+    W, H = tp.W, tp.H
+    L = next(L for L in tp.lines if len(L.words) >= 4)
+    li = L.index
+    src = [[(a, b) for b in range(len(t))] for a, t in enumerate(page["texts"])]
+    status = {(w.li, w.wi): "read" for w in tp.graded_words()}
+
+    def box(ws, grow=0.0):
+        xs = [p[0] for w in ws for p in w.quad]; ys = [p[1] for w in ws for p in w.quad]
+        x0, x1 = min(xs) - grow, max(xs) + grow
+        return {"status": "located", "segments": [{"rect": [x0 / W, min(ys) / H, x1 / W, max(ys) / H]}], "reason": "",
+                "_group": [w.wi for w in ws], "_tline": li}
+    w1, w2, w3 = L.words[1], L.words[2], L.words[3]
+    good = box([w1, w2])
+    pw = {(li, 1): good, (li, 2): good}
+    c = PS.score_words(page, pw, src, status, [])
+    check(c["correct_group"] == 2 and c["located_group"] == 2,
+          f"group box over exactly its two words is correct for both ({c['correct_group']}/{c['located_group']})")
+    bad = box([w1, w2, w3])
+    bad["_group"] = [1, 2]                     # claims two words but covers three
+    c = PS.score_words(page, {(li, 1): bad, (li, 2): bad}, src, status, [])
+    check(c["correct_group"] == 0, "group box claiming two words but covering a third is wrong")
+    check(c["widths"] and min(c["widths"]) > 1.0, f"group box width over the word is reported in letters ({c['widths']})")
+    # a split word (one truth word read as two tokens): both tokens located with boxes whose union
+    # is the word -> correct (union against union); only one located -> shown, partial, not correct
+    src_s = [list(row) for row in src]
+    src_s[li] = [k for k in src[li] if k != (li, 1)] + [("g", 0, 0), ("g", 0, 1)]
+    grp = [dict(kind="split", gid=0, truth=[(li, 1)], model=[(li, len(src_s[li]) - 2), (li, len(src_s[li]) - 1)])]
+    st_s = dict(status)
+    st_s[(li, 1)] = "split"
+    xs_ = [p[0] for p in w1.quad]
+    mid = (min(xs_) + max(xs_)) / 2
+    def half(a, b):
+        ys_ = [p[1] for p in w1.quad]
+        return {"status": "located", "segments": [{"rect": [a / W, min(ys_) / H, b / W, max(ys_) / H]}], "reason": ""}
+    c = PS.score_words(page, {("g", 0, 0): half(mid, max(xs_)), ("g", 0, 1): half(min(xs_), mid)}, src_s, st_s, grp)
+    check(c["correct"] == 1 and c["located"] == 1, f"split word: union of its two token boxes is scored as the word ({c})")
+    c = PS.score_words(page, {("g", 0, 0): half(mid, max(xs_)), ("g", 0, 1): {"status": "unresolved", "segments": []}},
+                       src_s, st_s, grp)
+    check(c["correct"] == 0 and c["located"] == 1 and c["partial"] == 1, f"split word, one token located: partial ({c})")
+    # passage rule only looks at outer edges (constructed extents)
+    arms = {"Tall": {(li, 1): {"_sext": (0.0, 10.0), "segments": []}, (li, 2): {"_sext": (10.0, 20.0), "segments": []}},
+            "S": {(li, 1): {"_sext": (0.0, 14.0)}, (li, 2): {"_sext": (14.0, 20.2)}}}
+    check(PS._agree_segment(arms, [(li, 1), (li, 2)], unit=10.0), "passage: inner boundary disagreement ignored")
+    arms["S"][(li, 2)]["_sext"] = (14.0, 30.0)
+    check(not PS._agree_segment(arms, [(li, 1), (li, 2)], unit=10.0), "passage: outer edge disagreement is not located")
+    # group boxes on a real run: never fewer located words than TA, statuses valid
+    pg = page_of("typewriter", 216, preset="tw_photo_medium")
+    arms_, _ = E.run_T(pg, "A", ev=WP.page_evidence(pg["gray"]))
+    nta = sum(1 for x in arms_["TA"].values() if x["status"] == "located")
+    ntag = sum(1 for x in arms_["TAG"].values() if x["status"] == "located")
+    check(ntag >= nta and statuses(arms_["TAG"]) <= ALLOWED, f"TAG locates at least TA's words ({ntag} >= {nta})")
+    # D15 mark lines: stamp/signature lines are recognised, ordinary text lines are not
+    ev = WP.page_evidence(pg["gray"])
+    pwG, gi = E.run_G(pg, "B", ev=ev)
+    r = gi["_r"]
+    kinds = [k for _, k in WP.l1_lines(ev)]
+    marks, _st = LA.mark_lines(ev, r["inks"], kinds)
+    under = gi["line_assignment"]["under"]
+    check(not any(under[j] is not None for j in marks), f"no detected text line is classed as a mark line ({sorted(marks)})")
+    # TZ: the zone below the text block adds only non-text lines here, and the guard never
+    # removes a trusted pairing whose detected line holds text
+    zm, _normal, yb, _st = LA.zone_mark_lines(ev, r["inks"], kinds)
+    check(yb is not None and marks <= zm and not any(under[j] is not None for j in zm),
+          f"TZ mark lines are non-text lines only ({sorted(zm)})")
+    texts = [list(t) for t in pg["texts"]]
+    nj = len(r["inks"])
+    la = {"assign": [min(i, nj - 1) for i in range(len(texts))], "trusted": [True] * len(texts),
+          "margin": [WP.P["LA_MARGIN"]] * len(texts), "gains": np.full((len(texts), nj), 100.0)}
+    la["gains"][0, :] = 1.0                    # weak template evidence for text line 0
+    j_mark = sorted(zm)[0] if zm else None
+    if j_mark is not None:
+        la["assign"][0] = j_mark
+        rep = LA.guard_zone(ev, r["inks"], kinds, texts, la)
+        check(0 in rep["blocked"] and not la["trusted"][0] and la["margin"][0] == 0.0
+              and all(la["trusted"][i] for i in range(len(texts)) if la["assign"][i] not in zm),
+              f"TZ guard untrusts a weak pairing with a mark line and no pairing with another line ({rep['blocked']})")
 
 
 T_FLOORS = dict(photo_rate=0.70, photo_prec=0.93, o2_rate=0.70)

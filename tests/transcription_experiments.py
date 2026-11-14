@@ -2929,6 +2929,344 @@ def cmd_heldout_draft(_args) -> None:
     (OUT / "heldout_draft_summary.json").write_text(json.dumps(summary, indent=1))
 
 
+# ---------------------------------------------------------------------------
+# D14 join analysis and reader v2 (keep joins as printed, skip non-document marks)
+# ---------------------------------------------------------------------------
+# New and separately named. Nothing here changes the frozen configurations
+# (t1r_opus, t1r, current), their prompts, the scorer's foldings or the draft builder.
+
+_PREPS = {"و", "به", "ب", "از", "در", "با", "بر", "تا", "که", "چون", "یا"}
+_PREFIXES = {"می", "نمی", "همی", "بی", "نا", "هم", "ن"}
+_LIGHT_VERBS = {"شود", "شد", "گردد", "گردید", "کند", "کرد", "نماید", "نمود", "باشد", "بود", "دهد", "داد",
+                "کرده", "شده", "نموده", "گردیده", "دارد", "داشت", "خواهد", "میشود", "میگردد", "مینماید", "میکند"}
+_ENDINGS = {"ها", "های", "هایی", "هائی", "ای", "ی", "یی", "اش", "ام", "ات", "مان", "تان", "شان", "تر", "ترین",
+            "گر", "گری", "ند", "اند", "است", "ست", "ایم", "اید", "ید", "یم"}
+
+
+_NONJOINING = set("اآأإدذرزژوؤ")
+IN_WORD_GAP = "gap inside one word after a non-joining letter written as a space"
+
+
+def join_category(pieces: list[str], vocab: Optional[set] = None) -> str:
+    """Category of a word written as several pieces on one side and one token on the other.
+
+    With `vocab` (words that stand alone somewhere in the truth), a break that
+    falls after a non-joining letter and leaves a piece that is not such a word is
+    classed as a typewriter gap inside one word (heuristic: it cannot tell a rare
+    real word from a fragment)."""
+    first, last = pieces[0], pieces[-1]
+    if vocab is not None:
+        def is_word(w: str) -> bool:     # a single letter other than و is a fragment; و/ب may lead a word
+            if w == "و":
+                return True
+            return len(w) > 1 and (w in vocab or (w[0] in "وب" and len(w) > 2 and w[1:] in vocab))
+        for a, b in zip(pieces, pieces[1:]):
+            if a and a[-1] in _NONJOINING and not (is_word(a) and is_word(b)):
+                return IN_WORD_GAP
+    if first in _PREPS or (len(first) > 1 and first[0] == "و" and first[1:] in _PREPS):
+        return "preposition or conjunction attached to the next word"
+    if len(pieces) >= 2 and (last in _LIGHT_VERBS or last.startswith("می")):
+        return "compound verb (word + light verb)"
+    if first in _PREFIXES:
+        return "verbal or derivational prefix"
+    if last == "را":
+        return "postposition را attached"
+    if last in _ENDINGS:
+        return "plural, possessive, comparative or copula ending"
+    return "two content words (compound or run-together)"
+
+
+def _pairs(toks: list[Tok]) -> list[tuple[str, str, Tok]]:
+    out = []
+    for t in toks:
+        if t.marker == "unk":
+            out.append((t.text, t.text, t))
+            continue
+        o = ortho_fold_token(t.text)
+        if o:
+            out.append((strict_fold(t.text), o, t))
+    return out
+
+
+_VOCAB_CACHE: dict = {}
+
+
+def truth_vocab(pids=("h1", "h2", "c23", "c109")) -> set:
+    """Ortho-folded words that stand alone in the development truth texts, plus
+    every word of the stored page texts of the other books in books/ (hadpi-articles
+    is excluded entirely, so no held-out page is read). Used only to tell a word
+    fragment from a word when classifying splits."""
+    key = tuple(pids)
+    if key not in _VOCAB_CACHE:
+        v = {o for pid in pids for _, o, _ in _pairs(truth_tokens(pid))}
+        for f in sorted((ROOT / "books").glob("*/text/*.md")):
+            if f.parent.parent.name == HADPI:
+                continue
+            v.update(o for o in (ortho_fold_token(w) for w in strip_markdown(f.read_text(encoding="utf-8")).split()) if o)
+        _VOCAB_CACHE[key] = v
+    return _VOCAB_CACHE[key]
+
+
+def join_breakdown(truth: list[Tok], hyp: list[Tok], vocab: Optional[set] = None) -> dict:
+    """Against truth: words the reader split where the print joins them, words it
+    joined where the print separates them, ZWNJ inserted/dropped, punctuation
+    attachment differences, and the split/join categories."""
+    T, H = _pairs(truth), _pairs(hyp)
+    _, ops = align([o for _, o, _ in T], [o for _, o, _ in H], joins=True)
+    out = {"split": 0, "joined": 0, "zwnj_for_space": 0, "zwnj_inserted": 0, "zwnj_dropped": 0, "punct_attach": 0,
+           "split_categories": {}, "join_categories": {}}
+
+    def cat(d, c):
+        d[c] = d.get(c, 0) + 1
+    for k, op in enumerate(ops):
+        if op.kind == "split":
+            out["split"] += 1
+            cat(out["split_categories"], join_category([H[j][1] for j in op.hyp], vocab))
+        elif op.kind == "join":
+            if ZWNJ in H[op.hyp[0]][0]:
+                out["zwnj_for_space"] += 1      # wrote ZWNJ where the print has a space
+            else:
+                out["joined"] += 1
+                cat(out["join_categories"], join_category([T[i][1] for i in op.ref]))
+        elif op.kind == "match":
+            ts, hs = T[op.ref[0]][0], H[op.hyp[0]][0]
+            if ts == hs:
+                continue
+            tz, hz = ZWNJ in ts, ZWNJ in hs
+            if hz and not tz:
+                out["zwnj_inserted"] += 1
+            elif tz and not hz:
+                out["zwnj_dropped"] += 1
+            if _DIACRITICS.sub("", ts.replace(ZWNJ, "")) != _DIACRITICS.sub("", hs.replace(ZWNJ, "")):
+                out["punct_attach"] += 1
+        elif op.kind == "sub" and k + 1 < len(ops):
+            # the classic joined form that drops a letter: printed بX, read as به X
+            nxt = ops[k + 1]
+            t = T[op.ref[0]][1]
+            if H[op.hyp[0]][1] == "به" and nxt.kind == "ins" and t == "ب" + H[nxt.hyp[0]][1]:
+                out["split"] += 1
+                cat(out["split_categories"], "preposition به attached as ب")
+        elif op.kind == "ins" and k + 1 < len(ops) and H[op.hyp[0]][1] == "به":
+            nxt = ops[k + 1]
+            if nxt.kind == "sub" and T[nxt.ref[0]][1] == "ب" + H[nxt.hyp[0]][1]:
+                out["split"] += 1
+                cat(out["split_categories"], "preposition به attached as ب")
+    return out
+
+
+def stray_lines(truth_lines_: list[str], hyp_lines: list[str]) -> list[str]:
+    """Reader lines with no counterpart among the truth lines (candidates for
+    stamp, signature or watermark text)."""
+    T = [l for l in truth_lines_ if strict_fold(l).strip()]
+    Hh = [l for l in hyp_lines if strict_fold(l).strip()]
+    return [Hh[k] for ia, ib in align_lines(T, Hh) if not ia for k in ib]
+
+
+_V2_JOINS = """- Word spacing exactly as printed. Old print and typewriting often run together words that modern spelling writes apart: و (and), به, با, از, در or که typed onto the next word; the prefix می or نمی attached to its verb; a light verb or a second noun run onto the word before it; را or an ending such as ها or ای attached to its word. Keep every such join exactly as printed (for example write بخانه, ومن, میرفت, آنرا if that is how they are printed), and keep apart what is printed apart. Never change spacing to match modern spelling or a dictionary, and never write a zero-width non-joiner (U+200C).
+- Decide spacing by the white space you can actually see between letter groups. A gap after a non-joining letter (ا د ذ ر ز ژ و) inside a word is not a word break. On a typewriter the space between two words can be no wider than such a gap: where the print shows no break that is clearly wider than the gaps inside the neighbouring words, write the letters without a space. Keep the spacing around punctuation as printed."""
+
+_V2_MARKS = """- Do not transcribe anything that is not the document's own typed or printed text: stamps or seals (often round, often in coloured ink), signatures, handwritten notes, ticks or numbers, and watermarks or logos added by a scanner or a scanning app (for example a "CamScanner" mark). Leave them out entirely, even when they contain readable words. Where a stamp or a signature covers printed text, transcribe the printed words underneath and mark what you cannot read."""
+
+# Variant c (2026-11-13, after the owner's clarification "write what the typist
+# typed, not what the ink looks like"): a gap inside one word after a non-joining
+# letter is the typewriter, never a space; two words typed with no space stay
+# joined. Unlike v2a it does not tell the reader to join whenever the gap is
+# undecidable (v2a/v2b over-joined real word spaces after non-joining letters on
+# hadpi p2). Example words are generic, not taken from any held-out page.
+_V2C_JOINS = """- Write what the typist typed, not the shape of the ink. Old print and typewriting often run together words that modern spelling writes apart: و (and), به (often typed as ب), با, از, در, یا or که typed onto the next word; the prefix می or نمی attached to its verb; a light verb or a second noun run onto the word before it; را or an ending such as ها attached to its word. Where the typist ran words together, keep them together exactly as printed (for example بخانه, ومن, میرفت, آنرا); where the typist typed a word space, write a space. Never change spacing to match modern spelling or a dictionary, and never write a zero-width non-joiner (U+200C).
+- A letter that does not join to the left (ا د ذ ر ز ژ و) leaves a small gap inside a word on a typewriter. That gap is not a space: write the word closed (for example کردند and اداره, never کرد ند or ا داره), and never split one word in the middle. Between two different words, write a space wherever the typist left an ordinary word space, also after such a letter. Write two words together only where the print shows them typed with no word space at all. Keep the spacing around punctuation as printed."""
+
+_V2_SELFCHECK = """- Before you finish each line, compare your spacing with the print once more: remove any space you wrote where the print shows no word gap, and separate any two words you wrote together where the print shows a clear gap."""
+
+
+def _v2_rules(variant: str) -> str:
+    parts = READ_RULES.split("\n- ")
+    j = next(i for i, b in enumerate(parts) if b.startswith("Word joins and splits exactly as typed"))
+    k = next(i for i, b in enumerate(parts) if b.startswith("Do not transcribe signatures, stamps"))
+    joins = _V2C_JOINS if variant == "c" else _V2_JOINS
+    parts[j] = joins[2:] + ("\n" + _V2_SELFCHECK if variant == "b" else "")
+    parts[k] = _V2_MARKS[2:]
+    return "\n- ".join(parts)
+
+
+def bands_v2_system(n: int, variant: str) -> str:
+    return band_system(_CUR_HEAD.split("You receive", 1)[0] + "You receive one page and write down its printed lines.\n\n"
+                       + _v2_rules(variant) + IGNORE_SECTION.rstrip() + "\n", n)
+
+
+V2_ARMS = {   # arm: (model, variant)
+    "v2a_opus": (MODEL_OPUS, "a"),
+    "v2b_opus": (MODEL_OPUS, "b"),
+    "v2a_sonnet": (config.MODEL_STRONG, "a"),
+    "v2b_sonnet": (config.MODEL_STRONG, "b"),
+    "v2c_opus": (MODEL_OPUS, "c"),
+    "v2c_sonnet": (config.MODEL_STRONG, "c"),
+}
+# Output cap. v2a_opus/v2b_opus were run (and cached) with 12000; it is part of
+# their request key, so it stays. Later arms use 6000 (observed output about
+# 1,600-1,800 tokens) so that the budget guard's worst case fits the cap.
+V2_MAX_TOKENS = {"v2a_opus": 12000, "v2b_opus": 12000}
+V2_MAX_TOKENS_DEFAULT = 6000
+
+
+def build_v2_request(arm: str, pid: str, rep: int = 0) -> Request:
+    if pid in HELDOUT_PIDS:
+        raise SystemExit("v2 configurations are built for development pages only")
+    model, variant = V2_ARMS[arm]
+    base = build_request("t1r", pid, 0)          # same bands and user text as v1
+    n = sum(1 for c in base.content if isinstance(c, Image))
+    mt = V2_MAX_TOKENS.get(arm, V2_MAX_TOKENS_DEFAULT)
+    if model == MODEL_OPUS:
+        return Request(arm, pid, model, bands_v2_system(n, variant), base.content, BandsReading, rep=rep,
+                       max_tokens=mt, expected_out=2000, **_model_kwargs(MODEL_OPUS))
+    return Request(arm, pid, model, bands_v2_system(n, variant), base.content, BandsReading, rep=rep,
+                   max_tokens=mt, expected_out=2000)
+
+
+def _reading(arm: str, pid: str, rep: int):
+    """(tokens, lines or None, record) for any cached band/whole-page/v2/per-line reading."""
+    r = Runner()
+    if arm in PERLINE_ARMS:
+        o = perline_output(r, arm, pid, rep)
+        return None if o is None else (tokenize_lines(o["lines"]), o["lines"], {"cost": o["cost"]})
+    req = build_v2_request(arm, pid, rep) if arm in V2_ARMS else build_request(arm, pid, rep)
+    rec = r.cached(req)
+    if rec is None:
+        return None
+    base_arm = "t1r" if arm in V2_ARMS else arm
+    o = output_of(rec, base_arm)
+    return hyp_tokens(o, "md" if o.get("md") is not None else "lines"), o.get("lines"), rec
+
+
+V2_SCORE_ARMS = ("t1r_opus", "v2a_opus", "v2b_opus", "v2c_opus", "t1r", "v2a_sonnet", "v2b_sonnet", "v2c_sonnet",
+                 "current")
+V1_JOIN_ARMS = ("t1r_opus", "pl_o", "pl_o1", "t1r", "current")
+DEV_PIDS = ("h1", "h2", "c23", "c109")
+
+
+def _score_rows(arms, reps: int = 3) -> list[dict]:
+    vocab = truth_vocab()
+    rows = []
+    for arm in arms:
+        for pid in DEV_PIDS:
+            truth = truth_tokens(pid)
+            for rep in range(reps):
+                got = _reading(arm, pid, rep)
+                if got is None:
+                    continue
+                hyp, lines, rec = got
+                row = {"arm": arm, "page": pid, "rep": rep, "cost": rec["cost"],
+                       **{f: wer(truth, hyp, f) for f in FOLDINGS}, "invented": len(invented_words(truth, hyp)),
+                       "markers": marker_stats(truth, hyp), "joins": join_breakdown(truth, hyp, vocab)}
+                if lines is not None:
+                    row["lines"] = line_stats(truth_lines(pid), lines)
+                    st = stray_lines(truth_lines(pid), lines)
+                    row["stray_lines"] = len(st)
+                    row["stray_words"] = sum(len(strict_fold(l).split()) for l in st)
+                    row["latin_lines"] = sum(1 for l in lines if re.search("[A-Za-z]{3,}", l))
+                rows.append(row)
+    return rows
+
+
+def _row_line(r: dict) -> str:
+    j, m, lb = r["joins"], r["markers"], r.get("lines")
+    lbs = f"{lb['truth_lines']}/{lb['hyp_lines']},{lb['lines_break_correct']}" if lb else "-"
+    return (f"{r['page']:5s} {r['arm']:11s} {r['rep']}  {r['strict']['wer']:.3f} ({r['strict']['errors']:3d}/{r['strict']['n_truth']}) "
+            f"{r['lenient']['wer']:.3f} ({r['lenient']['errors']:3d}/{r['lenient']['n_truth']})  {j['split']:4d} {j['joined']:5d} "
+            f"{j['zwnj_for_space']:5d} {j['zwnj_inserted']:4d} {j['zwnj_dropped']:4d} {j['punct_attach']:4d}  {r['invented']:3d} "
+            f"{m['markers_unk']:3d} {m['markers_guess']:3d}  {lbs:12s} {r.get('stray_lines', '-')!s:4s} "
+            f"{r.get('latin_lines', '-')!s:4s} ${r['cost']:.4f}")
+
+
+ROW_HEADER = ("page  arm         rep strict (err/n)   lenient (err/n)  split joined zwnj-sp zwnj+ zwnj- punct  inv unk "
+              "guess lines(t/h,ok) stray latin cost")
+
+
+def _aggregate(rows: list[dict]) -> str:
+    """Per arm and page group: runs, min-max of each count (no means: two runs)."""
+    def rng(vals):
+        return f"{min(vals)}" if min(vals) == max(vals) else f"{min(vals)}-{max(vals)}"
+    out = ["arm         pages    runs  strict err  lenient err  split  joined  zwnj-sp  split+joined  in-word-gap splits  "
+           "inv  unk+guess  stray lines"]
+    for arm in dict.fromkeys(r["arm"] for r in rows):
+        for group in (("h1",), ("h2",), ("c23",), ("c109",)):
+            rs = [r for r in rows if r["arm"] == arm and r["page"] in group]
+            if not rs:
+                continue
+            n_s, n_l = rs[0]["strict"]["n_truth"], rs[0]["lenient"]["n_truth"]
+            out.append(
+                f"{arm:11s} {','.join(group):8s} {len(rs):4d}  {rng([r['strict']['errors'] for r in rs]):>6s}/{n_s:<4d}"
+                f"{rng([r['lenient']['errors'] for r in rs]):>7s}/{n_l:<4d}  {rng([r['joins']['split'] for r in rs]):>5s}"
+                f"  {rng([r['joins']['joined'] for r in rs]):>6s}  {rng([r['joins']['zwnj_for_space'] for r in rs]):>7s}"
+                f"  {rng([r['joins']['split'] + r['joins']['joined'] for r in rs]):>12s}"
+                f"  {rng([r['joins']['split_categories'].get(IN_WORD_GAP, 0) for r in rs]):>18s}"
+                f"  {rng([r['invented'] for r in rs]):>3s}  {rng([r['markers']['markers_unk'] + r['markers']['markers_guess'] for r in rs]):>9s}"
+                f"  {rng([r.get('stray_lines', 0) for r in rs]):>11s}")
+    return "\n".join(out)
+
+
+def _category_totals(rows: list[dict], key: str, pids=("h1", "h2")) -> dict:
+    tot: dict = {}
+    for r in rows:
+        if r["page"] not in pids:
+            continue
+        d = tot.setdefault(r["arm"], {"runs": 0})
+        d["runs"] += 1
+        for c, v in r["joins"][key].items():
+            d[c] = d.get(c, 0) + v
+    return tot
+
+
+def cmd_scorev2(_args) -> None:
+    rows = _score_rows(V2_SCORE_ARMS)
+    (OUT / "results_v2.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1))
+    text = "\n".join([ROW_HEADER] + [_row_line(r) for r in rows] + ["", "RANGES OVER RUNS (min-max)", _aggregate(rows), "",
+                      "SPLIT CATEGORIES, hadpi p1+p2, summed over runs",
+                      json.dumps(_category_totals(rows, "split_categories"), ensure_ascii=False, indent=1),
+                      "JOIN CATEGORIES (model joined what the print separates), hadpi p1+p2, summed over runs",
+                      json.dumps(_category_totals(rows, "join_categories"), ensure_ascii=False, indent=1)])
+    print(text)
+    (OUT / "summary_v2.txt").write_text(text, encoding="utf-8")
+
+
+def cmd_joinsv1(_args) -> None:
+    """Task item 1 ($0, cache only): join/ZWNJ/punctuation breakdown of every cached
+    v1 reading (Opus bands, Opus line crops batched and single, Sonnet bands, current)."""
+    rows = _score_rows(V1_JOIN_ARMS)
+    keep = ("arm", "page", "rep", "stray_lines", "stray_words")
+    slim = [{**{k: r[k] for k in keep if k in r}, **r["joins"]} for r in rows]
+    res = {"rows": slim, "split_categories_hadpi": _category_totals(rows, "split_categories"),
+           "join_categories_hadpi": _category_totals(rows, "join_categories")}
+    (OUT / "join_breakdown_v1.json").write_text(json.dumps(res, ensure_ascii=False, indent=1))
+    print("\n".join([ROW_HEADER] + [_row_line(r) for r in rows] + ["", _aggregate(rows)]))
+    print(json.dumps({k: res[k] for k in ("split_categories_hadpi", "join_categories_hadpi")}, ensure_ascii=False, indent=1))
+
+
+LEDGER_V2 = "ledger_v2.jsonl"
+CAP_V2_USD = 1.50
+
+
+def cmd_runv2(args) -> None:
+    runner = Runner(cap=CAP_V2_USD, ledger_name=LEDGER_V2)
+    pids = args.pages.split(",") if args.pages else ("h1", "h2")
+    if set(pids) & set(HELDOUT_PIDS):
+        raise SystemExit("v2 runs on development pages only")
+    for arm in args.arms:
+        for pid in pids:
+            req = build_v2_request(arm, pid, args.rep)
+            try:
+                rec = runner.call(req)
+            except (BudgetExceeded, AccessError) as exc:
+                print(f"STOP: {type(exc).__name__}: {exc}")
+                return
+            except RuntimeError as exc:
+                print(f"{arm} {pid} rep{args.rep}: FAILED after one retry: {exc}")
+                continue
+            print(f"{arm:10s} {pid:5s} rep{args.rep} hit={rec['cache_hit']} in={rec['usage']['input_tokens']} "
+                  f"out={rec['usage']['output_tokens']} ${rec['cost']:.4f} stop={rec.get('stop_reason')} "
+                  f"ledger_v2 ${runner.ledger.total():.4f}", flush=True)
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2953,12 +3291,19 @@ def main(argv=None) -> None:
     sub.add_parser("score2b")
     for name in ("freeze", "heldout-plan", "heldout-read", "heldout-draft"):
         sub.add_parser(name)
+    sub.add_parser("scorev2")
+    sub.add_parser("joinsv1")
+    rv = sub.add_parser("runv2")
+    rv.add_argument("arms", nargs="+", choices=sorted(V2_ARMS))
+    rv.add_argument("--pages", default=None)
+    rv.add_argument("--rep", type=int, default=0)
     args = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     {"plan": cmd_plan, "smoke": cmd_smoke, "run": cmd_run, "runpl": cmd_runpl, "score": cmd_score,
      "plan2b": cmd_plan2b, "smoke2b": cmd_smoke2b, "run2b": cmd_run2b, "score2b": cmd_score2b,
      "freeze": cmd_freeze, "heldout-plan": cmd_heldout_plan, "heldout-read": cmd_heldout_read,
-     "heldout-draft": cmd_heldout_draft}[args.cmd](args)
+     "heldout-draft": cmd_heldout_draft, "runv2": cmd_runv2, "scorev2": cmd_scorev2,
+     "joinsv1": cmd_joinsv1}[args.cmd](args)
 
 
 if __name__ == "__main__":

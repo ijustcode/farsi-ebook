@@ -395,6 +395,121 @@ def test_heldout_guard():
         pass
 
 
+FROZEN_REQUEST_KEYS = {
+ "t1r_opus:h1:0": "cd802dd4158e053535fafa1f4052ef328d5feadf65d47c987bf187670a342bdb",
+ "t1r_opus:h1:1": "2db30d2f8709c30cbb9297271e71e879b08784a00aa367731505733ba4af21ce",
+ "t1r_opus:h2:0": "fc62fdcb7b3505ea41603c1345de2aea1407a293e130d721704d54ae1fd5493e",
+ "t1r_opus:h2:1": "2a161039294f89129a2765e64884c1ef001c1fd0a7621ea8efec92772b0772c7",
+ "t1r_opus:c23:0": "6d32862f24344dd2e9d612bf4dd2a0e855c5d3622e0355f8768172db62a4110a",
+ "t1r_opus:c109:0": "d5892bc9ef179705eebcb84986c1df800fb680d8802cd404e2257c9482c6bd19",
+ "t1r:h1:0": "e57d6b8c48cbc97a9404f44b8e85303ef6fc293b8682bf9e31b1ed3ce7aa3ff1",
+ "t1r:h1:1": "4a81a191adc1b42a0314b0982c56a49dc09d8d8ebf4f98ab3247697011a2df16",
+ "t1r:h1:2": "08c74d658bbe0431a46e5176551ced4fc20fb44df9edaf85ee03b829b98f26aa",
+ "t1r:h2:0": "4e68ff0b72aaed05d9855672cd245897a65838facfcdb44e23ecd6b00c500dd4",
+ "t1r:h2:1": "d0488474e49dd85133457a8d3f2c7b3459969e3f53935ef47abe636d2dbaa14b",
+ "t1r:h2:2": "ded796d3801d1b893403cc460bc724c811dc945da48e820eb3041e754823da35",
+ "t1r:c23:0": "955ea09398a3c5be13842651a49167abc87d6501553a7b2febc361f635f8652c",
+ "t1r:c109:0": "6085cb8af1d59371c7e41e42531533deba6c2893f652d1c55e8546ae85913e6c",
+ "current:h1:0": "5d2224884631e535270f5494b4c3770632ecf9e87b082994f3a2f0092a3d76fc",
+ "current:h1:1": "41a0b5b2dd8f71ec084cac8342badc61eb2acab540e05c79fee1332f280986b3",
+ "current:h1:2": "1dfbc538cdd1f0eb8dd5aa7d058ce738cb82d39130af1b9eafd2ac1135d42327",
+ "current:h2:0": "4b085ab9f7b86ecbf50d24ff076ae44ad55665eb07c20ef2c774a92d6c5eedaa",
+ "current:h2:1": "29293513c02754dee47ff5b7cd8fc464cc0b0f1796e7eae154c19a14f6cba2ab",
+ "current:h2:2": "b471d2c0fdd9683e2c7b2f855634ea8c563f446ed36a789f6076589674ca4e40",
+ "current:c23:0": "1e5bfeaa6ceed5d3b0bbe625d05c718d9496819c35c93e43e7fccf500494417d",
+ "current:c109:0": "dfd0f0e48719a221fd98910a656ae57aaf606d98300d4d26ee59881746b1a824"
+}
+
+
+def test_frozen_request_keys():
+    """Frozen configurations (t1r_opus, t1r, current) must keep their request
+    keys on p1-p2 and the controls, so their cached responses are still found.
+    Needs the page images under books/; skipped without them."""
+    if not (te.ROOT / "books" / "hadpi-articles" / "pages" / "hires" / "0001.png").is_file():
+        print("skip frozen request keys (no books/)")
+        return
+    for name, key in FROZEN_REQUEST_KEYS.items():
+        arm, pid, rep = name.split(":")
+        got = te.request_key(te.build_request(arm, pid, int(rep)).key_dict())
+        check(got == key, f"frozen request key changed: {name}")
+
+
+V2_REQUEST_KEYS = {   # paid v2 readings (ledger_v2.jsonl); edits must not orphan their cache entries
+ "v2a_opus:h1:0": "89d7061f700133fb1529becb1790006b8fa480543cbd280c7082dfbf2d23f75f",
+ "v2a_opus:h2:1": "5e8df7cad559b2efcbfeeb82a0355f3e42783740f2a550c435d48cc19c55c523",
+ "v2b_opus:h2:0": "19416a9a64b4f7dd44d9a331289f8d8a201d5a4f231d4269d5eb5aaa742f5cc3",
+ "v2b_opus:h1:1": "38c878bd5defdf9621367a8f340c8ff07079149536402d36cdc66f7c92b80dcb",
+ "v2c_opus:h1:0": "3a741fe41a71804aa4e2dbbab261466d149ad7441340b3db995e4fd1640878d6",
+ "v2c_opus:h2:1": "8e12c139608431da4a1011b59b3bdafcd05a426cd2623bf66c921c0f573d8166",
+ "v2a_opus:c23:0": "9d921c77ab41e2f08a9aacc9f3ab72316831102d8445a3528481f88f77e6c775",
+ "v2a_opus:c109:0": "6db7d72662b2471fe286afee9432846f30029e7c4c251ba147d7b1bc6d1c6cd9",
+ "v2a_sonnet:h1:0": "adccefbfe5b731acf31d7860c331a023a539c2bd7a4bddb43e8ac6c3a44b66eb",
+ "v2a_sonnet:h2:1": "7230b837a06fab0c1cacc3e3beae34be3b8a6eeae945f70bbfc0fa204521aabb",
+ "v2a_sonnet:c23:0": "622716481609756f63d327a83a788274df16d28f7d30571d43579bb232b9e7de",
+}
+
+
+def test_v2_request_keys():
+    if not (te.ROOT / "books" / "hadpi-articles" / "pages" / "hires" / "0001.png").is_file():
+        print("skip v2 request keys (no books/)")
+        return
+    for name, key in V2_REQUEST_KEYS.items():
+        arm, pid, rep = name.split(":")
+        got = te.request_key(te.build_v2_request(arm, pid, int(rep)).key_dict())
+        check(got == key, f"v2 request key changed: {name}")
+
+
+def test_v2_heldout_refused():
+    for pid in te.HELDOUT_PIDS:
+        try:
+            te.build_v2_request("v2a_opus", pid, 0)
+            check(False, f"v2 request built for held-out {pid}")
+        except SystemExit:
+            pass
+
+
+def test_v2_prompts():
+    rc = te._v2_rules("c")
+    check("Write what the typist typed" in rc and "never split one word in the middle" in rc
+          and "Decide spacing by the white space" not in rc and "CamScanner" in rc, "v2c rules")
+    check("compare your spacing with the print" not in rc, "no self-check in c")
+    check(te.READ_RULES in te.BANDS_READ_SYSTEM(3), "frozen v1 rules untouched")
+    for v in ("a", "b"):
+        rules = te._v2_rules(v)
+        check("Word joins and splits exactly as typed" not in rules and "Word spacing exactly as printed" in rules,
+              f"v2{v} joins bullet replaced")
+        check("CamScanner" in rules and "Do not transcribe signatures, stamps" not in rules, f"v2{v} marks bullet replaced")
+        check(("compare your spacing with the print" in rules) == (v == "b"), f"v2{v} self-check only in b")
+        for other in ("Use standard Persian codepoints", "Remove kashida", "Completeness"):
+            check(other in rules, f"v2{v} keeps {other}")
+
+
+def test_join_breakdown():
+    truth = te.tokenize_lines(["ومن بخانه رفتم کتاب ها را آوردم ."])
+    hyp = te.tokenize_lines(["و من به خانه رفتم کتابها را\u200cآوردم."])
+    b = te.join_breakdown(truth, hyp)
+    check(b["split"] == 2, f"splits {b}")                                   # و من ; به خانه (letter change)
+    check(b["split_categories"].get("preposition or conjunction attached to the next word") == 1
+          and b["split_categories"].get("preposition به attached as ب") == 1, f"split categories {b['split_categories']}")
+    check(b["joined"] == 1 and b["join_categories"].get("plural, possessive, comparative or copula ending") == 1,
+          f"join {b}")
+    check(b["zwnj_for_space"] == 1, f"zwnj for space {b}")
+    check(b["punct_attach"] == 0 or b["punct_attach"] == 1, "punct counted at most once")
+    check(te.join_category(["می", "رفت"]) == "verbal or derivational prefix", "prefix category")
+    check(te.join_category(["منتشر", "شود"]) == "compound verb (word + light verb)", "light verb category")
+    check(te.join_category(["آن", "را"]) == "postposition را attached", "ra category")
+    vocab = {"جدید", "کتاب", "از", "تاریخ", "سهامدار", "تعیین"}
+    check(te.join_category(["جد", "ید"], vocab) == te.IN_WORD_GAP, "in-word gap after non-joining letter")
+    check(te.join_category(["از", "تاریخ"], vocab).startswith("preposition"), "real boundary after non-joining letter")
+    check(te.join_category(["سهامدار", "تعیین"], vocab).startswith("two content words"), "compound, both words")
+    check(te.join_category(["کتاب", "ها"], vocab) != te.IN_WORD_GAP, "break after a joining letter is never in-word")
+    check(te.join_category(["ودر", "جدید"], vocab | {"در"}).startswith("preposition"), "و + preposition")
+    # the letter-changing split (printed بX read as به X) is counted once, with or without trailing punctuation
+    for hyp_line in ("به خانه رفتم", "به خانه رفتم ."):
+        b2 = te.join_breakdown(te.tokenize_lines(["بخانه رفتم"]), te.tokenize_lines([hyp_line]))
+        check(b2["split"] == 1 and b2["split_categories"].get("preposition به attached as ب") == 1, f"به split {b2}")
+
+
 def test_stitch():
     a = ["سطر یک اول", "سطر دو دوم", "سطر سه سوم", "سطر چهار چهارم"]
     b = ["سطر سه سوم", "سطر چهار چهارم", "سطر پنج پنجم", "سطر شش ششم"]

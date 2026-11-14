@@ -335,3 +335,129 @@ def free_cost(L: T.TLine, m: T.TModel, min_occ: int = 2) -> float:
         new[J] = min(prev[J], endu + T.TP["J_ENTER"], prev[B] + T.TP["J_ENTER"])
         F = new + E[t]
     return float(min(np.min(F[last]), F[B], F[J]))
+
+
+# ---------------------------------------------------------------------------
+# D15 follow-up: detected lines that look like non-document marks
+# ---------------------------------------------------------------------------
+def det_line_stats(ev, inks, kinds):
+    """Run-time statistics per detected line (no truth): glyph height of its
+    ink runs relative to the page's glyph height, ink density, share of the
+    line's extent covered by L1's oversized (masked) components, and whether
+    it lies below the lowest line of ordinary glyph statistics."""
+    lf = ev.lf
+    cc, reason = lf.get("cc"), lf.get("reason")
+    big = np.nonzero(reason == "big")[0] if reason is not None else np.zeros(0, int)
+    out = []
+    for li, kind in zip(inks, kinds):
+        if not li.M:
+            out.append(dict(h_rel=0.0, dens=0.0, big=0.0, kind=kind, y=li.y_mid))
+            continue
+        h = float(np.median(li.height)) / max(1.0, ev.hc)
+        dens = len(li.u) / max(1.0, float(np.sum(li.s1 - li.s0)) * ev.hc)
+        xs, ys = li.geom.xy(li.uref - np.r_[li.s0, li.s1], np.full(2 * li.M, li.base_v))
+        x0, x1 = float(np.min(xs)), float(np.max(xs))
+        cov = 0.0
+        if len(big):
+            ym = li.y_mid
+            for c in big:
+                if cc.y0[c] - 0.25 * ev.S <= ym <= cc.y1[c] + 0.25 * ev.S:
+                    cov += max(0.0, min(x1, cc.x1[c]) - max(x0, cc.x0[c]))
+            cov = min(1.0, cov / max(1.0, x1 - x0))
+        out.append(dict(h_rel=round(h, 3), dens=round(dens, 3), big=round(cov, 3), kind=kind, y=round(li.y_mid, 1)))
+    return out
+
+
+MP = dict(
+    MARK_BIG=0.8,      # a detected line whose extent is at least this share covered by L1's oversized components ...
+    MARK_H_LO=0.75,    # ... and whose run height is outside [MARK_H_LO, MARK_H_HI] x the page's typical
+    MARK_H_HI=1.3,     # text-line run height is a non-document mark line: no text is ever paired with it
+)
+
+
+def mark_lines(ev, inks, kinds):
+    """Detected lines that look like stamps, signatures or logos (run time,
+    no truth). Set on synthetic dev pages: blocks 18 of 22 non-text lines and
+    1 of 323 text lines."""
+    st = det_line_stats(ev, inks, kinds)
+    ref = [x["h_rel"] for x in st if x["big"] < 0.5 and x["h_rel"] > 0]
+    med = float(np.median(ref)) if ref else 1.0
+    return {j for j, x in enumerate(st) if x["big"] >= MP["MARK_BIG"]
+            and (x["h_rel"] < MP["MARK_H_LO"] * med or x["h_rel"] > MP["MARK_H_HI"] * med)}, st
+
+
+# D15 follow-up, second rule (--la TZ). TM above was set on synthetic dev and, run once on the
+# real development pages, blocked nothing (hadpi p2's Sonnet breach pairs a 7-letter line with a
+# detected line below the text block, 2.3x the page's glyph height, no oversized component).
+# TZ adds the zone below the text block. Rule (third version, all on synthetic dev: the first also
+# marked every line with oversized coverage >= 0.8 and ended the block at the first break in a chain
+# of ordinary lines; the second required oversized coverage < 0.35 for a line to be ordinary; both
+# blocked text lines under stamps, s201 and s202, and were dropped):
+#   normal line: L1 kind text, run height within [MARK_H_LO, MARK_H_HI] x the page's typical,
+#     ink density within [MZ_D_LO, MZ_D_HI] x typical (oversized coverage ignored: text under a
+#     stamp keeps its glyph statistics);
+#   text block bottom: the lowest normal line with another normal line at most MZ_GAP x the
+#     page's line spacing above it (one isolated normal-looking mark does not extend the block);
+#   mark line: TM's mark line (mark_lines above), or more than MZ_BELOW x spacing below the block
+#     bottom and not normal. The zone above the block is left alone (running heads are text);
+#   exemption at pairing time: a trusted pairing with a mark line survives only when the
+#     template gain per letter is >= MZ_EXEMPT x the page's median over pairings and the line's
+#     height and density are ordinary (density stands in for stroke width: L1 has no per-line
+#     stroke measurement).
+MZ = dict(MZ_D_LO=0.6, MZ_D_HI=1.6, MZ_GAP=1.8, MZ_BELOW=0.5, MZ_EXEMPT=0.9,
+          MZ_ZH_LO=0.5, MZ_ZH_HI=1.6)
+# --la TZ2 (after TZ was run once on untouched synthetic seeds 401-402: it blocked the last line of a
+# clean book_naskh page, s401, whose run height was 0.74 x the page's typical; naskh lines without
+# tall letters vary that much). TZ2 is TZ with a wider height band for the zone below the block
+# only: a line there is a mark when its height is outside [MZ_ZH_LO, MZ_ZH_HI] x typical or its
+# density outside [MZ_D_LO, MZ_D_HI] x typical. Checked on fresh seeds 601-602, never on 401-402 again.
+
+
+def zone_mark_lines(ev, inks, kinds, wide=False):
+    """-> (mark set, normal set (height and density ordinary, whatever the oversized coverage),
+    block bottom y or None, stats). Run time, no truth."""
+    st = det_line_stats(ev, inks, kinds)
+    ref = [x for x in st if x["kind"] == "text" and x["big"] < 0.5 and x["h_rel"] > 0]
+    mh = float(np.median([x["h_rel"] for x in ref])) if ref else 1.0
+    md = float(np.median([x["dens"] for x in ref])) if ref else 1.0
+    normal = {j for j, x in enumerate(st) if x["kind"] == "text"
+              and MP["MARK_H_LO"] * mh <= x["h_rel"] <= MP["MARK_H_HI"] * mh
+              and MZ["MZ_D_LO"] * md <= x["dens"] <= MZ["MZ_D_HI"] * md}
+    S = float(ev.S)
+    ys = sorted(st[j]["y"] for j in normal)
+    yb = None
+    for k in range(1, len(ys)):
+        if ys[k] - ys[k - 1] <= MZ["MZ_GAP"] * S:
+            yb = ys[k]
+    marks, _ = mark_lines(ev, inks, kinds)
+    marks = set(marks)
+    if wide:
+        zone_ok = {j for j, x in enumerate(st) if x["kind"] == "text"
+                   and MZ["MZ_ZH_LO"] * mh <= x["h_rel"] <= MZ["MZ_ZH_HI"] * mh
+                   and MZ["MZ_D_LO"] * md <= x["dens"] <= MZ["MZ_D_HI"] * md}
+    else:
+        zone_ok = normal
+    for j, x in enumerate(st):
+        if yb is not None and x["y"] > yb + MZ["MZ_BELOW"] * S and j not in zone_ok:
+            marks.add(j)
+    return marks, normal, yb, st
+
+
+def guard_zone(ev, inks, kinds, texts, la, wide=False):
+    """Apply TZ (wide=True: TZ2) to a template assignment in place -> report dict."""
+    marks, normal, yb, st = zone_mark_lines(ev, inks, kinds, wide=wide)
+    G = la["gains"]
+    nlet = [max(1.0, sum(WP.letters(t) for t in toks)) for toks in texts]
+    per = [G[i, j] / nlet[i] for i, j in enumerate(la["assign"]) if j is not None and G[i, j] > 0]
+    med = float(np.median(per)) if per else np.inf
+    blocked, exempt = [], []
+    for i, j in enumerate(la["assign"]):
+        if j is None or j not in marks or not la["trusted"][i]:
+            continue
+        if j in normal and G[i, j] / nlet[i] >= MZ["MZ_EXEMPT"] * med:
+            exempt.append(i)
+            continue
+        la["trusted"][i] = False
+        la["margin"][i] = 0.0
+        blocked.append(i)
+    return dict(mark_lines=sorted(marks), block_bottom=yb, blocked=blocked, exempt=exempt)

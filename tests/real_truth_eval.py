@@ -358,6 +358,34 @@ def load_truth(root: Path, slug: str, page: int) -> TruthPage:
                      rec["image"]["sha256"], ap, rec["audit_sha256"], lines, zones, rec)
 
 
+# Additive (owner decision D15): derived ignore zones for non-document marks, in a private
+# sidecar next to the freeze record (tests/word_placer_zones.py). Never read by load_truth,
+# so no existing metric changes; callers opt in.
+EXTRA_ZONES_NAME = "ignore_zones.derived.json"
+
+
+def extra_zones_path(root: Path, slug: str) -> Path:
+    return root / "books" / slug / "truth" / EXTRA_ZONES_NAME
+
+
+def extra_ignore_zones(root: Path, slug: str, page: int) -> list:
+    """Quads (px of the truth image) of the derived non-document zones for
+    one page, or [] when none were derived."""
+    refuse_held_out(slug, page)
+    p = extra_zones_path(root, slug)
+    if not p.exists():
+        return []
+    rec = json.loads(p.read_text()).get("pages", {}).get(str(page))
+    if not rec:
+        return []
+    t = load_truth(root, slug, page)
+    out = []
+    for z in rec["zones"]:
+        x0, y0, x1, y1 = z["rect"]
+        out.append([(x0 * t.W, y0 * t.H), (x1 * t.W, y0 * t.H), (x1 * t.W, y1 * t.H), (x0 * t.W, y1 * t.H)])
+    return out
+
+
 def frozen_keys(root: Path) -> list[tuple[str, int]]:
     out = []
     for fp in sorted((root / "books").glob(f"*/truth/{FREEZE_NAME}")):

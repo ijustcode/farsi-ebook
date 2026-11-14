@@ -272,8 +272,12 @@ def to_placed(x, W, H):
     else:
         st, segs = "unresolved", []
     line = [{"quad": [[a / W, b / H] for a, b in x["line_quad"]]}] if x.get("line_quad") else []
-    return {"status": st, "segments": segs, "confidence": x.get("margin"), "reason": x.get("reason", ""),
-            "_quad": x.get("quad"), "_line": line, "_other_ok": x.get("other_ok", True)}
+    out = {"status": st, "segments": segs, "confidence": x.get("margin"), "reason": x.get("reason", ""),
+           "_quad": x.get("quad"), "_line": line, "_other_ok": x.get("other_ok", True)}
+    for k in ("_sext", "_group", "_tline"):          # D14 follow-up: extents along the line, group runs
+        if k in x:
+            out[k] = x[k]
+    return out
 
 
 def line_assignment_report(page, r, dets, texts, src):
@@ -750,7 +754,7 @@ def main(argv=None) -> int:
     s.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     s.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
     s.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
-    s.add_argument("--la", choices=("length", "T", "T2"), default="length", help="line-text assignment under B/C")
+    s.add_argument("--la", choices=("length", "T", "T2", "TM", "TZ", "TZ2"), default="length", help="line-text assignment under B/C")
     s.add_argument("--seeds", nargs="*", type=int, default=None, help="override the seed set")
     r = sub.add_parser("real")
     r.add_argument("--exps", nargs="*", default=list(EXPS))
@@ -761,7 +765,7 @@ def main(argv=None) -> int:
     r.add_argument("--tinit", choices=("G", "R", "flat"), default="G", help="arm T: initial word positions")
     r.add_argument("--no-tr", action="store_true", help="arm T: skip arm R (no TR, Rc, RcG)")
     r.add_argument("--vert", choices=("old", "line", "comp"), default="old", help="vertical extent rule for the arm T family")
-    r.add_argument("--la", choices=("length", "T", "T2"), default="length", help="line-text assignment under B/C")
+    r.add_argument("--la", choices=("length", "T", "T2", "TM", "TZ", "TZ2"), default="length", help="line-text assignment under B/C")
     v = sub.add_parser("vrun")
     v.add_argument("--mode", choices=("mark", "coord"), default="mark")
     v.add_argument("--model", choices=("sonnet", "opus"), default="sonnet")
@@ -1164,7 +1168,8 @@ def run_R(page, exp, *, ev, texts=None, src=None):
 INSTRUMENT_NOTE = ("h1 (word_correct_h1, owner decision D12) is the headline on every page; the strict area rule "
                    "word_correct_v1 is printed beside it. The difference between the two columns is an instrument "
                    "change, not a placement improvement.")
-T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3", "TA", "TQ", "TAQ")
+T_ARMS = ("T", "Tall", "TG", "TR", "Rc", "RcG", "R", "RG", "S", "SR", "SG", "ST", "M2", "M3", "TA", "TQ", "TAQ",
+          "TAG", "Gall")
 R_DEP = ("TR", "Rc", "RcG", "R", "RG", "SR", "M2", "M3")
 T_OPTS = dict(init="G", with_R=True, keep=None, vert="old", la="length")
 # set from the command line (--tinit, --no-tr, --vert, --la). vert "old": each
@@ -1206,7 +1211,7 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     r = ginfo["_r"]
     texts_used = texts if texts is not None else page["texts"]
     info = dict(init=init)
-    if gexp != "A" and T_OPTS.get("la") in ("T", "T2"):
+    if gexp != "A" and T_OPTS.get("la") in ("T", "T2", "TM", "TZ", "TZ2"):
         r = template_reassign(page, ev, r, texts_used, src, ginfo, info)
     todo = _todo_lines(r, texts_used, gexp)
     W, H = page["truth_page"].W, page["truth_page"].H
@@ -1262,6 +1267,7 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
     info["_lines"] = lines
     info["_aligns"] = aligns
     info["_todo_idx"] = [i for i, _, _ in todo]
+    info["unit"] = unit
     # Rc: templates from words where R and G agree, one shot, warped like R
     rc_by = {}
     if with_R:
@@ -1313,6 +1319,19 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
         d["TA"] = Ss.t_any_agree(li, tall, others, unit)
         d["TQ"] = Ss.apply_guard(tres, guard)
         d["TAQ"] = Ss.apply_guard(d["TA"], guard)
+        # D14 follow-up: group boxes where T and another arm agree on a run's outer edges only
+        d["TAG"] = Ss.group_boxes(li, d["TA"], tall, others, unit, L.order)
+        # extents along the line (reading coordinate) for passage-level agreement at scoring time
+        for res in [tall, sres, g_line] + ([rv_by[i]] if with_R else []):
+            for x in res:
+                x["_sext"] = (Ss._extent(li, x["quad"]) if x.get("quad") is not None
+                              and "bypassed" not in (x.get("reason") or "") else None)
+                x["_tline"] = i
+        d["Tall"], d["S"] = tall, sres
+        d["Gall"] = g_line
+        for res in d.values():
+            for x in res:
+                x["_tline"] = i
         done[i] = d
     if T_OPTS.get("vert") in ("line", "comp"):
         for (i, li, toks) in todo:
@@ -1352,9 +1371,23 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
                 q = WP.line_quad(li_, float(li_.s0[0]), float(li_.s1[-1]), 1.0)
                 if rt._ignored(tp_, rt.region_poly({"quad": [[a / tp_.W, b / tp_.H] for a, b in q]}, tp_.W, tp_.H)):
                     ign.add(j)
+        # D15: derived non-document zones (stamps, signatures, watermarks, below the text) are breaches
+        marks = set()
+        if page.get("kind") == "real":
+            ez = rt.extra_ignore_zones(ROOT, tp_.slug, tp_.page)
+            if ez:
+                tz = rt.TruthPage(tp_.slug, tp_.page, tp_.cls, tp_.provenance, tp_.W, tp_.H, tp_.image_path, "",
+                                  tp_.audit_path, "", [], ez)
+                for j, li_ in enumerate(r["inks"]):
+                    if under[j] is None and j not in ign and li_.M:
+                        q = WP.line_quad(li_, float(li_.s0[0]), float(li_.s1[-1]), 1.0)
+                        if rt._ignored(tz, rt.region_poly({"quad": [[a / tp_.W, b / tp_.H] for a, b in q]}, tp_.W, tp_.H)):
+                            marks.add(j)
         bad_all = {i for i, j in enumerate(r["assign"]) if j is not None and under[j] is None}
-        bad_lines = {i for i in bad_all if r["assign"][i] not in ign}
-        info["g2_text_lines_on_ignored"] = len(bad_all - bad_lines)
+        on_marks = {i for i in bad_all if r["assign"][i] in marks}
+        bad_lines = {i for i in bad_all if r["assign"][i] not in ign and r["assign"][i] not in marks}
+        info["g2_text_lines_on_ignored"] = len(bad_all - bad_lines - on_marks)
+        info["g2_text_lines_on_marks"] = len(on_marks)
         info["g2_text_lines_on_nontext"] = len(bad_lines)
         def shown_on(lines_):
             g = {}
@@ -1369,7 +1402,8 @@ def run_T(page, exp, *, ev, texts=None, src=None, init="G", with_R=True, model=N
             return g
         info["g2_boxes_on_nontext"] = shown_on(bad_lines)
         # detected lines inside the truth's ignore zones (running heads): printed but not graded
-        info["g2_boxes_on_ignored"] = shown_on(bad_all - bad_lines)
+        info["g2_boxes_on_ignored"] = shown_on(bad_all - bad_lines - on_marks)
+        info["g2_boxes_on_marks"] = shown_on(on_marks)
     return arms, info
 
 
@@ -1390,6 +1424,21 @@ def template_reassign(page, ev, r, texts_used, src, ginfo, info):
     old_trusted = sum(1 for i in range(len(texts_used)) if r["assign"][i] is not None
                       and r["la"]["margin"][i] >= WP.P["LA_MARGIN"])
     la = LA.template_assign(ev, r, kinds, texts_used, m0, confirm=T_OPTS.get("la") == "T2")
+    if T_OPTS.get("la") == "TM":          # D15: never pair text with a mark-like detected line
+        marks, _st = LA.mark_lines(ev, r["inks"], kinds)
+        blocked = 0
+        for i, j in enumerate(la["assign"]):
+            if j in marks and la["trusted"][i]:
+                la["trusted"][i] = False
+                la["margin"][i] = 0.0
+                blocked += 1
+        info["mark_lines"] = sorted(marks)
+        info["mark_pairings_blocked"] = blocked
+    if T_OPTS.get("la") in ("TZ", "TZ2"):   # D15 second rule: oversized marks and the zone below the text block
+        rep = LA.guard_zone(ev, r["inks"], kinds, texts_used, la, wide=T_OPTS.get("la") == "TZ2")
+        info["mark_lines"] = rep["mark_lines"]
+        info["mark_pairings_blocked"] = len(rep["blocked"])
+        info["mark_pairings_exempt"] = len(rep["exempt"])
     r2 = LA.place_with_assignment(ev, r, kinds, texts_used, la)
     ginfo["line_assignment"] = line_assignment_report(page, r2, dets, texts_used, src)
     info["la_template"] = dict(trusted_before=old_trusted, trusted_after=sum(la["trusted"]), unconfirmed=la.get("unconfirmed", 0),

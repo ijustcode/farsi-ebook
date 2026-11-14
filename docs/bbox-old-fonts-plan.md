@@ -625,6 +625,41 @@ differences (a join, a ZWNJ, punctuation spacing), with the caveat that p1–p2 
 made from an Opus-class draft. Next: the owner corrects the three drafts; then the cached
 readings are scored once, with no further API calls.
 
+**Held-out reading test, stage 2 (2026-11-14, $0): scored once; the development finding holds.**
+The owner audited all three drafts in the text audit tool (`status: audited`; 364, 414 and 386
+words; one word and one punctuation mark left unreadable on p4). `tests/heldout_score.py` scored
+the 15 cached readings with the byte-exact frozen copy of the scorer (SHA checked against the
+freeze); results in `out/transcription_experiments/heldout_results.json` and
+`heldout_summary.txt`. Errors over truth words, by page p3 / p4 / p5:
+
+| Reading (frozen) | Lenient, each run | Lenient, pooled | Strict (as printed), pooled |
+|---|---|---|---|
+| Opus 5.5, native bands (`t1r_opus`), 2 runs | 2.3, 2.0 / 3.6, 2.3 / 2.5, 1.9% | **54/2194 = 2.5%** | 379/2326 = 16.3% |
+| Sonnet 5, same bands (`t1r`), 2 runs | 12.2, 10.2 / 16.8, 26.0 / 29.0, 19.9% | 422/2194 = 19.2% | 736/2326 = 31.6% |
+| Production whole-page Sonnet 5 (`current`), 1 run | 8.2 / 20.6 / 10.1% | 145/1097 = 13.2% | 393/1163 = 33.8% |
+
+- Opus stays inside the 2–5% lenient range seen on p1–p2 on every page and run; Sonnet stays at
+  8–29%. Three pages are still few (pages, not words, are the unit), but this is the first
+  measurement on pages nobody looked at before the configurations were frozen.
+- Strict error for Opus is 7–25% per run and is almost entirely word joins and splits (strict
+  minus ortho/lenient); p4 moved from 25.2% to 11.4% between two runs of the same configuration.
+  This is the join behaviour D14 and D16 already cover: placement scores outer edges.
+- Invented words: Opus 0–3 per page; Sonnet bands 6–37; production 7–39.
+- The draft method held: outside the markers 1 word per page differed from the owner's truth
+  under the strict reading (0, 0 and 1 under the lenient reading).
+- Two Opus runs as a review flag caught 5/8, 12/14 and 6/9 of the first run's errors while
+  flagging 1–4% of words; an Opus and a Sonnet run caught 5/8, 14/14 and 9/9 but flagged 12–28%.
+- Remaining bias, smaller than on p1–p2: the truth is the owner's choice among Opus and Sonnet
+  readings with every disagreement marked, so a word that all four readings got wrong the same
+  way would only be caught by the owner's reading of the plain text.
+- The proposal above (escalate hard no-oracle pages to Opus 5.5 on native bands) now has its
+  unbiased test. It is still **not adopted**: it changes production and needs the owner (D10).
+- A book built from the owner's truth for all five pages: `tests/truth_book.py` writes the
+  separate workspace `books/hadpi-articles-truth/` (lines joined into paragraphs, no word
+  changed, checked word for word) and `farsi2epub build hadpi-articles-truth` gives
+  `out/asasnameh-truth.epub` (epubcheck clean). The model-transcribed `hadpi-articles` workspace
+  is left as the experiments' baseline.
+
 ### Step 3 — Line finding (research venv for L2/L3; $0)
 
 - Data: synthetic warped set (all font classes), hadpi p1–p2, majid ×2, p66.
@@ -989,6 +1024,35 @@ located and the union of their boxes passes the side-edge test against the union
   shifts the following text by one line (19–24 wrong-line boxes), where a truth line has no
   detected line of its own in a stamp and signature zone. It has not occurred on a real page.
   `tests/word_placer_g2.py` is the harness for it.
+- **D14/D15 follow-up (2026-11-13, $0, development pages; `out/word_placer/e2e_20261113-173510.json`,
+  run log `out/word_placer/run_log.txt`).** New scoring views in `tests/word_placer_passage.py`
+  (passage level: T and one of S, G, R agree on the outer edges of each line segment of a
+  correction span; span lengths drawn from the 538 stored review hunks, 75% one word),
+  non-document zones in `tests/word_placer_zones.py`, guards `--la TM/TZ/TZ2` in
+  `tests/word_placer_la.py`, shift study `tests/word_placer_shift.py`.
+  - hadpi p1–p2, located and correct at precision, word level TA then passage level:
+    truth text 86.0% at 97.5% → 89.2% at 97.8%; Opus line crops 82.6% at 96.3% → 89.2% at 98.3%;
+    Opus bands (`t1r_opus`, the D16 reader) 79.1% at 95.1% → 82.9% at 95.3%; Sonnet bands 56.7%
+    at 96.3% → 64.8% at 88.8%. So the passage view meets 85% at 97% with truth text and with
+    one of the two Opus readings; the two Opus readings differ by as much as the rules do
+    (two pages, one run each: not a finding). On longer seeded spans no reader meets it
+    (78–80% at 91–96%). Printed pages are unchanged (97–99% at ≥ 99%).
+  - Group boxes for joined or split words (rule TAG) add 5–7 points of word coverage but are a
+    median 4.5–5.8 letters wider than the word and lower precision for every reader, printed
+    pages included. **Not adopted** (proposed to the owner as such).
+  - D15 / G2: the only breach is Sonnet text on hadpi p2 (2 boxes on the stamp zone); Opus and
+    truth text have none. Guard TM blocks nothing on real pages. Guard TZ2 (lines below the
+    text block that do not look like normal text lines are not trusted) removes the breach and
+    leaves truth-text and Opus results identical (R19 = R15 on all 18 cells), but it changes
+    Sonnet-text results on hadpi (413/729 at 96.3% → 462/729 at 94.7%), costs 14 of 3,228
+    words on fresh synthetic pages where there was nothing to block, and its band was chosen
+    after a synthetic look. **Owner decision pending; not part of the frozen configuration.**
+  - One-line shifts (synthetic): detectable (17% of a shifted line's tokens pass TA against
+    100% on correct lines) but a line-level cut removes 2–3 correct boxes per wrong one; no
+    rule adopted. Run time about 11 s per hadpi page warm; cheap savings listed in
+    `out/word_placer/profile_hadpi1.txt`.
+  - **Word placement cannot be scored on held-out p3–p5 yet:** those pages now have owner text
+    truth but no audited word boxes.
 - **Configuration to freeze for the held-out pages (hadpi p3–p5):** L1 lines; line-text assignment
   `--la T`; shared vertical rule; arms T with S, G, R; `located` by TA on hard pages and S∧T on
   printed pages (D13); side-edge measure; code at commit 2dfdf5f. Nothing is to be tuned on p3–p5.
@@ -1072,6 +1136,7 @@ for pn in range(len(d)):
 | D12 | What the audited word boxes mean | **Authoritative horizontally, loose vertically.** The owner kept boxes snug to the ink's width; height was not instructed and was drawn freely, so an audited box may be taller than the word's ink. Consequence: word correctness on owner-audited pages is judged on the right line and on horizontal extent; an arm must not fail for being shorter or taller than the audited box. The planner's earlier doubt about this (Step 4 continuation block) is withdrawn: the owner's statement settles it. **Extended the same day: the side-edge measure is the headline everywhere, not only on owner-audited pages.** Owner: box height has never been what was wrong with a box in review. The §1 targets (≥ 95% clean, ≥ 85% hard; precision ≥ 98% / ≥ 97%) are read under the side-edge rule from here on. **The height-sensitive area rule is dropped from reporting altogether (owner: not wanted even as a secondary number).** Results above this point in the plan were measured under the old rule and are kept as history, labelled as such; they are not comparable with later numbers. |
 | D14 | Old spelling and word joins | **Transcribe as printed; do not modernise.** Older Persian print joins many words that modern usage writes apart; keeping the original joins is correct and wanted. Consequences: (1) the reader for hard pages must be instructed and measured on keeping joins as typed (with Opus 5.5 on hadpi p1–p2, 31–42 of 729 words were split where the print joins them); (2) word placement and its scoring must not lose a box because a model split or joined a word differently: agreement and correctness are to be judged on the outer edges of the group, and of the passage a correction covers, not on a boundary inside it. |
 | D15 | Marks that are not the document's text (stamp, signatures, handwriting, scanner watermark such as CamScanner) | **Not part of the page's text and never to be boxed or transcribed.** The owner confirmed that what Sonnet 5 read below the signatures on hadpi p2 was the stamp and the CamScanner mark, not typed text (the implementer's reading of it as a typed line is withdrawn). Those regions are ignore zones for scoring; a box shown there counts as a gate G2 breach. Removing such marks from the image before transcription is tracked in `TODO.md`. |
+| D16 | Reading instruction for hard pages (2026-11-13) | **Keep the current Opus reading (`t1r_opus`); adopt no new instruction.** Three new wordings were tried on hadpi p1–p2 ($1.41, two runs each, `runv2`/`scorev2` in `tests/transcription_experiments.py`): "keep joins as printed" cut splits (34 and 2 → 4 and 5) but raised joins of really separate words to 17–18, almost all after a non-joining letter; the "what the typist typed" wording was as unstable as the current one; the current instruction itself swings between runs (118 and 145 strict errors of 729; splits 34 and 2). Printed controls were not shown to be no worse (Opus 3 vs 2 errors of 296 on one page; Sonnet clearly worse). No more prompt variants on two pages. Split and joined words are absorbed downstream by outer-edge scoring (D14). **Writing rule for truth and audits:** write what the typist typed, not what the ink looks like: a gap inside one word (after د ر ز و ا) is the machine and is written closed; two words printed joined stay joined; two words printed apart stay apart. |
 | — | One `located` rule for all page types (TA) or two (TA for hard pages, S∧T for printed, D13) | **Open; under discussion with the owner.** D13 stands until decided. |
 | D5 | kraken/torch (arm C) | Still open. Not asked until arm T (page-trained aligner), the draft-splitter arms and a cross-vendor pointing test are measured. |
 
