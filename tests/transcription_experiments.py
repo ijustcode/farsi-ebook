@@ -1009,8 +1009,9 @@ class OpenAIAdapter:
 
 class GoogleAdapter:
     """Gemini Interactions API (POST /v1beta/interactions), as documented on
-    2026-11-12. Not yet exercised live (no key): request and response shapes
-    follow the documentation and are parsed defensively."""
+    2026-11-12; first exercised live on 2026-11-15, when the response turned
+    out to carry its text under steps[].content[] (parsed below, beside the
+    documented shapes)."""
     url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
     @staticmethod
@@ -1056,6 +1057,13 @@ class GoogleAdapter:
         for o in data.get("outputs") or data.get("output") or []:
             if isinstance(o, dict) and o.get("type") == "text" and "text" in o:
                 texts.append(o["text"])
+        # live shape (first exercised 2026-11-15): steps[] of {"type": "thought"} and
+        # {"type": "model_output", "content": [{"type": "text", "text": ...}]}
+        for step in data.get("steps") or []:
+            if isinstance(step, dict) and step.get("type") == "model_output":
+                for part in step.get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "text" and "text" in part:
+                        texts.append(part["text"])
         for cand in data.get("candidates") or []:
             for part in (cand.get("content") or {}).get("parts") or []:
                 if "text" in part and not part.get("thought"):

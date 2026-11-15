@@ -14,8 +14,11 @@ HARD_PAGE_COST_USD = 0.09
 # confidence moves between runs (a held-out typewritten page reported 0.75).
 # When at least this share of a book's pages without embedded text trip the
 # review gate, the rest of them are re-read too. Stored first passes,
-# 2026-11-14: the typewritten document 4-5 of 5 pages, eight other books 0-26%.
-HARD_BOOK_SHARE = 0.5
+# 2026-11-14: the typewritten document 4-5 of 5 pages, eight other books 0-29%.
+# One half at first (D20); one fifth by owner decision on 2026-11-15 (D21),
+# after he read re-read pages of an old-font printed book and found them much
+# better: that takes in the two books at 27% and 29% and leaves the rest (0-4%).
+HARD_BOOK_SHARE = 0.2
 HARD_BOOK_MIN_PAGES = 3
 
 # USD per million tokens (MTok).

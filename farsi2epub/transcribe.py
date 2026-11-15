@@ -21,7 +21,7 @@ Per page:
      breaks and headings are carried over from the first pass, whose text is
      kept as NNNN.first.md. The page stays marked for review. After the
      page loop a book-level rule (hard_book_decision) re-reads the remaining
-     no-oracle pages when at least half of them tripped the gate: hard pages
+     no-oracle pages when at least a fifth of them tripped the gate: hard pages
      come in whole documents and the first reader's confidence is unstable.
   6. Only pages that still fail are marked needs_review for the human pass.
 

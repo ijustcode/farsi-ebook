@@ -9,6 +9,9 @@ Criteria, fixed before the rule was written (2026-11-14):
      first-pass confidences (the stored sidecars, and each cached repeat of the
      production call, including the run where page 3 reported 0.75).
   2. No other workspace triggers it.
+Criterion 2 revised by owner decision D21 (2026-11-15, line lowered from one
+half to one fifth so that old-font printed books are re-read): exactly the
+workspaces in OLD_FONT trigger, no other.
 PASS only if both hold. hadpi p3-p5 are held out: only their first-pass
 confidence is used, once, as the final check of this trigger; nothing is tuned.
 """
@@ -26,6 +29,7 @@ from farsi2epub import transcribe  # noqa: E402
 
 HADPI = "hadpi-articles"
 SKIP = {"hadpi-articles-truth"}      # built from the owner's truth, not a first pass
+OLD_FONT = {"bachehaye_ghali", "jafarian-factory-sale"}   # meant to trigger since D21
 
 
 def sidecars(slug: str) -> dict[int, dict]:
@@ -39,13 +43,13 @@ def main() -> int:
     ok = True
     books = sorted(p.parent.name for p in (ROOT / "books").glob("*/text")
                    if p.parent.name not in SKIP and not p.parent.name.endswith("-live"))   # -live: copies made for live runs
-    print("1. other workspaces must not trigger")
+    print("1. other workspaces: only the old-font ones may trigger")
     for slug in books:
         if slug == HADPI:
             continue
         d = transcribe.hard_book_decision(sidecars(slug))
         print(f"   {slug:<46} fired {d['fired']:>3} of {d['counted']:>3}  hard={d['hard']}")
-        ok &= not d["hard"]
+        ok &= d["hard"] == (slug in OLD_FONT)
     print("2. hadpi must trigger under every cached set of first-pass confidences")
     base = sidecars(HADPI)
     reps: dict[int, list] = {n: [None] for n in base}      # None = stored sidecar

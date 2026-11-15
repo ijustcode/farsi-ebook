@@ -236,17 +236,19 @@ def test_book_rule():
         return d
     D = transcribe.hard_book_decision
     took = {"adopted": True}
-    # half or more of the no-oracle pages fired: the rest become candidates
+    # a fifth or more of the no-oracle pages fired: the rest become candidates
     d = D({1: side(0.5, took), 2: side(0.6, took), 3: side(0.75), 4: side(0.9)})
     assert d["hard"] and d["fired"] == 2 and d["counted"] == 4 and d["candidates"] == [3, 4], d
-    # under half: nothing; pages with an oracle and blank pages are not counted
-    assert not D({1: side(0.5), 2: side(0.75), 3: side(0.75), 4: side(0.9)})["hard"]
+    assert D({1: side(0.5), 2: side(0.75), 3: side(0.75), 4: side(0.9), 5: side(0.9)})["hard"]
+    # under a fifth: nothing; pages with an oracle and blank pages are not counted
+    assert not D({n: side(0.5 if n == 1 else 0.9) for n in range(1, 7)})["hard"]
     d = D({1: side(0.5), 2: side(0.6), 3: side(0.75), 4: side(0.5, embedded=0.99), 5: side(0.1, blank=True)})
     assert d["hard"] and d["counted"] == 3 and d["candidates"] == [1, 2, 3], d
     # too few pages to call a book hard
     assert not D({1: side(0.5), 2: side(0.5)})["hard"]
     # the stored first-pass verdict wins over a recomputation; a re-read page's added flag does not count
     assert not D({1: side(0.5, first_pass_review=False), 2: side(0.9), 3: side(0.9)})["hard"]
+    assert D({1: side(0.9, first_pass_review=True), 2: side(0.9), 3: side(0.9)})["hard"]
     reread = dict(side(0.9, {"adopted": True, "first_pass": {"flags": []}}), flags=["illegible"])
     assert D({1: reread, 2: side(0.9), 3: side(0.9)})["fired"] == 0
 
