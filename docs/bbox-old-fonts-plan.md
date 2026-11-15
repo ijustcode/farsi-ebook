@@ -660,6 +660,21 @@ freeze); results in `out/transcription_experiments/heldout_results.json` and
   `out/asasnameh-truth.epub` (epubcheck clean). The model-transcribed `hadpi-articles` workspace
   is left as the experiments' baseline.
 
+**Book-level re-read trigger (2026-11-14, D20, $0).** The page trigger rests on the first reader's
+confidence, which missed held-out hadpi p3 in one run (0.75). Two candidates were measured on cached
+readings only. (a) Disagreement between the first pass and a Sonnet band reading (T2), as a share of
+first-pass words: hadpi p1–p2, 18 reading pairs, 17–41%; 60 printed pages of majid and bachehaye
+(one band reading each), median 2.7%, 90th percentile 10%, two above 15% (an 8-word page, and majid
+p3 at 16.8% where review changed 3 of 117 words). The margin to hadpi's lowest pair (17.3%) is thin
+and the second reading costs about $0.03 on every scanned page. Not adopted. (b) Share of a book's
+no-oracle pages whose first pass trips the gate: hadpi 4–5 of 5 in all 128 combinations of cached
+first-pass confidences; eight other workspaces 0–29% (bachehaye_ghali 24 of 89, jafarian-factory-sale
+5 of 17). Adopted with the line at one half and a minimum of 3 pages (`transcribe.hard_book_decision`,
+`config.HARD_BOOK_SHARE`). Smoke test with criteria fixed first: `tests/hard_book_rule_smoke.py`, PASS.
+Limits: one hard document; the half line sits in a wide gap and is not tuned; a single hard page in a
+clean book is still missed; held-out p3–p5 entered only through their first-pass confidence. No live
+call has been made.
+
 **Production integration of the hard-page reader (2026-11-14, D17, $0).** `farsi2epub/hard_reader.py`
 is the measured arm `t1r_opus` and nothing else: same bands, instruction, schema, output limit and
 effort. `tests/hard_reader_regression.py` compares it with the experiment script, and on hadpi
@@ -1275,6 +1290,7 @@ for pn in range(len(d)):
 | D17 | Hard-page reader in production (2026-11-14) | **Approved.** After the held-out reading test (Opus 5.5 on native bands 2.5% lenient word error, production call 13.2%), `transcribe` re-reads pages with no embedded-text oracle that trip the review gate with `farsi2epub/hard_reader.py` (arm `t1r_opus` unchanged). `--hard-pages opus|all|off`. The page stays flagged for review. |
 | D18 | Step 4 follow-up choices (2026-11-14) | **Zone guard `--la TZ2`: not adopted** (it removes the one Sonnet stamp breach but costs precision on that reader, and is identical for truth and Opus text). **Passage-level score: reported beside the word-level score** from now on. **Group boxes (TAG): not adopted** (too wide). The frozen configuration stays `--la T`, rule TA, side-edge measure. |
 | D19 | Word placement on held-out hadpi p3–p5 (2026-11-14) | **Judged by a random spot-check of shown boxes marked by the owner, not by a full box audit.** Precision from the marks, coverage from counts, their product as the estimate of "located and correct". |
+| D20 | Re-read trigger for hard pages (2026-11-14) | **Book-level rule: when at least half of a book's pages without embedded text (minimum 3) trip the review gate on the first pass, the remaining ones are re-read by the hard-page reader too.** Free on normal books. A second Sonnet reading on every scanned page as a disagreement trigger is not adopted (thin margin, about $0.03 a page). |
 | — | One `located` rule for all page types (TA) or two (TA for hard pages, S∧T for printed, D13) | **Open; under discussion with the owner.** D13 stands until decided. |
 | D5 | kraken/torch (arm C) | Still open. Not asked until arm T (page-trained aligner), the draft-splitter arms and a cross-vendor pointing test are measured. |
 

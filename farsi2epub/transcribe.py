@@ -19,7 +19,10 @@ Per page:
      read again by the hard-page reader (hard_reader.py: MODEL_HARD on
      native-resolution bands). Its words replace the first pass; paragraph
      breaks and headings are carried over from the first pass, whose text is
-     kept as NNNN.first.md. The page stays marked for review.
+     kept as NNNN.first.md. The page stays marked for review. After the
+     page loop a book-level rule (hard_book_decision) re-reads the remaining
+     no-oracle pages when at least half of them tripped the gate: hard pages
+     come in whole documents and the first reader's confidence is unstable.
   6. Only pages that still fail are marked needs_review for the human pass.
 
 Pages are independent (cross-page paragraph joins are resolved at build time
@@ -33,12 +36,13 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 
 import click
 
 from . import hard_reader, llm, qc, validators
-from .config import LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_FAST, MODEL_HARD, MODEL_STRONG, RES_HI, RES_STD
+from .config import HARD_BOOK_MIN_PAGES, HARD_BOOK_SHARE, HARD_PAGE_COST_USD, LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_FAST, MODEL_HARD, MODEL_STRONG, RES_HI, RES_STD
 from .render import extract_embedded_text, extract_heading_candidates, render_page_to
 from .workspace import Workspace
 
@@ -252,6 +256,7 @@ def _transcribe_one(
                 result, checks, auto_promoted = result3, checks3, promoted3
 
     review = validators.needs_review(result.confidence, result.flags, checks, result.is_blank)
+    first_review = review       # the gate's verdict on the first pass (book-level rule)
 
     # Hard page with no oracle: second reading on native bands ---------------
     hard = None
@@ -265,6 +270,7 @@ def _transcribe_one(
             hard = {"adopted": False, "reason": "first pass has verse, a table or footnotes; not re-read"}
         else:
             hard, cost_h, usage_h = _hard_read(ws, client, n, page_count, result, state)
+            hard["trigger"] = "page" if first_review else "all"
             cost += cost_h
             usage = {k: usage[k] + usage_h.get(k, 0) for k in usage}
             if hard["adopted"]:
@@ -287,6 +293,7 @@ def _transcribe_one(
         "confidence": result.confidence,
         "quality_score": checks["quality_score"],
         "needs_review": review,
+        "first_pass_review": first_review,
         "flags": result.flags,
         "headings": result.headings,
         "auto_promoted": auto_promoted,
@@ -336,6 +343,102 @@ def _transcribe_one(
     return f"page {n:>4}  conf={result.confidence:.2f}  q={checks['quality_score']:.2f}  ${cost:.4f}{suffix}"
 
 
+def _no_oracle(side: dict) -> bool:
+    return not side.get("is_blank") and (side.get("validators") or {}).get("embedded_similarity") is None
+
+
+def _first_gate(side: dict) -> bool:
+    """Did the review gate fire on this page's first pass? Sidecars written
+    before the field existed are recomputed from the stored values."""
+    if "first_pass_review" in side:
+        return bool(side["first_pass_review"])
+    first = (side.get("hard_reader") or {}).get("first_pass") or {}
+    checks = dict(side.get("validators") or {})
+    checks.setdefault("issues", [])
+    return validators.needs_review(side.get("confidence", 1.0), first.get("flags", side.get("flags") or []),
+                                   checks, bool(side.get("is_blank")))
+
+
+def hard_book_decision(sidecars: dict[int, dict]) -> dict:
+    """Book-level rule over page sidecars: when at least HARD_BOOK_SHARE of the
+    non-blank pages without embedded text tripped the review gate on their first
+    pass, the book is hard and the rest of those pages should be re-read too.
+    `candidates` are the pages not yet handed to the hard-page reader."""
+    pages = {n: s for n, s in sidecars.items() if _no_oracle(s)}
+    fired = sum(1 for s in pages.values() if _first_gate(s))
+    hard = len(pages) >= HARD_BOOK_MIN_PAGES and fired >= HARD_BOOK_SHARE * len(pages)
+    return {"hard": hard, "fired": fired, "counted": len(pages),
+            "candidates": sorted(n for n, s in pages.items() if not s.get("hard_reader")) if hard else []}
+
+
+def _book_reread_one(ws: Workspace, client, n: int, page_count: int, state: RunState) -> str:
+    """Hard-page reader on a page whose first pass is already stored (book rule)."""
+    side = json.loads(ws.page_meta_path(n).read_text(encoding="utf-8"))
+    result = SimpleNamespace(text_md=ws.page_md_path(n).read_text(encoding="utf-8"),
+                             confidence=side["confidence"], flags=list(side.get("flags") or []),
+                             headings=list(side.get("headings") or []))
+    if hard_reader.structure_blocks(result.text_md) is None:
+        hard, cost, usage = {"adopted": False, "reason": "first pass has verse, a table or footnotes; not re-read"}, 0.0, {}
+    else:
+        hard, cost, usage = _hard_read(ws, client, n, page_count, result, state)
+    hard["trigger"] = "book"
+    side["hard_reader"] = hard
+    side.setdefault("first_pass_review", False)
+    if hard["adopted"]:
+        checks = validators.evaluate(result.text_md, result.confidence, result.flags, None,
+                                     headings=result.headings, heading_candidates=[])
+        ws.page_md_path(n).write_text(result.text_md, encoding="utf-8")
+        was_flagged = bool(side.get("needs_review"))
+        side.update({"model_used": MODEL_HARD, "needs_review": True, "flags": result.flags,
+                     "headings": result.headings, "quality_score": checks["quality_score"],
+                     "validators": {k: v for k, v in checks.items() if k != "quality_score"}})
+        side["usage"] = {k: v + usage.get(k, 0) for k, v in (side.get("usage") or {}).items()}
+        side["cost_usd"] = round(side.get("cost_usd", 0.0) + cost, 6)
+        with state.lock:
+            state.hard_read += 1
+            if not was_flagged:
+                state.flagged += 1
+    ws.page_meta_path(n).write_text(json.dumps(side, ensure_ascii=False, indent=2), encoding="utf-8")
+    mark = "hard-page reader, book rule" if hard["adopted"] else f"hard-page reader not used: {hard.get('reason', '')}"
+    return f"page {n:>4}  ${cost:.4f}  [{mark}]"
+
+
+def _book_rule(ws: Workspace, client, run_pages: list[int], page_count: int, state: RunState,
+               max_cost: float | None, concurrency: int) -> None:
+    """After the page loop: apply the book-level rule to this run's pages."""
+    sides = {}
+    for n in ws.pages_done():
+        try:
+            sides[n] = json.loads(ws.page_meta_path(n).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    decision = hard_book_decision(sides)
+    if not decision["candidates"]:
+        return
+    todo = [n for n in decision["candidates"] if n in set(run_pages) and not sides[n].get("reviewed")]
+    other = [n for n in decision["candidates"] if n not in todo]
+    click.echo("")
+    click.echo(f"Hard book: {decision['fired']} of {decision['counted']} pages without embedded text tripped the review gate.")
+    if other:
+        click.echo(f"  Not re-read (outside this run, or already reviewed): {','.join(map(str, other))}. "
+                   f"To re-read: transcribe --pages <list> --force --hard-pages all")
+    if not todo:
+        return
+    click.echo(f"  Re-reading {len(todo)} more page(s) with {MODEL_HARD}, about ${HARD_PAGE_COST_USD:.2f} each ...")
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        futures = {}
+        for n in todo:
+            if max_cost is not None and state.total_cost + HARD_PAGE_COST_USD * len(futures) >= max_cost:
+                state.budget_exceeded = True
+                break
+            futures[pool.submit(_book_reread_one, ws, client, n, page_count, state)] = n
+        for fut in as_completed(futures):
+            try:
+                click.echo(f"  {fut.result()}")
+            except Exception as exc:
+                click.echo(f"  page {futures[fut]:>4}  hard-page reader FAILED: {exc}")
+
+
 def transcribe_pages(
     ws: Workspace,
     pages: list[int],
@@ -383,6 +486,9 @@ def transcribe_pages(
                 with state.lock:
                     state.failed.append(n)
                 click.echo(f"  page {n:>4}  FAILED: {exc}")
+
+    if hard_pages is True and not state.budget_exceeded:
+        _book_rule(ws, client, [n for n in pages if n not in state.failed], page_count, state, max_cost, concurrency)
 
     click.echo("")
     click.echo(f"Done: {state.ok} page(s) transcribed, {state.escalated} escalated, {state.hard_read} re-read by the hard-page reader, {state.flagged} flagged for review.")

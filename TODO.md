@@ -116,7 +116,7 @@ def transcribe_page(..., extra_hint: Optional[str] = None)   # appended to the u
 
 ## Hard-page reader: open items (integrated 2026-11-14, D17)
 
-- [ ] **A trigger that does not rest on the first reader's confidence.** Held-out hadpi p3 reported confidence 0.75 in one run and was not re-read (28 errors of 343 stayed; `--hard-pages all` gives 8). Candidates: disagreement between two readings (plan T2/T3), image measurements (photo, skew, glyph size). Must be chosen on development pages, never on hadpi p3–p5.
+- [x] **A trigger that does not rest on one page's confidence: book-level rule (D20, 2026-11-14).** When at least half of a book's no-oracle pages trip the gate, the rest are re-read too (`transcribe.hard_book_decision`; smoke `tests/hard_book_rule_smoke.py`). Still open: a single hard page inside a clean book. The measured alternative (a second Sonnet band reading on every scanned page, Opus at 15% disagreement or more) separates hadpi p1–p2 (17–41%) from 60 printed pages (median 2.7%, two above 15%) only thinly and costs about $0.03 on every scanned page; not adopted.
 - [ ] **Pages with verse, tables or footnotes are not re-read**, because the reader returns plain printed lines and that structure cannot be carried over yet.
 - [ ] **First live run.** The integration was verified from cached responses only (the request is byte-identical to the Step 2 calls). The first real `transcribe` on a hard page should be checked: sidecar `hard_reader.adopted`, `text/NNNN.first.md`, cost.
 - [ ] Review UI: show `hard_reader.guessed_words` and the first-pass text beside the page (two readings are a useful review flag).

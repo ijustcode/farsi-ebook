@@ -183,9 +183,70 @@ def test_transcribe_hook():
     assert abs(state.total_cost - 0.03) < 1e-9
 
 
+def test_book_rule():
+    def side(conf, hard=None, embedded=None, blank=False, reviewed=None, **kw):
+        d = {"confidence": conf, "flags": [], "is_blank": blank, "hard_reader": hard, "needs_review": conf < 0.70,
+             "headings": [], "usage": {"input_tokens": 10, "output_tokens": 5}, "cost_usd": 0.03,
+             "validators": {"embedded_similarity": embedded, "issues": []}, **kw}
+        if reviewed:
+            d["reviewed"] = reviewed
+        return d
+    D = transcribe.hard_book_decision
+    took = {"adopted": True}
+    # half or more of the no-oracle pages fired: the rest become candidates
+    d = D({1: side(0.5, took), 2: side(0.6, took), 3: side(0.75), 4: side(0.9)})
+    assert d["hard"] and d["fired"] == 2 and d["counted"] == 4 and d["candidates"] == [3, 4], d
+    # under half: nothing; pages with an oracle and blank pages are not counted
+    assert not D({1: side(0.5), 2: side(0.75), 3: side(0.75), 4: side(0.9)})["hard"]
+    d = D({1: side(0.5), 2: side(0.6), 3: side(0.75), 4: side(0.5, embedded=0.99), 5: side(0.1, blank=True)})
+    assert d["hard"] and d["counted"] == 3 and d["candidates"] == [1, 2, 3], d
+    # too few pages to call a book hard
+    assert not D({1: side(0.5), 2: side(0.5)})["hard"]
+    # the stored first-pass verdict wins over a recomputation; a re-read page's added flag does not count
+    assert not D({1: side(0.5, first_pass_review=False), 2: side(0.9), 3: side(0.9)})["hard"]
+    reread = dict(side(0.9, {"adopted": True, "first_pass": {"flags": []}}), flags=["illegible"])
+    assert D({1: reread, 2: side(0.9), 3: side(0.9)})["fired"] == 0
+
+    # end to end on stored first passes: page 3 (0.75) is re-read, a reviewed page and a page outside the run are not
+    calls = []
+
+    def fake_read(client, pdf, n, page_count, title, png):
+        calls.append(n)
+        return list(PRINTED), {"source": "hires_render", "bands": 2}, {"input_tokens": 100, "output_tokens": 50}, 0.09
+
+    with tempfile.TemporaryDirectory() as d_:
+        root = Path(d_)
+        book = {1: side(0.5, took), 2: side(0.6, took), 3: side(0.75), 4: side(0.8, reviewed="accepted"), 5: side(0.65)}
+        for n, sc in book.items():
+            (root / f"{n:04d}.json").write_text(json.dumps(sc))
+            (root / f"{n:04d}.md").write_text(FIRST)
+        ws = SimpleNamespace(slug="synthetic", meta={"title_fa": None}, pdf_path=root / "source.pdf",
+                             page_md_path=lambda n: root / f"{n:04d}.md", page_meta_path=lambda n: root / f"{n:04d}.json",
+                             pages_done=lambda: sorted(book))
+        state = transcribe.RunState()
+        with patch.object(HR, "read_page", side_effect=fake_read), \
+             patch.object(transcribe, "_page_image", side_effect=lambda ws_, n, res: res.encode()):
+            transcribe._book_rule(ws, None, [1, 2, 3, 4], 5, state, None, 2)
+            assert calls == [3], calls
+            s3 = json.loads((root / "0003.json").read_text())
+            hr = s3["hard_reader"]
+            assert hr["adopted"] and hr["trigger"] == "book" and s3["model_used"] == MODEL_HARD
+            assert s3["needs_review"] is True and s3["confidence"] == 0.75 and s3["first_pass_review"] is False
+            assert abs(s3["cost_usd"] - 0.12) < 1e-9 and s3["usage"]["input_tokens"] == 110
+            assert (root / "0003.first.md").read_text() == FIRST and (root / "0003.md").read_text() != FIRST
+            assert json.loads((root / "0004.json").read_text())["hard_reader"] is None
+            assert (root / "0005.md").read_text() == FIRST
+            assert state.hard_read == 1 and abs(state.total_cost - 0.09) < 1e-9
+            # a second run changes nothing; a spent budget stops the rule before any call
+            transcribe._book_rule(ws, None, [1, 2, 3, 4], 5, state, None, 2)
+            assert calls == [3]
+            transcribe._book_rule(ws, None, [5], 5, transcribe.RunState(total_cost=1.0), 1.0, 2)
+            assert calls == [3]
+
+
 def run():
     failures = 0
-    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook):
+    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook, test_book_rule):
         try:
             note = fn()
             print(f"ok   {fn.__name__}" + (f": {note}" if note else ""))

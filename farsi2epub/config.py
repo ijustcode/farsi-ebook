@@ -10,6 +10,13 @@ MODEL_STRONG = "claude-sonnet-5"
 # the normal pass (docs/bbox-old-fonts-plan.md, Step 2). About $0.09 a page.
 MODEL_HARD = "claude-opus-5-5"
 HARD_PAGE_COST_USD = 0.09
+# Book-level rule: hard pages come in whole documents, and the first reader's
+# confidence moves between runs (a held-out typewritten page reported 0.75).
+# When at least this share of a book's pages without embedded text trip the
+# review gate, the rest of them are re-read too. Stored first passes,
+# 2026-11-14: the typewritten document 4-5 of 5 pages, eight other books 0-26%.
+HARD_BOOK_SHARE = 0.5
+HARD_BOOK_MIN_PAGES = 3
 
 # USD per million tokens (MTok).
 PRICES = {
