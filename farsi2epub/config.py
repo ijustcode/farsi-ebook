@@ -10,6 +10,30 @@ MODEL_STRONG = "claude-sonnet-5"
 # the normal pass (docs/bbox-old-fonts-plan.md, Step 2). About $0.09 a page.
 MODEL_HARD = "claude-opus-5-5"
 HARD_PAGE_COST_USD = 0.09
+# Default hard-page reader since 2026-11-15 (owner decision D22): Gemini 4
+# Carbon on the same bands and instruction. Held-out typewritten pages: 2.1%
+# word error against 2.5% for Opus, at about a quarter of the price; as printed
+# (ZWNJ, spacing) it is worse than Opus. Opus stays selectable.
+MODEL_HARD_GEMINI = "gemini-4-carbon"
+HARD_READER_DEFAULT = "gemini"
+HARD_READERS = {"gemini": MODEL_HARD_GEMINI, "opus": MODEL_HARD}
+# Google's listed prices (USD per MTok, read 2026-11-12): $2/$10 until
+# 2026-11-30, then $4/$20; thinking is billed as output.
+GEMINI_PRICE_CHANGE = "2026-12-01"
+GEMINI_PRICES = ({"in": 2.0, "out": 10.0}, {"in": 4.0, "out": 20.0})
+
+
+def gemini_price(today: str | None = None) -> dict:
+    import datetime
+    today = today or datetime.date.today().isoformat()
+    return GEMINI_PRICES[0] if today < GEMINI_PRICE_CHANGE else GEMINI_PRICES[1]
+
+
+def hard_page_cost(reader: str) -> float:
+    """Rough cost of one hard-page reading, for messages and budget checks."""
+    if reader == "opus":
+        return HARD_PAGE_COST_USD
+    return 0.025 * gemini_price()["in"] / GEMINI_PRICES[0]["in"]
 # Book-level rule: hard pages come in whole documents, and the first reader's
 # confidence moves between runs (a held-out typewritten page reported 0.75).
 # When at least this share of a book's pages without embedded text trip the

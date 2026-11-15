@@ -22,7 +22,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 from farsi2epub import config, hard_reader as HR, llm, transcribe  # noqa: E402
-from farsi2epub.config import MODEL_HARD, MODEL_STRONG, RES_HI  # noqa: E402
+from farsi2epub.config import MODEL_HARD, MODEL_HARD_GEMINI, MODEL_STRONG, RES_HI  # noqa: E402
 import transcription_experiments as TE  # noqa: E402
 
 
@@ -144,11 +144,12 @@ def test_markdown():
     assert HR.lines_to_markdown([], first)[0] == ""
 
 
+readers: list = []
 FIRST = "# عنوان سند\n\nاین متن صفحه است که خوانده شد و چند غلط دارد.\n"
 PRINTED = ["عنوان سند", "این متن صفحه است که خوانده شد", "و چند ⟦غلط؟⟧ ⟦؟⟧ دارد ."]
 
 
-def _run(conf, flags, embedded=None, hard_pages=True, first=FIRST, fail=False):
+def _run(conf, flags, embedded=None, hard_pages=True, first=FIRST, fail=False, reader="gemini"):
     calls = []
 
     def fake_transcribe(client, png, model_, n, page_count, title_hint, extra_hint=None):
@@ -157,8 +158,9 @@ def _run(conf, flags, embedded=None, hard_pages=True, first=FIRST, fail=False):
                                       starts_mid_paragraph=False, continues_next=True, confidence=conf),
                 {"input_tokens": 10, "output_tokens": 5}, 0.03)
 
-    def fake_read(client, pdf, n, page_count, title, png):
+    def fake_read(client, pdf, n, page_count, title, png, reader="opus"):
         calls.append(("hard", n))
+        readers.append(reader)
         if fail:
             raise RuntimeError("credit balance is too low")
         return list(PRINTED), {"source": "hires_render", "bands": 2}, {"input_tokens": 100, "output_tokens": 50}, 0.09
@@ -170,7 +172,7 @@ def _run(conf, flags, embedded=None, hard_pages=True, first=FIRST, fail=False):
                              pdf_path=root / "source.pdf", text_dir=root,
                              page_md_path=lambda n: root / f"{n:04d}.md",
                              page_meta_path=lambda n: root / f"{n:04d}.json")
-        state = transcribe.RunState()
+        state = transcribe.RunState(hard_reader=reader)
         with patch.object(llm, "transcribe_page", side_effect=fake_transcribe), \
              patch.object(HR, "read_page", side_effect=fake_read), \
              patch.object(transcribe, "_page_image", side_effect=lambda ws_, n, res: res.encode()), \
@@ -190,7 +192,12 @@ def test_transcribe_hook():
     assert calls == [("first", MODEL_STRONG), ("hard", 1)]
     assert md == "# عنوان سند\n\nاین متن صفحه است که خوانده شد و چند غلط [؟] دارد .\n", md
     assert firstmd == FIRST
-    assert side["model_used"] == MODEL_HARD and side["needs_review"] is True
+    assert side["model_used"] == MODEL_HARD_GEMINI and side["needs_review"] is True
+    hr = side["hard_reader"]
+    assert hr["reader"] == "gemini" and hr["model"] == MODEL_HARD_GEMINI and readers[-1] == "gemini"
+    # Opus stays selectable
+    side_o = _run(0.55, [], reader="opus")[0]
+    assert side_o["model_used"] == MODEL_HARD and side_o["hard_reader"]["reader"] == "opus" and readers[-1] == "opus"
     hr = side["hard_reader"]
     assert hr["adopted"] and hr["guessed_words"] == ["غلط"] and hr["unreadable_words"] == 1
     assert hr["first_pass"] == {"confidence": 0.55, "flags": [], "text": "0001.first.md"}
@@ -255,7 +262,7 @@ def test_book_rule():
     # end to end on stored first passes: page 3 (0.75) is re-read, a reviewed page and a page outside the run are not
     calls = []
 
-    def fake_read(client, pdf, n, page_count, title, png):
+    def fake_read(client, pdf, n, page_count, title, png, reader="opus"):
         calls.append(n)
         return list(PRINTED), {"source": "hires_render", "bands": 2}, {"input_tokens": 100, "output_tokens": 50}, 0.09
 
@@ -275,7 +282,7 @@ def test_book_rule():
             assert calls == [3], calls
             s3 = json.loads((root / "0003.json").read_text())
             hr = s3["hard_reader"]
-            assert hr["adopted"] and hr["trigger"] == "book" and s3["model_used"] == MODEL_HARD
+            assert hr["adopted"] and hr["trigger"] == "book" and s3["model_used"] == MODEL_HARD_GEMINI
             assert s3["needs_review"] is True and s3["confidence"] == 0.75 and s3["first_pass_review"] is False
             assert abs(s3["cost_usd"] - 0.12) < 1e-9 and s3["usage"]["input_tokens"] == 110
             assert (root / "0003.first.md").read_text() == FIRST and (root / "0003.md").read_text() != FIRST
@@ -290,9 +297,70 @@ def test_book_rule():
             assert calls == [3]
 
 
+def test_gemini_reader():
+    # production request = the measured arm gg_carbon (same bands, instruction, schema, limits)
+    vendor, model, extra, max_out = TE.VENDOR_ARMS["gg_carbon"]
+    assert (model, max_out, extra) == (MODEL_HARD_GEMINI, HR.GEMINI_MAX_TOKENS, {"thinking_level": HR.GEMINI_THINKING})
+    assert (HR.GEMINI_URL, HR.GEMINI_RESOLUTION) == (TE.GoogleAdapter.url, TE.GOOGLE_RESOLUTION)
+    assert HR._inline_schema(HR.BandsReading) == TE.inline_schema(TE.BandsReading)
+    assert tuple(HR.GEMINI_KEY_ENV) == tuple(TE.VENDORS["google"]["key_env"])
+    assert config.GEMINI_PRICES[0] == TE.VENDORS["google"]["models"][model]["price"]
+    assert config.gemini_price("2026-11-30") == {"in": 2.0, "out": 10.0} and config.gemini_price("2026-12-01") == {"in": 4.0, "out": 20.0}
+    note = "skipped real pages (no books/)"
+    slug = TE.HADPI
+    if (ROOT / "books" / slug / "source.pdf").is_file():
+        import yaml
+        meta = yaml.safe_load((ROOT / "books" / slug / "book.yaml").read_text())
+        for pid in ("h1", "h2"):            # development pages only
+            page = TE.PAGES[pid][1]
+            hires = (ROOT / "books" / slug / "pages" / "hires" / f"{page:04d}.png").read_bytes()
+            req = HR.build_request(ROOT / "books" / slug / "source.pdf", page, meta["page_count"], meta.get("title_fa"), hires, "gemini")
+            assert HR.gemini_body(req) == TE.GoogleAdapter.build(TE.build_request("gg_carbon", pid))[1], pid
+        note = "request body identical to the measured arm on hadpi p1-p2"
+    # response shape seen live; thinking tokens are billed as output
+    ok = {"usage": {"total_input_tokens": 1000, "total_output_tokens": 200, "total_thought_tokens": 50},
+          "steps": [{"type": "thought", "signature": "x"},
+                    {"type": "model_output", "content": [{"type": "text", "text": json.dumps({"bands": [{"band_index": 1, "lines": ["الف ب", "ج د"]}]})}]}]}
+    parsed, usage = HR.gemini_parse(ok)
+    assert parsed["bands"][0]["lines"] == ["الف ب", "ج د"] and usage == {"input_tokens": 1000, "output_tokens": 250}
+    assert HR.gemini_parse({"steps": [{"type": "thought"}]})[0] is None
+    # read_page: a busy answer is retried; a refused key or tier stops at once; no key is said plainly
+    fake_req = {"model": MODEL_HARD_GEMINI, "max_tokens": 10000, "system": "s", "content": ["Band 1:"], "schema": HR.BandsReading,
+                "kwargs": {"thinking_level": "low"}, "info": {"bands": 1}}
+    answers = [(503, {"error": {"message": "high demand"}}), (200, ok)]
+    with patch.object(HR, "build_request", return_value=fake_req), patch.object(HR, "gemini_key", return_value="SECRET"), \
+         patch.object(HR, "_gemini_post", side_effect=lambda body, key, timeout=600.0: answers.pop(0)), patch("time.sleep"):
+        lines, info, usage, cost = HR.read_page(None, None, 1, 5, None, b"", reader="gemini")
+        assert lines == ["الف ب", "ج د"] and info["band_line_counts"] == [2] and usage["output_tokens"] == 250
+        price = config.gemini_price()
+        assert abs(cost - (1000 * price["in"] + 250 * price["out"]) / 1e6) < 1e-12
+    with patch.object(HR, "build_request", return_value=fake_req), patch.object(HR, "gemini_key", return_value="SECRET"), \
+         patch.object(HR, "_gemini_post", return_value=(429, {"error": {"message": "limit: 0 on Free Tier, key SECRET"}})), patch("time.sleep"):
+        try:
+            HR.read_page(None, None, 1, 5, None, b"", reader="gemini")
+            raise AssertionError("expected ReaderUnavailable")
+        except HR.ReaderUnavailable as exc:
+            assert "SECRET" not in str(exc)
+    with patch.object(HR, "build_request", return_value=fake_req), patch.object(HR, "gemini_key", return_value=None):
+        try:
+            HR.read_page(None, None, 1, 5, None, b"", reader="gemini")
+            raise AssertionError("expected ReaderUnavailable")
+        except HR.ReaderUnavailable:
+            pass
+    # an answer that cannot be used is still billed, and the caller is told how much
+    with patch.object(HR, "build_request", return_value=fake_req), patch.object(HR, "gemini_key", return_value="SECRET"), \
+         patch.object(HR, "_gemini_post", return_value=(200, {"usage": {"total_input_tokens": 1000, "total_output_tokens": 0}, "steps": []})), patch("time.sleep"):
+        try:
+            HR.read_page(None, None, 1, 5, None, b"", reader="gemini")
+            raise AssertionError("expected failure")
+        except RuntimeError as exc:
+            assert exc.cost > 0 and exc.usage["input_tokens"] == 1000 * HR.GEMINI_ATTEMPTS
+    return note
+
+
 def run():
     failures = 0
-    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook, test_book_rule):
+    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook, test_book_rule, test_gemini_reader):
         try:
             note = fn()
             print(f"ok   {fn.__name__}" + (f": {note}" if note else ""))

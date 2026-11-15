@@ -166,9 +166,8 @@ title_en: a short lowercase Latin transliteration of the title with hyphens betw
 
 
 def load_env() -> None:
-    """Load ANTHROPIC_API_KEY from a project-root .env file if not already set."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return
+    """Load keys (ANTHROPIC_API_KEY, GEMINI_API_KEY, ...) from a project-root
+    .env file; a variable already set in the environment is never replaced."""
     env_file = PROJECT_ROOT / ".env"
     if not env_file.is_file():
         return

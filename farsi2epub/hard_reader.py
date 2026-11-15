@@ -22,6 +22,7 @@ import base64
 import hashlib
 import math
 import bisect
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from . import config, llm
-from .config import MODEL_HARD
+from .config import HARD_READERS, MODEL_HARD, gemini_price
 
 READER_VERSION = 1
 MAX_TOKENS = 12000
@@ -157,8 +158,10 @@ def band_images(pdf_path, page: int, hires_png: bytes) -> tuple[list[BandImage],
     return out, {"source": kind, "src_w": pix.width, "src_h": pix.height, "bands": len(rows)}
 
 
-def build_request(pdf_path, page: int, page_count: int, title_hint: Optional[str], hires_png: bytes) -> dict:
-    """The full API request as plain data (images still as BandImage)."""
+def build_request(pdf_path, page: int, page_count: int, title_hint: Optional[str], hires_png: bytes,
+                  reader: str = "opus") -> dict:
+    """The full API request as plain data (images still as BandImage). The
+    bands, instruction and schema are the same for every reader."""
     imgs, info = band_images(pdf_path, page, hires_png)
     hint = f"کتاب: {title_hint}" if title_hint else "عنوان کتاب نامشخص است."
     content: list = []
@@ -166,9 +169,15 @@ def build_request(pdf_path, page: int, page_count: int, title_hint: Optional[str
         content += [f"Band {k}:", im]
     content.append(f"صفحهٔ {page} از {page_count}. {hint}\n"
                    f"Transcribe the {len(imgs)} bands of this page following the system instructions.")
-    return {"model": MODEL_HARD, "max_tokens": MAX_TOKENS, "system": system_prompt(len(imgs)),
-            "content": content, "schema": BandsReading,
-            "kwargs": {"output_config": {"effort": EFFORT}}, "info": info}
+    req = {"model": MODEL_HARD, "max_tokens": MAX_TOKENS, "system": system_prompt(len(imgs)),
+           "content": content, "schema": BandsReading,
+           "kwargs": {"output_config": {"effort": EFFORT}}, "info": info}
+    if reader == "gemini":
+        req.update(model=HARD_READERS["gemini"], max_tokens=GEMINI_MAX_TOKENS,
+                   kwargs={"thinking_level": GEMINI_THINKING})
+    elif reader != "opus":
+        raise ValueError(f"unknown hard-page reader {reader!r}")
+    return req
 
 
 def _image_block(img: BandImage) -> dict:
@@ -176,10 +185,153 @@ def _image_block(img: BandImage) -> dict:
                                         "data": base64.standard_b64encode(img.data).decode("ascii")}}
 
 
+# --- Gemini (Google Interactions API over stdlib HTTPS; no SDK) ---------------
+# The request is arm `gg_carbon` of tests/transcription_experiments.py exactly
+# (tests/hard_reader_regression.py holds the two together). The key is read from
+# the environment at send time only and never stored, logged or put in a URL.
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+GEMINI_KEY_ENV = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+GEMINI_RESOLUTION = "ultra_high"
+GEMINI_MAX_TOKENS = 10000
+GEMINI_THINKING = "low"
+GEMINI_ATTEMPTS = 4
+
+
+class ReaderUnavailable(RuntimeError):
+    """The chosen reader cannot be used at all (no key, access or billing refused)."""
+
+
+def gemini_key() -> Optional[str]:
+    import os
+    llm.load_env()
+    return next((os.environ[n] for n in GEMINI_KEY_ENV if os.environ.get(n)), None)
+
+
+def _inline_schema(model: type) -> dict:
+    """Strict JSON schema with $defs inlined (the API does not resolve $ref)."""
+    schema = model.model_json_schema()
+
+    def fix(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                node["additionalProperties"] = False
+                node["required"] = list(node["properties"].keys())
+            for v in node.values():
+                fix(v)
+        elif isinstance(node, list):
+            for v in node:
+                fix(v)
+    fix(schema)
+    defs = schema.pop("$defs", {})
+
+    def sub(node):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return sub(dict(defs[node["$ref"].split("/")[-1]]))
+            return {k: sub(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [sub(v) for v in node]
+        return node
+    return sub(schema)
+
+
+def gemini_body(req: dict) -> dict:
+    items = [{"type": "text", "text": req["system"]}]
+    for c in req["content"]:
+        if isinstance(c, BandImage):
+            items.append({"type": "image", "data": base64.standard_b64encode(c.data).decode("ascii"),
+                          "mime_type": c.media_type, "resolution": GEMINI_RESOLUTION})
+        else:
+            items.append({"type": "text", "text": c})
+    return {"model": req["model"], "input": items,
+            "response_format": {"type": "text", "mime_type": "application/json",
+                                "schema": _inline_schema(req["schema"])},
+            "generation_config": {"max_output_tokens": req["max_tokens"], **req["kwargs"]}}
+
+
+def gemini_parse(data: dict) -> tuple[Optional[dict], dict]:
+    """(parsed JSON or None, usage). Text arrives under steps[].content[]."""
+    u = data.get("usage") or {}
+    thought = int(u.get("total_thought_tokens") or 0)
+    usage = {"input_tokens": int(u.get("total_input_tokens") or 0),
+             "output_tokens": int(u.get("total_output_tokens") or 0) + thought}
+    texts = [part["text"] for step in data.get("steps") or []
+             if isinstance(step, dict) and step.get("type") == "model_output"
+             for part in step.get("content") or []
+             if isinstance(part, dict) and part.get("type") == "text" and "text" in part]
+    try:
+        return (json.loads(texts[-1]) if texts else None), usage
+    except ValueError:
+        return None, usage
+
+
+def _gemini_post(body: dict, key: str, timeout: float = 600.0) -> tuple[int, dict]:
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(GEMINI_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+                                     headers={"Content-Type": "application/json", "x-goog-api-key": key})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            return exc.code, json.loads(raw)
+        except ValueError:
+            return exc.code, {"error": {"message": raw[:300]}}
+
+
+def _read_gemini(req: dict, page: int) -> tuple[BandsReading, dict, float]:
+    import time
+    key = gemini_key()
+    if not key:
+        raise ReaderUnavailable(f"no Gemini key ({' or '.join(GEMINI_KEY_ENV)} in the environment or .env)")
+    body = gemini_body(req)
+    price = gemini_price()
+    spent, usage_total, last = 0.0, {"input_tokens": 0, "output_tokens": 0}, "no attempt"
+    for attempt in range(GEMINI_ATTEMPTS):
+        if attempt:
+            time.sleep(min(30, 4 * 2 ** (attempt - 1)))
+        try:
+            status, data = _gemini_post(body, key)
+        except OSError as exc:                       # transport failure
+            last = f"{type(exc).__name__}"
+            continue
+        if status >= 400:
+            msg = str((data.get("error") or {}).get("message", ""))[:200].replace(key, "[key]")
+            last = f"http {status}: {msg}"
+            if status in (401, 403) or "billing" in msg.lower() or "free tier" in msg.lower() or "quota" in msg.lower():
+                raise ReaderUnavailable(f"Gemini refused the request ({last})")
+            if status in (400, 404, 413, 422):
+                break                                 # will not improve on retry
+            continue
+        parsed, usage = gemini_parse(data)
+        for k in usage_total:
+            usage_total[k] += usage[k]
+        spent += usage["input_tokens"] / 1e6 * price["in"] + usage["output_tokens"] / 1e6 * price["out"]
+        if parsed is not None:
+            try:
+                return BandsReading.model_validate(parsed), usage_total, spent
+            except Exception:                         # noqa: BLE001  wrong shape: try again
+                last = "answer did not fit the schema"
+                continue
+        last = "no parseable answer"
+    exc = RuntimeError(f"Gemini hard-page read failed for page {page}: {last}")
+    exc.cost, exc.usage = spent, usage_total       # failed attempts that returned are still billed
+    raise exc
+
+
 def read_page(client, pdf_path, page: int, page_count: int, title_hint: Optional[str],
-              hires_png: bytes) -> tuple[list[str], dict, dict, float]:
+              hires_png: bytes, reader: str = "opus") -> tuple[list[str], dict, dict, float]:
     """One batched call. Returns (printed lines, info, usage, cost_usd)."""
-    req = build_request(pdf_path, page, page_count, title_hint, hires_png)
+    req = build_request(pdf_path, page, page_count, title_hint, hires_png, reader)
+    if reader == "gemini":
+        reading, usage, cost = _read_gemini(req, page)
+        bands = sorted(reading.bands, key=lambda b: b.band_index)
+        lines, warnings = stitch_bands([list(b.lines) for b in bands])
+        info = {**req["info"], "band_line_counts": [len(b.lines) for b in bands], "stitch_warnings": warnings}
+        return lines, info, usage, cost
     content = [_image_block(c) if isinstance(c, BandImage) else {"type": "text", "text": c}
                for c in req["content"]]
 

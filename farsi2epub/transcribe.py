@@ -16,7 +16,7 @@ Per page:
      exact-matching body/bold line in place (free), else retry once with a
      hint listing the missing headings; keep whichever result scores better.
   5. A page with no embedded-text oracle that still trips the review gate is
-     read again by the hard-page reader (hard_reader.py: MODEL_HARD on
+     read again by the hard-page reader (hard_reader.py: Gemini by default, Opus by choice, on
      native-resolution bands). Its words replace the first pass; paragraph
      breaks and headings are carried over from the first pass, whose text is
      kept as NNNN.first.md. The page stays marked for review. After the
@@ -42,7 +42,8 @@ from dataclasses import dataclass, field
 import click
 
 from . import hard_reader, llm, qc, validators
-from .config import HARD_BOOK_MIN_PAGES, HARD_BOOK_SHARE, HARD_PAGE_COST_USD, LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_FAST, MODEL_HARD, MODEL_STRONG, RES_HI, RES_STD
+from .config import (HARD_BOOK_MIN_PAGES, HARD_BOOK_SHARE, HARD_READER_DEFAULT, HARD_READERS, LONG_EDGE_BY_RES, LONG_EDGE_STD,
+                     MODEL_FAST, MODEL_STRONG, RES_HI, RES_STD, hard_page_cost)
 from .render import extract_embedded_text, extract_heading_candidates, render_page_to
 from .workspace import Workspace
 
@@ -56,6 +57,7 @@ class RunState:
     ok: int = 0
     escalated: int = 0
     hard_read: int = 0
+    hard_reader: str = HARD_READER_DEFAULT      # "gemini" or "opus"
     flagged: int = 0
     failed: list = field(default_factory=list)
     budget_exceeded: bool = False
@@ -149,13 +151,17 @@ def _hard_read(ws: Workspace, client, n: int, page_count: int, result, state: Ru
     first_md = result.text_md
     try:
         lines, info, usage, cost = hard_reader.read_page(
-            client, ws.pdf_path, n, page_count, ws.meta.get("title_fa"), _page_image(ws, n, RES_HI))
+            client, ws.pdf_path, n, page_count, ws.meta.get("title_fa"), _page_image(ws, n, RES_HI),
+            reader=state.hard_reader)
     except Exception as exc:
-        return {"adopted": False, "reason": f"{type(exc).__name__}: {exc}"[:300]}, 0.0, {}
+        billed = float(getattr(exc, "cost", 0.0) or 0.0)      # attempts that answered are billed even when unusable
+        state.add_cost(billed, None)
+        return ({"adopted": False, "reader": state.hard_reader, "reason": f"{type(exc).__name__}: {exc}"[:300]},
+                billed, dict(getattr(exc, "usage", {}) or {}))
     state.add_cost(cost, None)
     plain, guessed, unread = hard_reader.plain_lines(lines)
     text_md, headings, report = hard_reader.lines_to_markdown(plain, first_md)
-    record = {"model": MODEL_HARD, "reader_version": hard_reader.READER_VERSION, **info, **report,
+    record = {"model": HARD_READERS[state.hard_reader], "reader": state.hard_reader, "reader_version": hard_reader.READER_VERSION, **info, **report,
               "printed_lines": len(plain), "guessed_words": guessed, "unreadable_words": unread,
               "first_pass": {"confidence": result.confidence, "flags": list(result.flags),
                              "text": f"{n:04d}.first.md"}}
@@ -277,7 +283,7 @@ def _transcribe_one(
             cost += cost_h
             usage = {k: usage[k] + usage_h.get(k, 0) for k in usage}
             if hard["adopted"]:
-                model_used = MODEL_HARD
+                model_used = HARD_READERS[state.hard_reader]
                 checks = validators.evaluate(
                     result.text_md, result.confidence, result.flags, embedded,
                     headings=result.headings, heading_candidates=heading_candidates,
@@ -392,7 +398,7 @@ def _book_reread_one(ws: Workspace, client, n: int, page_count: int, state: RunS
                                      headings=result.headings, heading_candidates=[])
         ws.page_md_path(n).write_text(result.text_md, encoding="utf-8")
         was_flagged = bool(side.get("needs_review"))
-        side.update({"model_used": MODEL_HARD, "needs_review": True, "flags": result.flags,
+        side.update({"model_used": HARD_READERS[state.hard_reader], "needs_review": True, "flags": result.flags,
                      "headings": result.headings, "quality_score": checks["quality_score"],
                      "validators": {k: v for k, v in checks.items() if k != "quality_score"}})
         side["usage"] = {k: v + usage.get(k, 0) for k, v in (side.get("usage") or {}).items()}
@@ -427,11 +433,12 @@ def _book_rule(ws: Workspace, client, run_pages: list[int], page_count: int, sta
                    f"To re-read: transcribe --pages <list> --force --hard-pages all")
     if not todo:
         return
-    click.echo(f"  Re-reading {len(todo)} more page(s) with {MODEL_HARD}, about ${HARD_PAGE_COST_USD:.2f} each ...")
+    each = hard_page_cost(state.hard_reader)
+    click.echo(f"  Re-reading {len(todo)} more page(s) with {HARD_READERS[state.hard_reader]}, about ${each:.2f} each ...")
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         futures = {}
         for n in todo:
-            if max_cost is not None and state.total_cost + HARD_PAGE_COST_USD * len(futures) >= max_cost:
+            if max_cost is not None and state.total_cost + each * len(futures) >= max_cost:
                 state.budget_exceeded = True
                 break
             futures[pool.submit(_book_reread_one, ws, client, n, page_count, state)] = n
@@ -450,6 +457,7 @@ def transcribe_pages(
     concurrency: int = 4,
     resolution: str = RES_HI,
     hard_pages: bool | str = True,
+    hard_reader_name: str = HARD_READER_DEFAULT,
 ) -> None:
     # Measured escalation rates under the strict validators: 22/23 scanned
     # pages and 16/17 digital pages failed the Haiku pass, so the two-pass
@@ -463,13 +471,20 @@ def transcribe_pages(
     client = llm.get_client()
     page_count = ws.meta.get("page_count", max(pages))
     state = RunState()
+    if hard_reader_name not in HARD_READERS:
+        raise ValueError(f"unknown hard-page reader {hard_reader_name!r} (expected one of {sorted(HARD_READERS)})")
+    if hard_pages and hard_reader_name == "gemini" and not hard_reader.gemini_key():
+        click.echo("No GEMINI_API_KEY in the environment or .env: hard pages will be read by "
+                   f"{HARD_READERS['opus']} instead (--hard-reader opus).")
+        hard_reader_name = "opus"
+    state.hard_reader = hard_reader_name
 
     _ensure_metadata(ws, client, state)
 
     click.echo(
         f"Transcribing {len(pages)} page(s) with {model} at {resolution}-res "
         f"(escalation: {MODEL_STRONG} + hi-res"
-        + (f"; {'every page' if hard_pages == 'all' else 'flagged pages'} without embedded text: {MODEL_HARD} on bands, about $0.09 each" if hard_pages else "")
+        + (f"; {'every page' if hard_pages == 'all' else 'flagged pages'} without embedded text: {HARD_READERS[state.hard_reader]} on bands, about ${hard_page_cost(state.hard_reader):.2f} each" if hard_pages else "")
         + ") ..."
     )
 
