@@ -358,9 +358,65 @@ def test_gemini_reader():
     return note
 
 
+def test_first_reader_default():
+    # default first reader: Gemini with a key, Sonnet without; an explicit model is never replaced
+    from farsi2epub.config import MODEL_FIRST_DEFAULT
+    assert MODEL_FIRST_DEFAULT == MODEL_HARD_GEMINI
+    seen = []
+
+    def fake_one(ws, client, n, page_count, model, resolution, state, hard_pages):
+        seen.append((model, state.hard_reader, client))
+        return "ok"
+
+    ws = SimpleNamespace(meta={"page_count": 1, "title_fa": "x"}, pages_done=lambda: [])
+    for key, anth, model, want in (("K", "client", None, (MODEL_HARD_GEMINI, "gemini", "client")),
+                                   (None, "client", None, (MODEL_STRONG, "opus", "client")),
+                                   ("K", None, None, (MODEL_HARD_GEMINI, "gemini", None)),
+                                   ("K", "client", MODEL_STRONG, (MODEL_STRONG, "gemini", "client"))):
+        def get_client():
+            if anth is None:
+                raise RuntimeError("no key")
+            return anth
+        with patch.object(HR, "gemini_key", return_value=key), patch.object(llm, "get_client", side_effect=get_client), \
+             patch.object(transcribe, "_transcribe_one", side_effect=fake_one), patch.object(transcribe.click, "echo"):
+            transcribe.transcribe_pages(ws, [1], model=model, concurrency=1)
+        assert seen[-1] == want, (seen[-1], want)
+    # a page Google refuses is read by Sonnet when an Anthropic key exists, and is lost (FAILED) when it does not
+    def refuse_then_read(client, png, model_, n, page_count, title_hint, extra_hint=None):
+        if model_.startswith("gemini-"):
+            raise RuntimeError("Gemini transcription of page 1 failed: http 400: Request blocked")
+        return (llm.PageTranscription(is_blank=False, text_md=FIRST, headings=["عنوان سند"], flags=[], starts_mid_paragraph=False,
+                                      continues_next=False, confidence=0.9), {"input_tokens": 10, "output_tokens": 5}, 0.03)
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        ws1 = SimpleNamespace(slug="synthetic", meta={"title_fa": None, "source_type": "scanned"}, pdf_path=root / "source.pdf",
+                              page_md_path=lambda n: root / f"{n:04d}.md", page_meta_path=lambda n: root / f"{n:04d}.json")
+        with patch.object(llm, "transcribe_page", side_effect=refuse_then_read), \
+             patch.object(transcribe, "_page_image", side_effect=lambda ws_, n, res: res.encode()), \
+             patch.object(transcribe, "extract_embedded_text", return_value=None), \
+             patch.object(transcribe, "extract_heading_candidates", return_value=[]), \
+             patch.object(transcribe.qc, "record_event", return_value=None):
+            line = transcribe._transcribe_one(ws1, "client", 1, 5, MODEL_HARD_GEMINI, RES_HI, transcribe.RunState(), False)
+            side1 = json.loads((root / "0001.json").read_text())
+            assert side1["model_used"] == MODEL_STRONG and side1["first_reader_fallback"]["from"] == MODEL_HARD_GEMINI and "refused" in line
+            try:
+                transcribe._transcribe_one(ws1, None, 1, 5, MODEL_HARD_GEMINI, RES_HI, transcribe.RunState(), False)
+                raise AssertionError("expected the refusal to propagate without an Anthropic key")
+            except RuntimeError as exc:
+                assert "blocked" in str(exc)
+    # Gemini as first reader goes through the same call with the Markdown instruction and schema
+    body = HR.gemini_items_body(MODEL_HARD_GEMINI, ["sys", (b"png", "image/png"), "user"], llm.PageTranscription, 8000)
+    assert [i["type"] for i in body["input"]] == ["text", "image", "text"] and body["input"][1]["resolution"] == HR.GEMINI_RESOLUTION
+    assert body["generation_config"] == {"max_output_tokens": 8000, "thinking_level": "low"}
+    page = llm.PageTranscription(is_blank=False, text_md="متن", headings=[], flags=[], starts_mid_paragraph=False, continues_next=False, confidence=0.9)
+    with patch.object(HR, "gemini_call", return_value=(page, {"input_tokens": 1, "output_tokens": 1}, 0.01)) as call:
+        out = llm.transcribe_page(None, b"png", MODEL_HARD_GEMINI, 1, 5, None, extra_hint="HINT")
+        assert out[0] is page and "HINT" in call.call_args[0][0]["input"][2]["text"]
+
+
 def run():
     failures = 0
-    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook, test_book_rule, test_gemini_reader):
+    for fn in (test_same_configuration, test_same_request_on_real_pages, test_markdown, test_transcribe_hook, test_book_rule, test_gemini_reader, test_first_reader_default):
         try:
             note = fn()
             print(f"ok   {fn.__name__}" + (f": {note}" if note else ""))

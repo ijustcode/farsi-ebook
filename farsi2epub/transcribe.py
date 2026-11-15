@@ -43,7 +43,7 @@ import click
 
 from . import hard_reader, llm, qc, validators
 from .config import (HARD_BOOK_MIN_PAGES, HARD_BOOK_SHARE, HARD_READER_DEFAULT, HARD_READERS, LONG_EDGE_BY_RES, LONG_EDGE_STD,
-                     MODEL_FAST, MODEL_STRONG, RES_HI, RES_STD, hard_page_cost)
+                     MODEL_FAST, MODEL_FIRST_DEFAULT, MODEL_STRONG, RES_HI, RES_STD, hard_page_cost)
 from .render import extract_embedded_text, extract_heading_candidates, render_page_to
 from .workspace import Workspace
 
@@ -73,6 +73,9 @@ def _ensure_metadata(ws: Workspace, client, state: RunState) -> None:
     """Propose title/author from the opening pages if book.yaml has none yet."""
     meta = ws.meta
     if meta.get("title_fa") or meta.get("metadata_checked"):
+        return
+    if client is None:        # Gemini-only run without an Anthropic key: the proposal uses Haiku
+        click.echo("No Anthropic key: skipping the title/author proposal (edit book.yaml to set them).")
         return
     click.echo("Proposing book metadata from the opening pages ...")
     pngs = []
@@ -186,7 +189,20 @@ def _transcribe_one(
 
     png = _page_image(ws, n, resolution)
 
-    result, usage, cost = llm.transcribe_page(client, png, model, n, page_count, title_hint)
+    fallback = None
+    try:
+        result, usage, cost = llm.transcribe_page(client, png, model, n, page_count, title_hint)
+    except hard_reader.ReaderUnavailable:
+        raise
+    except RuntimeError as exc:
+        # Google refuses some pages outright (seen: "blocked due to copyright/recitation content").
+        # With an Anthropic key the page is read by the strong Anthropic model instead of being lost.
+        if not model.startswith("gemini-") or client is None:
+            raise
+        state.add_cost(float(getattr(exc, "cost", 0.0) or 0.0), None)
+        fallback = {"from": model, "reason": str(exc)[:200]}
+        model = MODEL_STRONG
+        result, usage, cost = llm.transcribe_page(client, png, model, n, page_count, title_hint)
     state.add_cost(cost, None)
 
     embedded = extract_embedded_text(ws.pdf_path, n)
@@ -200,14 +216,15 @@ def _transcribe_one(
     model_used = model
     res_used = resolution
     used_png = png
-    at_max_fidelity = model == MODEL_STRONG and resolution == RES_HI
+    strong = model if model.startswith("gemini-") else MODEL_STRONG      # escalation stays with the same vendor
+    at_max_fidelity = model == strong and resolution == RES_HI
     if not at_max_fidelity and validators.needs_escalation(
         result.confidence, result.flags, checks, result.is_blank
     ):
         escalated = True
         hi_bytes = _page_image(ws, n, RES_HI)
         result2, usage2, cost2 = llm.transcribe_page(
-            client, hi_bytes, MODEL_STRONG, n, page_count, title_hint
+            client, hi_bytes, strong, n, page_count, title_hint
         )
         state.add_cost(cost2, None)
         checks2 = validators.evaluate(
@@ -217,7 +234,7 @@ def _transcribe_one(
         cost += cost2
         usage = {k: usage[k] + usage2[k] for k in usage}
         if checks2["quality_score"] >= checks["quality_score"]:
-            result, checks, model_used, used_png = result2, checks2, MODEL_STRONG, hi_bytes
+            result, checks, model_used, used_png = result2, checks2, strong, hi_bytes
             res_used = RES_HI
 
     # Safe auto-promotion (no API cost) -----------------------------------
@@ -298,6 +315,7 @@ def _transcribe_one(
         "escalated": escalated,
         "heading_retry": heading_retry,
         "hard_reader": hard,
+        "first_reader_fallback": fallback,
         "is_blank": result.is_blank,
         "confidence": result.confidence,
         "quality_score": checks["quality_score"],
@@ -342,6 +360,8 @@ def _transcribe_one(
             state.flagged += 1
 
     marks = []
+    if fallback:
+        marks.append(f"{fallback['from']} refused, read by {MODEL_STRONG}")
     if escalated:
         marks.append("escalated")
     if hard:
@@ -465,10 +485,19 @@ def transcribe_pages(
     # ~72%). Haiku remains available via an explicit --model claude-haiku-4-5.
     # Hi-res input is likewise the measured default (see module docstring);
     # --res std is the economical path, with hi-res escalation on failure.
-    model = model or MODEL_STRONG
+    if model is None:
+        model = MODEL_FIRST_DEFAULT
+        if model.startswith("gemini-") and not hard_reader.gemini_key():
+            click.echo(f"No GEMINI_API_KEY in the environment or .env: transcribing with {MODEL_STRONG} instead.")
+            model = MODEL_STRONG
     if resolution not in (RES_HI, RES_STD):
         raise ValueError(f"unknown resolution {resolution!r} (expected {RES_HI!r} or {RES_STD!r})")
-    client = llm.get_client()
+    try:
+        client = llm.get_client()
+    except RuntimeError:
+        if not model.startswith("gemini-"):
+            raise
+        client = None         # every call of this run goes to Google
     page_count = ws.meta.get("page_count", max(pages))
     state = RunState()
     if hard_reader_name not in HARD_READERS:
@@ -477,13 +506,15 @@ def transcribe_pages(
         click.echo("No GEMINI_API_KEY in the environment or .env: hard pages will be read by "
                    f"{HARD_READERS['opus']} instead (--hard-reader opus).")
         hard_reader_name = "opus"
+    if hard_pages and hard_reader_name == "opus" and client is None:
+        raise RuntimeError("--hard-reader opus needs ANTHROPIC_API_KEY")
     state.hard_reader = hard_reader_name
 
     _ensure_metadata(ws, client, state)
 
     click.echo(
         f"Transcribing {len(pages)} page(s) with {model} at {resolution}-res "
-        f"(escalation: {MODEL_STRONG} + hi-res"
+        f"(escalation: {model if model.startswith('gemini-') else MODEL_STRONG} + hi-res"
         + (f"; {'every page' if hard_pages == 'all' else 'flagged pages'} without embedded text: {HARD_READERS[state.hard_reader]} on bands, about ${hard_page_cost(state.hard_reader):.2f} each" if hard_pages else "")
         + ") ..."
     )

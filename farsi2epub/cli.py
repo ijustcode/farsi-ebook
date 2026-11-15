@@ -96,7 +96,7 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
     click.echo(f"Page count:        {page_count}")
     if page_range:
         click.echo(f"Page range:        {page_range} ({est_pages} pages)")
-    click.echo(f"Estimated cost:    ${cost_hi:.2f} (default: {MODEL_STRONG} + hi-res input)")
+    click.echo(f"Estimated cost:    ${cost_hi:.2f} ({MODEL_STRONG} + hi-res input; the default reader with a Gemini key, gemini-4-carbon, costs about half)")
     click.echo(f"Economy estimate:  ${cost_std:.2f} (transcribe --res std; failing pages escalate to hi-res)")
     if source_type != "digital":
         click.echo(f"Hard pages:        + about ${hard_page_cost(HARD_READER_DEFAULT):.2f} for each scanned page read a second time "
@@ -112,7 +112,7 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--force", is_flag=True, help="Re-transcribe pages that already have output.")
 @click.option("--max-cost", "max_cost", type=float, default=None, help="Abort if the estimated cost exceeds this many dollars.")
 @click.option("--concurrency", type=int, default=4, help="Number of pages to transcribe concurrently.")
-@click.option("--model", "model", default=None, help="Model to use for transcription (default: Sonnet; failing pages escalate to Sonnet + hi-res).")
+@click.option("--model", "model", default=None, help="Model for the first reading of every page (default: gemini-4-carbon when GEMINI_API_KEY is set, page images go to Google; otherwise claude-sonnet-5). Pass claude-sonnet-5 or claude-haiku-4-5 to stay with Anthropic.")
 @click.option("--res", "resolution", type=click.Choice([RES_HI, RES_STD]), default=RES_HI, help="Page-image resolution: hi (2576px, default — best character accuracy) or std (1568px, ~30% cheaper; use for crisp large-print sources or very long books; failing pages escalate to hi-res).")
 @click.option("--hard-pages", "hard_pages", type=click.Choice(["flagged", "all", "off", "opus"]), default="flagged", show_default=True, help="Which pages with no embedded text get a second reading on native-resolution bands (counted in --max-cost): flagged = pages that trip the review gate, and the rest of them too when at least a fifth trip it; all = every such page (for a book you know is typewritten, badly photographed or in an old font, since the gate rests on the first reader's own confidence); off = keep the first pass; opus = the earlier name for flagged, read by Opus.")
 @click.option("--hard-reader", "hard_reader", type=click.Choice(sorted(HARD_READERS)), default=None, help=f"Model for that second reading: gemini (default; {HARD_READERS['gemini']}, needs GEMINI_API_KEY, page images go to Google) or opus ({HARD_READERS['opus']}, about 3.5 times the price, keeps half-spaces better). Without a Gemini key Opus is used.")

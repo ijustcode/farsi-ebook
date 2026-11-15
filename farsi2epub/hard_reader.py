@@ -282,12 +282,15 @@ def _gemini_post(body: dict, key: str, timeout: float = 600.0) -> tuple[int, dic
             return exc.code, {"error": {"message": raw[:300]}}
 
 
-def _read_gemini(req: dict, page: int) -> tuple[BandsReading, dict, float]:
+def gemini_call(body: dict, schema: type, what: str):
+    """POST one request and return (validated `schema` instance, usage, cost_usd).
+    Busy or malformed answers are retried; a refused key, tier or quota raises
+    ReaderUnavailable at once. A failure after answers were received carries
+    their cost in `.cost` and `.usage`, since those attempts are billed."""
     import time
     key = gemini_key()
     if not key:
         raise ReaderUnavailable(f"no Gemini key ({' or '.join(GEMINI_KEY_ENV)} in the environment or .env)")
-    body = gemini_body(req)
     price = gemini_price()
     spent, usage_total, last = 0.0, {"input_tokens": 0, "output_tokens": 0}, "no attempt"
     for attempt in range(GEMINI_ATTEMPTS):
@@ -312,14 +315,33 @@ def _read_gemini(req: dict, page: int) -> tuple[BandsReading, dict, float]:
         spent += usage["input_tokens"] / 1e6 * price["in"] + usage["output_tokens"] / 1e6 * price["out"]
         if parsed is not None:
             try:
-                return BandsReading.model_validate(parsed), usage_total, spent
+                return schema.model_validate(parsed), usage_total, spent
             except Exception:                         # noqa: BLE001  wrong shape: try again
                 last = "answer did not fit the schema"
                 continue
         last = "no parseable answer"
-    exc = RuntimeError(f"Gemini hard-page read failed for page {page}: {last}")
+    exc = RuntimeError(f"Gemini {what} failed: {last}")
     exc.cost, exc.usage = spent, usage_total       # failed attempts that returned are still billed
     raise exc
+
+
+def gemini_items_body(model: str, items: list, schema: type, max_tokens: int, thinking_level: str = GEMINI_THINKING) -> dict:
+    """Request body from text strings and (image bytes, mime type) pairs, in order."""
+    out = []
+    for c in items:
+        if isinstance(c, str):
+            out.append({"type": "text", "text": c})
+        else:
+            data, mime = c
+            out.append({"type": "image", "data": base64.standard_b64encode(data).decode("ascii"),
+                        "mime_type": mime, "resolution": GEMINI_RESOLUTION})
+    return {"model": model, "input": out,
+            "response_format": {"type": "text", "mime_type": "application/json", "schema": _inline_schema(schema)},
+            "generation_config": {"max_output_tokens": max_tokens, "thinking_level": thinking_level}}
+
+
+def _read_gemini(req: dict, page: int) -> tuple[BandsReading, dict, float]:
+    return gemini_call(gemini_body(req), BandsReading, f"hard-page read for page {page}")
 
 
 def read_page(client, pdf_path, page: int, page_count: int, title_hint: Optional[str],

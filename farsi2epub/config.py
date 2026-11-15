@@ -16,6 +16,12 @@ HARD_PAGE_COST_USD = 0.09
 # (ZWNJ, spacing) it is worse than Opus. Opus stays selectable.
 MODEL_HARD_GEMINI = "gemini-4-carbon"
 HARD_READER_DEFAULT = "gemini"
+# First (whole-page, Markdown) reader. Gemini since 2026-11-15 (owner decision
+# D23) when a Gemini key is present, otherwise MODEL_STRONG. Development pages,
+# same instruction and image: typewritten hadpi p1-p2 3.3-4.6% word error
+# against 17-40% for Sonnet; clean majid pages 1.0-1.2% against 0-0.9%, strict
+# 1.0-1.5% against 0.3-2.1% (it keeps ZWNJ in this mode); about half the price.
+MODEL_FIRST_DEFAULT = MODEL_HARD_GEMINI
 HARD_READERS = {"gemini": MODEL_HARD_GEMINI, "opus": MODEL_HARD}
 # Google's listed prices (USD per MTok, read 2026-11-12): $2/$10 until
 # 2026-11-30, then $4/$20; thinking is billed as output.

@@ -230,6 +230,12 @@ def transcribe_page(
     )
     if extra_hint:
         user_text += f"\n{extra_hint}"
+    if model.startswith("gemini-"):
+        # Google Interactions API (see hard_reader.gemini_call); same instruction, schema and page image.
+        from . import hard_reader
+        body = hard_reader.gemini_items_body(model, [TRANSCRIBE_SYSTEM, (png_bytes, "image/png"), user_text],
+                                             PageTranscription, MAX_OUTPUT_TOKENS)
+        return hard_reader.gemini_call(body, PageTranscription, f"transcription of page {page_no}")
     kwargs: dict = {}
     if model.startswith("claude-sonnet-5"):
         # Perception task, not reasoning: keep Sonnet's default adaptive thinking off.
