@@ -1122,6 +1122,85 @@ located and the union of their boxes passes the side-edge test against the union
   meets the hard-page targets; and the new engine does not do worse than the current one on the
   held-out half of `box_truth.jsonl` collected so far.
 - Fail: keep as experimental; do not promote; record the result.
+- **Scoping (2026-11-14, $0): the current engine's cached line readings cannot serve as the new
+  engine's line text.** They exist only where the old reader ran: none for the audited majid
+  pages p23/p109, and 23 of 31 detected lines on bachehaye p66 (agent-audited; the one audited
+  page that has any). On p66 the frozen configuration with those 23 lines as line text gives
+  S∧T 201/356 = 56.5% located and correct at 201/231 = 87.0% precision, against 350/356 = 98.3%
+  at 350/352 = 99.4% with truth text (97 words have no text at all; the readings follow the old
+  detector's lines, which do not match L1's). One page, deterministic code. So Step 5 needs a
+  line-by-line reading of each comparison page: hadpi 5 pages are cached; majid (86 cases on 35
+  pages) and bachehaye fresh30 (111 cases on 28 pages) are not. At the measured cost per page
+  (Sonnet bands `t1r` about $0.04–0.05, Opus bands about $0.09) that is about $3 or about $6 for
+  63 pages; the plan's $5 cap has about $0.06 left. Owner decision needed before any call.
+- **Execution plan (2026-11-14; owner approved the readings and raised the spend cap by up to
+  $3.80; `tests/step5_compare.py`).** Fixed before any new-engine box existed:
+  - *Population* (`freeze`, $0, run once): every correction the review UI derives on the pages of
+    `ghessehaye-majid` and the bachehaye fresh30 workspace where the current engine has at least
+    one cached line reading, so that it is compared with its evidence: **202 corrections on 58
+    pages** (majid 93 on 31, bachehaye 109 on 27). This replaces the plan's "86 majid cases", a
+    case list of the removed locator. hadpi has no pending correction and the current engine
+    shows nothing there; hadpi enters through its audited-truth and held-out results. The current
+    engine's result per correction is recorded at the freeze by offline replay: 12 located, 11
+    buffered, 173 estimated, 6 no box.
+  - *New engine*: one Sonnet 5 band reading per page (arm `t1r`, unchanged, one run) → L1 lines
+    → `--la T` → word rule S∧T (D13). A correction's Markdown span is mapped to the reading's
+    words by page-wide word alignment; its box is the union of its words' boxes when all are
+    located, a line-only box when only the lines are known, else nothing. A correction without a
+    span is searched for by its text; an insertion takes the word on each side.
+  - *Judge*: these pages have no audited boxes, so the owner marks every shown box of both
+    engines, shuffled, without being told the engine: right (whole target inside, at most one
+    extra word a side: the plan's §1 "correct"), wide (inside, more excess), miss, wrong line,
+    cannot tell. Covered = right + wide. Because every box is seen, this is also the visual audit
+    the pass rule asks for.
+  - *Test*: paired per correction. With a yes/no outcome the Wilcoxon signed-rank test reduces to
+    the exact sign (McNemar) test, which is what `report` prints, for covered and for correct.
+    Corrections cluster on pages, so the p-value is optimistic. **PASS** as the plan states:
+    covered rate higher with p < 0.05, wrong-line rate not higher, and gate G1. "Correct" is
+    reported beside it and is the number that matters for the reviewer, since a box over most of
+    a line also counts as covered.
+  - *Smoke test ($0, `smoke`), criteria fixed first:* on the audited majid pages p23/p109 with
+    their cached `t1r` readings, 100 seeded Markdown spans per page (review-like lengths) through
+    the same mapping, graded by the side-edge measure. Pass needs ≥ 85% shown, ≥ 98% of shown
+    correct, ≤ 15% skipped for lack of a clean truth target. **Result: PASS**, 191/198 shown
+    (96.5%), 191/191 correct, 2 skipped, 7 line-only. Development pages.
+  - *Paid smoke*: two pages first ($0.028 a page, lines parsed), then the rest.
+  - *Run (2026-11-14):* 58 readings, $1.65 in total (`ledger_step5.jsonl`), none cut off. `build`
+    ran once. New engine on the 202 corrections: 145 located, 42 line-only, 15 no box (6 have
+    neither text nor a position, 5 not found or ambiguous in the reading, 3 on two majid pages
+    (p26, p30) where the research engine raised an error and so shows nothing, 1 unresolved
+    word). Word-level availability over the 58 pages: 15,682 of 17,455 words located (89.8%;
+    availability, not accuracy). Sample: 383 boxes to mark (196 current, 187 new).
+  - **Result (owner marked all 383 on 2026-11-14, `report` run once, `out/step5/result.json`):
+    Step 5 FAILS; the new engine is not promoted.** Of 202 corrections (rates over those not
+    marked "cannot tell"):
+
+    | Engine | Right | Wide | Miss | Wrong line | No box | Covered | Correct |
+    |---|---|---|---|---|---|---|---|
+    | Current | 170 | 11 | 2 | 6 | 6 | 92.8% | 87.2% |
+    | New | 161 | 24 | 0 | 0 | 15 | 92.5% | 80.5% |
+
+    Paired, covered: new only 7, current only 5 (194 pairs, exact p 0.77). Paired, correct: new
+    only 14, current only 24 (p 0.14); on bachehaye alone 2 against 12 (p 0.013), on majid 12
+    against 12. Wrong line: new 0, current 6 (3%). By box status: the new engine's `located`
+    boxes were right 142 times, wide once, never a miss or a wrong line (2 cannot tell); its 42
+    line-only boxes were right 19 times and wide 23; the current engine's 173 `estimated` boxes
+    were right 150 times. Where the current engine was right and the new one was not: 18
+    line-only boxes, 5 no box, 2 others.
+    The owner's standard for "right" was more forgiving than the on-screen rule, and is the one
+    to use from now on: about two extra words a side is fine, an extra sentence is fine for a
+    target of two or more sentences, but a whole-line box for a 2–3 word target is not (the
+    reviewer cannot zoom to the place). Under it the current engine's approximate boxes are
+    mostly good enough on printed pages, which the availability counts could not show.
+    Reading: on printed pages the current engine already serves the reviewer; the new engine's
+    word boxes are more reliable where it shows one, and its losses are the line-only fallback
+    and missing boxes. Post hoc, from the same marks and not a test: taking the new engine's
+    `located` box when there is one and the current engine's box otherwise would have been right
+    181 times against 170, with 5 wrong-line boxes against 6. Limits: two books, corrections
+    cluster on pages (p-values optimistic), one reading per page, one marker. Hard pages are not
+    covered here: on hadpi the current engine had no reader evidence at all, so how it does
+    there with evidence is unmeasured, while the new engine met the held-out targets with the
+    Opus reading (Step 4).
 
 ### Step 6 — Integrate, then delete
 
