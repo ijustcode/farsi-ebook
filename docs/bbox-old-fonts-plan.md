@@ -1093,8 +1093,21 @@ located and the union of their boxes passes the side-edge test against the union
   (boxes shown over words, no truth needed): truth text 334/365, 295/415, 366/387 = 85.3% pooled;
   Opus text 328/347, 351/398, 366/381 = 92.8% pooled. Coverage is availability, not accuracy:
   precision comes from the owner's marks (`report`), and their product estimates "located and
-  correct". **Result: pending the owner's marks.** p4 with truth text shows far fewer boxes than
+  correct". p4 with truth text shows far fewer boxes than
   with Opus text; not investigated, because nothing may be tuned on these pages.
+  **Result (owner marked all 226 on 2026-11-14, `report` run once,
+  `out/word_placer/heldout_spotcheck.json`):** precision 119/120 = 99.2% for each line text (95%
+  interval 95–100%; no "cannot tell"). Both wrong boxes took letters from a neighbouring word
+  (one letter, two letters). Estimated located and correct (coverage × precision): **truth text
+  84.5%** (p3 91.5%, p4 71.1%, p5 92.2%), **Opus text 92.0%** of the reader's words (p3 92.2%,
+  p4 88.2%, p5 96.1%), which is 88.8% of the truth word count. Against the hard-page targets
+  (85% at 97%): precision met on the point estimate, though 120 boxes cannot exclude 95%;
+  located-and-correct met with the reader's text, half a point short with truth text, all of it
+  from p4's coverage. Marking rule the owner applied: a box is judged against the printed ink the
+  label names, so a label with letters missing (a reading error, counted in the reading test) was
+  marked right when the box sat on that ink; a full letter taken from a neighbouring word is
+  wrong. That is slightly more lenient than the development scoring for a truncated label. Three
+  pages of one document; coverage is exact, precision is a sample.
 
 - **Configuration to freeze for the held-out pages (hadpi p3–p5):** L1 lines; line-text assignment
   `--la T`; shared vertical rule; arms T with S, G, R; `located` by TA on hard pages and S∧T on
