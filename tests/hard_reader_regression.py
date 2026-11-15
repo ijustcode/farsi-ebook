@@ -122,6 +122,23 @@ def test_markdown():
     assert "[^" not in md and "۱ ـ دشوار = سخت" in md and "footnotes" not in rep, md
     md, _, _ = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای دشوار", "۱ دارد و ادامه پیدا میکند .", "۱ ـ دشوار = سخت"], plain)
     assert "[^" not in md, md
+    # the reader's numbering wins: the first pass numbered the note 2 and gave no definition
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای ۱ دشوار", "دارد و ادامه پیدا میکند .", "۱ ـ دشوار = سخت", "ادامه پانوشت"],
+                                      plain.replace("واژه‌ای", "واژه‌ای[^2]"))
+    assert "واژهای[^1] دشوار" in md and "[^2]" not in md and md.endswith("[^1]: دشوار = سخت ادامه پانوشت\n"), md
+    # real shapes (bachehaye p78, p25): digits printed against the word and misread (1, 1, 2 for 1, 2, 3);
+    # a footnote referred to twice; a definition that runs on to a second line
+    body = "# عنوان\n\nاین متن صفحه است که واژه‌ای دشوار دارد و ادامه پیدا می‌کند و باز هم ادامه دارد تا پایان."
+    foot = ["۱ - متن = نوشته", "۲ - واژه = کلمه ای که", "معنی دارد", "۳ - ادامه = دنباله"]
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن۱ صفحه است که واژهای۱ دشوار", "دارد و ادامه۲ پیدا میکند و باز هم ادامه دارد تا پایان ."] + foot, body)
+    assert "متن[^1] صفحه" in md and "واژهای[^2] دشوار" in md and "ادامه[^3] پیدا" in md, md
+    assert md.endswith("[^1]: متن = نوشته\n[^2]: واژه = کلمه ای که معنی دارد\n[^3]: ادامه = دنباله\n"), md
+    assert rep["footnotes"]["refs"] == 3 and rep["footnotes"]["defs"] == 3
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن ۱ صفحه است که واژهای ۲ دشوار", "دارد و ادامه ۳ پیدا میکند و باز هم ادامه ۳ دارد تا پایان ."] + foot, body)
+    assert "ادامه[^3] پیدا" in md and "هم ادامه[^3] دارد" in md and rep["footnotes"]["refs"] == 4, md
+    # a first-pass reference with no digit from the reader and no definition anywhere is not kept
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای دشوار", "دارد و ادامه پیدا میکند ."], plain.replace("واژه‌ای", "واژه‌ای[^1]"))
+    assert "[^" not in md and rep["footnotes"]["refs_dropped"] == 1, md
     assert HR.structure_blocks("| a | b |") is None
     assert HR.structure_blocks("> نقل\n\n- مورد\n\n**پررنگ**") == [("p", "نقل"), ("p", "مورد"), ("p", "پررنگ")]
     assert HR.lines_to_markdown([], first)[0] == ""
@@ -260,6 +277,7 @@ def test_book_rule():
             assert s3["needs_review"] is True and s3["confidence"] == 0.75 and s3["first_pass_review"] is False
             assert abs(s3["cost_usd"] - 0.12) < 1e-9 and s3["usage"]["input_tokens"] == 110
             assert (root / "0003.first.md").read_text() == FIRST and (root / "0003.md").read_text() != FIRST
+            assert (root / "0003.reader.txt").read_text().split("\n")[:2] == PRINTED[:2]
             assert json.loads((root / "0004.json").read_text())["hard_reader"] is None
             assert (root / "0005.md").read_text() == FIRST
             assert state.hard_read == 1 and abs(state.total_cost - 0.09) < 1e-9

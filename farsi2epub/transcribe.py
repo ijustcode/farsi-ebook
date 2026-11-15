@@ -162,6 +162,8 @@ def _hard_read(ws: Workspace, client, n: int, page_count: int, result, state: Ru
     if not text_md.strip():
         return {**record, "adopted": False, "reason": "reader returned no lines"}, cost, usage
     ws.page_md_path(n).with_suffix(".first.md").write_text(first_md, encoding="utf-8")
+    # the reader's printed lines as returned, markers included (for review and re-derivation at no cost)
+    ws.page_md_path(n).with_suffix(".reader.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     result.text_md = text_md
     result.headings = headings
     if unread and "illegible" not in result.flags:
@@ -261,8 +263,9 @@ def _transcribe_one(
     # Hard page with no oracle: second reading on native bands ---------------
     hard = None
     stale_first = ws.page_md_path(n).with_suffix(".first.md")
-    if stale_first.is_file():
-        stale_first.unlink()
+    for stale in (stale_first, stale_first.with_name(stale_first.name.replace(".first.md", ".reader.txt"))):
+        if stale.is_file():
+            stale.unlink()
     # hard_pages: True = pages the review gate flags; "all" = every page without an oracle
     if hard_pages and (review or hard_pages == "all") and not result.is_blank \
             and checks.get("embedded_similarity") is None:

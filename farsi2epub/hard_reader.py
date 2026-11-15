@@ -408,32 +408,100 @@ def structure_blocks(first_md: str, refs: Optional[list] = None) -> Optional[lis
     return blocks
 
 
-def _reader_footnotes(lines: list[str], known: set) -> tuple[list[str], list[tuple[int, int, int]], list[tuple[int, str]]]:
-    """Footnotes the first pass did not report but the reader printed: bottom
-    lines of the form "N ـ text" whose number also stands alone after a word
-    in the body. Returns (lines without those tokens and lines,
-    [(line index, index of the word the reference follows, N)], [(N, text)])."""
-    first = len(lines)
-    while first > 0 and _FN_LINE.match(lines[first - 1].translate(_ASCII_DIGITS)):
-        first -= 1
-    body = [l.split() for l in lines[:first]]
-    marks, defs, keep = [], [], []
-    for line in lines[first:]:
-        n = int(_FN_LINE.match(line.translate(_ASCII_DIGITS)).group(1))
-        spot = None if n in known else next(((li, k) for li, toks in enumerate(body)
-                                            for k, t in enumerate(toks) if k and _num(t) == n), None)
-        if spot is None:
-            keep.append(line)
+def _foot_zone(lines: list[str]) -> list[tuple[int, int, int]]:
+    """Footnote definitions printed at the foot of the page, as (N, first
+    line, end line): lines "N ـ text" with rising numbers that reach the end
+    of the page, each with at most two continuation lines."""
+    zone: list[tuple[int, int, int]] = []
+    end, cont = len(lines), 0
+    for li in range(len(lines) - 1, -1, -1):
+        m = _FN_LINE.match(lines[li].translate(_ASCII_DIGITS))
+        if m:
+            n = int(m.group(1))
+            if zone and n >= zone[0][0]:
+                break
+            zone.insert(0, (n, li, end))
+            end, cont = li, 0
+        else:
+            cont += 1
+            if cont > 2:
+                break
+    return zone
+
+
+_FN_HEAD = re.compile(r"^[(\[]?[\d۰-۹٠-٩]{1,3}[)\]]?\s*[ـ\-–—=.:)]+\s*")
+_MARK_TAIL = re.compile(r"^(.*[^\W\d_])(\d{1,2})$")      # a word with one or two digits printed against its end
+FN_UNUSED, FN_MISREAD, FN_SKIP_ALONE, FN_SKIP_TAIL = 3.0, 1.2, 1.0, 2.0
+
+
+def _reader_footnotes(lines: list[str]) -> tuple[list[str], list[tuple[int, int, int]], list[tuple[int, str]], set]:
+    """Footnotes as the reader printed them. The definitions are the numbered
+    lines at the foot of the page. The references are the small digits in the
+    body, printed alone after a word or against its end; the reader misreads
+    such digits often, so they are matched to the definitions in reading
+    order (a repeated reference is allowed, a digit may be left as text when
+    it fits nowhere), not by their value alone. The reader's numbering is the
+    printed one, so these win over the first pass.
+
+    Returns (body lines without those digits and without the definition
+    lines, [(line index, index of the word that carries the reference, N)],
+    [(N, text)], numbers that got at least one reference). Nothing is taken
+    when no digit in the body refers to the foot lines."""
+    zone = _foot_zone(lines)
+    if not zone:
+        return lines, [], [], set()
+    nums = [n for n, _, _ in zone]
+    body = [l.split() for l in lines[:zone[0][1]]]
+    cands = []                      # (line, token, value, alone)
+    for li, toks in enumerate(body):
+        for k, t in enumerate(toks):
+            v = _num(t)
+            if v is not None and k and v < 100:
+                cands.append((li, k, v, True))
+                continue
+            m = _MARK_TAIL.match(t.translate(_ASCII_DIGITS))
+            if m:
+                cands.append((li, k, int(m.group(2)), False))
+    # f[i][j]: least cost after i candidates with definition j the last one referred to (j = 0: none yet)
+    INF = float("inf")
+    nc, nd = len(cands), len(nums)
+    f = [[INF] * (nd + 1) for _ in range(nc + 1)]
+    back = [[None] * (nd + 1) for _ in range(nc + 1)]
+    f[0][0] = 0.0
+    for i, (_, _, v, alone) in enumerate(cands):
+        for j in range(nd + 1):
+            if f[i][j] == INF:
+                continue
+            c = f[i][j] + (FN_SKIP_ALONE if alone else FN_SKIP_TAIL)
+            if c < f[i + 1][j]:
+                f[i + 1][j], back[i + 1][j] = c, (j, None)
+            for j2 in range(max(j, 1), nd + 1):
+                c = f[i][j] + FN_UNUSED * max(0, j2 - j - 1) + (0.0 if nums[j2 - 1] == v else FN_MISREAD)
+                if c < f[i + 1][j2]:
+                    f[i + 1][j2], back[i + 1][j2] = c, (j, j2)
+    j = min(range(nd + 1), key=lambda q: f[nc][q] + FN_UNUSED * (nd - q))
+    assigned = [None] * nc
+    for i in range(nc, 0, -1):
+        j, took = back[i][j][0], back[i][j][1]
+        assigned[i - 1] = took
+    if not any(assigned):
+        return lines, [], [], set()     # numbered lines with no reference digit in the body: a list, not footnotes
+    marks, gone = [], {}
+    for (li, k, _, alone), took in zip(cands, assigned):
+        if took is None:
             continue
-        li, k = spot
-        del body[li][k]
-        marks.append((li, k - 1, n))
-        toks = line.split()
-        del toks[0]
-        while toks and all(c in _FN_LEAD for c in toks[0]):
-            del toks[0]
-        defs.append((n, " ".join(toks)))
-    return [" ".join(t) for t in body] + keep, marks, defs
+        n = nums[took - 1]
+        shift = gone.get(li, 0)
+        if alone:
+            del body[li][k - shift]
+            gone[li] = shift + 1
+            marks.append((li, k - shift - 1, n))
+        else:
+            tok = body[li][k - shift]
+            body[li][k - shift] = tok[:len(_MARK_TAIL.match(tok.translate(_ASCII_DIGITS)).group(1))]
+            marks.append((li, k - shift, n))
+    defs = [(n, _FN_HEAD.sub("", " ".join(" ".join(lines[a:e]).split()))) for n, a, e in zone]
+    return [" ".join(t) for t in body], marks, defs, {n for _, _, n in marks}
 
 
 def _fold(word: str) -> str:
@@ -486,8 +554,16 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
     """
     refs: list[tuple[int, int, int]] = []
     blocks = structure_blocks(first_md, refs) or []
-    known = {int(k[2:]) for k, _ in blocks if k.startswith("fn")} | {n for _, _, n in refs}
-    lines, marks, reader_defs = _reader_footnotes(lines, known)
+    lines, marks, reader_defs, done = _reader_footnotes(lines)
+    # What the reader settled is taken out of the first pass's structure: its
+    # definitions always, and a reference unless the reader printed no digit
+    # for that footnote (then the first pass's place for it is used).
+    settled = {n for n, _ in reader_defs}
+    kept = [b for b, (k, _) in enumerate(blocks) if not (k.startswith("fn") and int(k[2:]) in settled)]
+    remap = {b: i for i, b in enumerate(kept)}
+    blocks = [blocks[b] for b in kept]
+    refs = [(remap[b], k, n) for b, k, n in refs if n not in done and b in remap]
+    first_defs = {int(k[2:]) for k, _ in blocks if k.startswith("fn")} | settled
     words: list[str] = []
     line_starts: list[int] = []
     suffix: dict[int, str] = {}
@@ -522,7 +598,8 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
             if toks:
                 out_lines.append(" ".join(toks))
         if reader_defs:
-            report["footnotes"] = {"refs": len(reader_defs), "defs": len(reader_defs), "from_reader": len(reader_defs)}
+            report["footnotes"] = {"refs": len(marks), "defs": len(reader_defs), "refs_without_digit": 0,
+                                   "refs_dropped": 0, "defs_from_first_pass": 0, "from_reader": len(reader_defs)}
         return with_defs("\n\n".join(out_lines) + "\n", reader_defs), [], report
 
     cuts = [0]
@@ -546,12 +623,7 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
     # A footnote definition starts where the reader printed its "N ـ" line at
     # the foot of the page: that is firmer than word similarity for a
     # one-word definition.
-    foot: dict[int, int] = {}
-    for li in range(len(lines) - 1, -1, -1):
-        m = _FN_LINE.match(lines[li].translate(_ASCII_DIGITS))
-        if not m:
-            break
-        foot[int(m.group(1))] = line_starts[li]
+    foot = {n: line_starts[a] for n, a, _ in _foot_zone(lines)}
     fixed, last = {}, -1
     for b, (kind, _) in enumerate(blocks):
         if kind.startswith("fn") and foot.get(int(kind[2:]), -1) > last:
@@ -566,12 +638,12 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
     # Footnote references the first pass saw: the reader prints the number as
     # a digit after the word; that digit becomes the [^N] of the word before it.
     deleted: set[int] = set()
-    unmatched = 0
+    unmatched = dropped = 0
     pair_i = [i for i, _ in pairs]
     for b, k, n in refs:
         lo, hi = cuts[b], cuts[b + 1]
         if hi <= lo:
-            unmatched += 1
+            dropped += 1
             continue
         g = block_start[b] + max(k, 0)
         at = bisect.bisect_right(pair_i, g) - 1
@@ -594,8 +666,11 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
             if tail is not None:
                 p = tail
                 words[p] = words[p][:len(_NUM_TAIL.match(words[p].translate(_ASCII_DIGITS)).group(1))]
-            else:
+            elif n in first_defs:
                 unmatched += 1      # the reader printed no digit there; the first pass's reference is kept
+            else:
+                dropped += 1        # no digit and no definition anywhere: not a footnote
+                continue
         suffix[p] = suffix.get(p, "") + f"[^{n}]"
 
     out: list[tuple[str, str]] = []
@@ -619,7 +694,8 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
         out.append((kind, " ".join(seg)))
     defs += reader_defs
     if defs or refs:
-        report["footnotes"] = {"refs": len(refs) + len(reader_defs), "defs": len(defs), "refs_without_digit": unmatched,
+        report["footnotes"] = {"refs": len(refs) - dropped + len(marks), "defs": len(defs),
+                               "refs_without_digit": unmatched, "refs_dropped": dropped,
                                "defs_from_first_pass": defs_first, "from_reader": len(reader_defs)}
     mark = {"h1": "# ", "h2": "## ", "h3": "### ", "p": ""}
     md = with_defs("\n\n".join(mark[k] + t for k, t in out) + "\n", defs)
