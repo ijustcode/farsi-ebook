@@ -267,7 +267,7 @@ def _transcribe_one(
     if hard_pages and (review or hard_pages == "all") and not result.is_blank \
             and checks.get("embedded_similarity") is None:
         if hard_reader.structure_blocks(result.text_md) is None:
-            hard = {"adopted": False, "reason": "first pass has verse, a table or footnotes; not re-read"}
+            hard = {"adopted": False, "reason": "first pass has verse or a table; not re-read"}
         else:
             hard, cost_h, usage_h = _hard_read(ws, client, n, page_count, result, state)
             hard["trigger"] = "page" if first_review else "all"
@@ -378,7 +378,7 @@ def _book_reread_one(ws: Workspace, client, n: int, page_count: int, state: RunS
                              confidence=side["confidence"], flags=list(side.get("flags") or []),
                              headings=list(side.get("headings") or []))
     if hard_reader.structure_blocks(result.text_md) is None:
-        hard, cost, usage = {"adopted": False, "reason": "first pass has verse, a table or footnotes; not re-read"}, 0.0, {}
+        hard, cost, usage = {"adopted": False, "reason": "first pass has verse or a table; not re-read"}, 0.0, {}
     else:
         hard, cost, usage = _hard_read(ws, client, n, page_count, result, state)
     hard["trigger"] = "book"

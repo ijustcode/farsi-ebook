@@ -95,7 +95,33 @@ def test_markdown():
                                       "# عنوان\n")
     assert h3 == [] and "#" not in md3
     assert HR.structure_blocks("```verse\nالف --- ب\n```") is None
-    assert HR.structure_blocks("متن[^1]\n\n[^1]: پانوشت") is None
+    # footnotes: references leave the text, definitions are their own blocks
+    refs = []
+    assert HR.structure_blocks("متن اول[^1] دوم\n\n[^1]: پانوشت", refs) == [("p", "متن اول دوم"), ("fn1", "پانوشت")]
+    assert refs == [(0, 1, 1)]
+    fn_first = "# عنوان\n\nاین متن صفحه است که واژه‌ای[^3] دشوار دارد و ادامه پیدا می‌کند.\n\n[^3]: دشوار = سخت"
+    # the reader prints the number after the word and "N ـ text" at the foot
+    md, heads, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای ۳ دشوار", "دارد و ادامه پیدا میکند .", "۳ ـ دشوار = سخت"], fn_first)
+    assert md == "# عنوان\n\nاین متن صفحه است که واژهای[^3] دشوار دارد و ادامه پیدا میکند .\n\n[^3]: دشوار = سخت\n", md
+    assert heads == ["عنوان"] and rep["footnotes"]["refs_without_digit"] == 0 and rep["footnotes"]["defs_from_first_pass"] == 0
+    # digit printed against the word; and no digit at all (the first pass's reference is kept)
+    md, _, _ = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای۳ دشوار", "دارد و ادامه پیدا میکند .", "۳ ـ دشوار = سخت"], fn_first)
+    assert "واژهای[^3] دشوار" in md and "۳" not in md, md
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای دشوار", "دارد و ادامه پیدا میکند .", "۳ ـ دشوار = سخت"], fn_first)
+    assert "واژهای[^3] دشوار" in md and rep["footnotes"]["refs_without_digit"] == 1, md
+    # the reader lost the definition line: the first pass's definition stands, so no reference dangles
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای ۳ دشوار", "دارد و ادامه پیدا میکند ."], fn_first)
+    assert md.endswith("[^3]: دشوار = سخت\n") and rep["footnotes"]["defs_from_first_pass"] == 1, md
+    # a footnote only the reader saw (live sample, bachehaye p64)
+    plain = "# عنوان\n\nاین متن صفحه است که واژه‌ای دشوار دارد و ادامه پیدا می‌کند."
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای ۱ دشوار", "دارد و ادامه پیدا میکند .", "۱ ـ دشوار = سخت"], plain)
+    assert md == "# عنوان\n\nاین متن صفحه است که واژهای[^1] دشوار دارد و ادامه پیدا میکند .\n\n[^1]: دشوار = سخت\n", md
+    assert rep["footnotes"]["from_reader"] == 1
+    # a numbered bottom line with no such number in the body is ordinary text, as is a number that starts a line
+    md, _, rep = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای دشوار", "دارد و ادامه پیدا میکند .", "۱ ـ دشوار = سخت"], plain)
+    assert "[^" not in md and "۱ ـ دشوار = سخت" in md and "footnotes" not in rep, md
+    md, _, _ = HR.lines_to_markdown(["عنوان", "این متن صفحه است که واژهای دشوار", "۱ دارد و ادامه پیدا میکند .", "۱ ـ دشوار = سخت"], plain)
+    assert "[^" not in md, md
     assert HR.structure_blocks("| a | b |") is None
     assert HR.structure_blocks("> نقل\n\n- مورد\n\n**پررنگ**") == [("p", "نقل"), ("p", "مورد"), ("p", "پررنگ")]
     assert HR.lines_to_markdown([], first)[0] == ""

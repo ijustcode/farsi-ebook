@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import bisect
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -327,7 +328,14 @@ def stitch_bands(bands: list[list[str]], sim_min: float = 0.6, window: int = 12)
 MIN_ALIGNED = 0.5      # share of the reader's words that must pair with a first-pass word
 SNAP_WORDS = 2         # a carried-over break this close to a printed line start moves onto it
 _HEADING = re.compile(r"^(#{1,3})\s+(.+)$")
-_UNSUPPORTED = re.compile(r"^(```|\||\[\^\d+\]:)|\[\^\d+\]| --- ")
+_UNSUPPORTED = re.compile(r"^(```|\|)| --- ")
+_FN_DEF = re.compile(r"^\[\^(\d+)\]:\s*(.*)$")
+_FN_REF = re.compile(r"\[\^(\d+)\]")
+_ASCII_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_NUM_TOKEN = re.compile(r"^[(\[]?(\d{1,3})[)\]]?$")
+_NUM_TAIL = re.compile(r"^(.*[^\d(\[])[(\[]?(\d{1,3})[)\]]?$")
+_FN_LINE = re.compile(r"^[(\[]?(\d{1,3})[)\]]?\s*[ـ\-–—=.:)]+\s*(\S.*)$")
+_FN_LEAD = set("ـ-–—=.:)")
 
 
 def plain_lines(lines: list[str]) -> tuple[list[str], list[str], int]:
@@ -354,27 +362,78 @@ def plain_lines(lines: list[str]) -> tuple[list[str], list[str], int]:
     return out, guessed, unread
 
 
-def structure_blocks(first_md: str) -> Optional[list[tuple[str, str]]]:
-    """[(kind, text)] of the first-pass Markdown, kind in h1/h2/h3/p, or None
-    when it has structure this module cannot carry over (verse, tables,
-    footnotes)."""
-    blocks = []
+def _num(token: str) -> Optional[int]:
+    """The number a free-standing digit token stands for (Persian or ASCII,
+    optionally bracketed), else None."""
+    m = _NUM_TOKEN.match(token.translate(_ASCII_DIGITS))
+    return int(m.group(1)) if m else None
+
+
+def structure_blocks(first_md: str, refs: Optional[list] = None) -> Optional[list[tuple[str, str]]]:
+    """[(kind, text)] of the first-pass Markdown, kind in h1/h2/h3/p or fnN (the
+    definition of footnote N), or None when it has structure this module cannot
+    carry over (verse, tables). Footnote references are taken out of the text;
+    with `refs` given, each is appended as (block index, index of the word it
+    follows inside the block, N)."""
+    blocks: list[tuple[str, str]] = []
+
+    def add(kind: str, text: str) -> None:
+        words = []
+        for tok in _FN_REF.sub(lambda m: f" \x00{m.group(1)} ", text).split():
+            if tok.startswith("\x00"):
+                if refs is not None:
+                    refs.append((len(blocks), len(words) - 1, int(tok[1:])))
+            else:
+                words.append(tok)
+        if words:
+            blocks.append((kind, " ".join(words)))
+
     for line in first_md.split("\n"):
         s = line.strip()
         if not s:
             continue
         if _UNSUPPORTED.search(s):
             return None
+        m = _FN_DEF.match(s)
+        if m:
+            blocks.append((f"fn{int(m.group(1))}", " ".join(_FN_REF.sub(" ", m.group(2)).split())))
+            continue
         m = _HEADING.match(s)
         if m:
-            blocks.append((f"h{len(m.group(1))}", m.group(2).strip()))
+            add(f"h{len(m.group(1))}", m.group(2).strip())
             continue
         s = re.sub(r"^>\s?", "", s)
         s = re.sub(r"^[-*+]\s+", "", s)
-        s = s.replace("**", "").replace("__", "")
-        if s:
-            blocks.append(("p", s))
+        add("p", s.replace("**", "").replace("__", ""))
     return blocks
+
+
+def _reader_footnotes(lines: list[str], known: set) -> tuple[list[str], list[tuple[int, int, int]], list[tuple[int, str]]]:
+    """Footnotes the first pass did not report but the reader printed: bottom
+    lines of the form "N ـ text" whose number also stands alone after a word
+    in the body. Returns (lines without those tokens and lines,
+    [(line index, index of the word the reference follows, N)], [(N, text)])."""
+    first = len(lines)
+    while first > 0 and _FN_LINE.match(lines[first - 1].translate(_ASCII_DIGITS)):
+        first -= 1
+    body = [l.split() for l in lines[:first]]
+    marks, defs, keep = [], [], []
+    for line in lines[first:]:
+        n = int(_FN_LINE.match(line.translate(_ASCII_DIGITS)).group(1))
+        spot = None if n in known else next(((li, k) for li, toks in enumerate(body)
+                                            for k, t in enumerate(toks) if k and _num(t) == n), None)
+        if spot is None:
+            keep.append(line)
+            continue
+        li, k = spot
+        del body[li][k]
+        marks.append((li, k - 1, n))
+        toks = line.split()
+        del toks[0]
+        while toks and all(c in _FN_LEAD for c in toks[0]):
+            del toks[0]
+        defs.append((n, " ".join(toks)))
+    return [" ".join(t) for t in body] + keep, marks, defs
 
 
 def _fold(word: str) -> str:
@@ -425,12 +484,18 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
     every printed line becomes its own paragraph (report["structure"] ==
     "printed_lines"), which the reviewer sees and can join.
     """
+    refs: list[tuple[int, int, int]] = []
+    blocks = structure_blocks(first_md, refs) or []
+    known = {int(k[2:]) for k, _ in blocks if k.startswith("fn")} | {n for _, _, n in refs}
+    lines, marks, reader_defs = _reader_footnotes(lines, known)
     words: list[str] = []
     line_starts: list[int] = []
-    for line in lines:
+    suffix: dict[int, str] = {}
+    for li, line in enumerate(lines):
+        for _, k, n in (m for m in marks if m[0] == li):
+            suffix[len(words) + k] = suffix.get(len(words) + k, "") + f"[^{n}]"
         line_starts.append(len(words))
         words.extend(line.split())
-    blocks = structure_blocks(first_md) or []
     fwords: list[str] = []
     block_start: list[int] = []
     for _, text in blocks:
@@ -444,9 +509,21 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
     report = {"aligned": round(aligned, 3), "structure": "first_pass"}
     if not words:
         return "", [], {**report, "structure": "empty"}
+    def with_defs(md: str, defs: list[tuple[int, str]]) -> str:
+        return md + ("\n" + "".join(f"[^{n}]: {t}\n" for n, t in defs) if defs else "")
+
     if aligned < MIN_ALIGNED or not blocks:
         report["structure"] = "printed_lines"
-        return "\n\n".join(lines) + "\n", [], report
+        k = 0
+        out_lines = []
+        for line in lines:
+            toks = [w + suffix.get(k + i, "") for i, w in enumerate(line.split())]
+            k += len(toks)
+            if toks:
+                out_lines.append(" ".join(toks))
+        if reader_defs:
+            report["footnotes"] = {"refs": len(reader_defs), "defs": len(reader_defs), "from_reader": len(reader_defs)}
+        return with_defs("\n\n".join(out_lines) + "\n", reader_defs), [], report
 
     cuts = [0]
     pi = 0
@@ -466,14 +543,84 @@ def lines_to_markdown(lines: list[str], first_md: str) -> tuple[str, list[str], 
         cuts.append(max(pos, cuts[-1]))
     cuts.append(len(words))
 
+    # A footnote definition starts where the reader printed its "N ـ" line at
+    # the foot of the page: that is firmer than word similarity for a
+    # one-word definition.
+    foot: dict[int, int] = {}
+    for li in range(len(lines) - 1, -1, -1):
+        m = _FN_LINE.match(lines[li].translate(_ASCII_DIGITS))
+        if not m:
+            break
+        foot[int(m.group(1))] = line_starts[li]
+    fixed, last = {}, -1
+    for b, (kind, _) in enumerate(blocks):
+        if kind.startswith("fn") and foot.get(int(kind[2:]), -1) > last:
+            fixed[b] = last = foot[int(kind[2:])]
+    if fixed:
+        for b in range(1, len(blocks)):
+            cuts[b] = fixed[b] if b in fixed else max(cuts[b], cuts[b - 1])
+        for b in range(len(blocks) - 1, 0, -1):
+            if b not in fixed:
+                cuts[b] = min(cuts[b], cuts[b + 1])
+
+    # Footnote references the first pass saw: the reader prints the number as
+    # a digit after the word; that digit becomes the [^N] of the word before it.
+    deleted: set[int] = set()
+    unmatched = 0
+    pair_i = [i for i, _ in pairs]
+    for b, k, n in refs:
+        lo, hi = cuts[b], cuts[b + 1]
+        if hi <= lo:
+            unmatched += 1
+            continue
+        g = block_start[b] + max(k, 0)
+        at = bisect.bisect_right(pair_i, g) - 1
+        if at < 0:
+            p = lo
+        else:
+            i, j = pairs[at]
+            nxt = pairs[at + 1][1] if at + 1 < len(pairs) else len(words)
+            p = min(j + (g - i), max(j, nxt - 1))
+        p = min(max(p, lo), hi - 1)
+        found = next((q for q in range(max(p, lo + 1), min(hi, p + 4)) if q not in deleted and _num(words[q]) == n), None)
+        if found is not None:
+            deleted.add(found)
+            p = found - 1
+            while p > lo and p in deleted:
+                p -= 1
+        else:
+            tail = next((q for q in range(p, min(hi, p + 2))
+                         if (m := _NUM_TAIL.match(words[q].translate(_ASCII_DIGITS))) and int(m.group(2)) == n), None)
+            if tail is not None:
+                p = tail
+                words[p] = words[p][:len(_NUM_TAIL.match(words[p].translate(_ASCII_DIGITS)).group(1))]
+            else:
+                unmatched += 1      # the reader printed no digit there; the first pass's reference is kept
+        suffix[p] = suffix.get(p, "") + f"[^{n}]"
+
     out: list[tuple[str, str]] = []
+    defs: list[tuple[int, str]] = []
+    defs_first = 0
     for b, (kind, text) in enumerate(blocks):
-        seg = words[cuts[b]:cuts[b + 1]]
+        seg = [words[q] + suffix.get(q, "") for q in range(cuts[b], cuts[b + 1]) if q not in deleted]
+        if kind.startswith("fn"):
+            n = int(kind[2:])
+            for _ in range(3):
+                if seg and (_num(seg[0]) == n or all(c in _FN_LEAD for c in seg[0])):
+                    del seg[0]
+            if not seg:
+                seg, defs_first = text.split(), defs_first + 1   # never leave a reference without its definition
+            defs.append((n, " ".join(seg)))
+            continue
         if not seg:
             continue
         if kind != "p" and len(seg) > 2 * len(text.split()) + 2:
             kind = "p"            # a heading must not swallow body text
         out.append((kind, " ".join(seg)))
+    defs += reader_defs
+    if defs or refs:
+        report["footnotes"] = {"refs": len(refs) + len(reader_defs), "defs": len(defs), "refs_without_digit": unmatched,
+                               "defs_from_first_pass": defs_first, "from_reader": len(reader_defs)}
     mark = {"h1": "# ", "h2": "## ", "h3": "### ", "p": ""}
-    md = "\n\n".join(mark[k] + t for k, t in out) + "\n"
-    return md, [t for k, t in out if k != "p"], report
+    md = with_defs("\n\n".join(mark[k] + t for k, t in out) + "\n", defs)
+    return md, [_FN_REF.sub("", t).strip() for k, t in out if k != "p"], report

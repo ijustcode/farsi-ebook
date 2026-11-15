@@ -37,7 +37,8 @@ def sidecars(slug: str) -> dict[int, dict]:
 
 def main() -> int:
     ok = True
-    books = sorted(p.parent.name for p in (ROOT / "books").glob("*/text") if p.parent.name not in SKIP)
+    books = sorted(p.parent.name for p in (ROOT / "books").glob("*/text")
+                   if p.parent.name not in SKIP and not p.parent.name.endswith("-live"))   # -live: copies made for live runs
     print("1. other workspaces must not trigger")
     for slug in books:
         if slug == HADPI:
