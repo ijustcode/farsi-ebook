@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `farsi2epub` converts Farsi (Persian) PDF books into RTL EPUB 3 ebooks using Claude vision models to transcribe page images. It is a CLI (`click`-based) installed as an editable package.
 
+## Standing owner rules for output quality (2026-11-15, D24 and D25)
+
+- **Reader preference (D24).** Gemini 4 Carbon is the preferred transcription model going forward. Opus 5.5 stays selectable as the other strong reader. Sonnet 5 stays selectable for pages we are really sure are easy. No change may remove or break any of the three.
+- **The bar for output-changing work is higher now (D25).** The pipeline produces good transcriptions, so the first duty of any change that can alter the output text is not to make it worse. Treat every such change as a measured experiment:
+  - Write the pass/fail criteria before the run. State the baseline on the same pages, the same scorer and the same number of runs.
+  - Score against ground truth, not against another model's reading or an impression. Truth on disk: hadpi p1–p2 (owner text), hadpi p3–p5 (owner text, held out: test once, never tune), majid p23 and p109, bachehaye_ghali p66 (agent-audited, never pooled with owner truth).
+  - Report clean printed pages beside hard pages (gate G1), strict and lenient error, at least two runs, and counts with their denominators. A single-run difference is not a finding.
+  - "No worse" has to be shown, not assumed. If the truth on disk cannot show it, say so, and say what truth would. Ask the owner for new truth only when it settles the decision (see the memory rule on audits).
+  - Refactors and moves that should not change output are proved by identical output on stored inputs at $0.
+  - No default changes on development-page results alone when a held-out test is available.
+
 ## Box placement: current state and plan
 
 - **Current engine (experimental, never promoted):** two geometry sources only, `match` (embedded PDF text) then `scan` (image evidence through `scan.PlacementService`). Contracts, limits and history: `docs/bbox-consolidation.md`, `docs/geometry-best-attempt.md` (current coverage-first policy), `docs/page-geometry-coverage-status.md` (superseded strict-evidence experiment). The old `layout`/`scan_vlm` tiers, the QC-coordinate "model" fallback, `context_anchor_v1`/`legacy_v1` selection and the `locate_vlm*.json` caches are **removed from production**; they survive only as frozen evaluation snapshots under `tests/historical/`. Never restore them as live fallbacks.
@@ -136,9 +147,10 @@ Historical instrument and old locator (import the frozen modules in `tests/histo
 - **Box spot-check for the same pages (D19):** `./venv/bin/python tests/heldout_box_spotcheck.py {build,serve [--port 8772],report}`. `build` ran the frozen placer once and drew the sample (it refuses to run again); the owner marks each sampled box right / wrong in the browser; `report` gives precision with its interval, coverage and their product (marked and reported 2026-11-14; a box is judged against the printed ink its label names, so a misread label does not make a well-placed box wrong). Sample and marks are private under `books/hadpi-articles/truth/box_spotcheck.*.json`.
 - **Do not edit those three pages' text outside the tool, and do not tune anything on them: they are the held-out test.** Test: `./venv/bin/python tests/text_audit_regression.py` (synthetic, no `books/`).
 
-## Line finder for warped pages (plan Step 3; research code, not wired in)
+## Line finder for warped pages (plan Step 3; in `farsi2epub/` since 2026-11-15, not called by the pipeline)
 
-- `tests/line_finder.py` (arm L1, numpy only): finds text lines by following them locally, with adaptive binarisation, conservative non-text masking, a text-block edge fit and per-line rectification. `tests/line_finder_eval.py {synth,real,overlay-real}` scores four arms (current detector, current + mask, L1, L1 + mask) with `real_truth_eval.grade_lines`; results under `out/line_finder/`.
+- **Moved 2026-11-15 (`docs/line-finder-integration-plan.md`):** the line finder is now `farsi2epub/line_finder.py`, unchanged (output identical on 100 pages); `tests/line_finder.py` only re-exports it. **Nothing in the pipeline calls it yet.** `hard_reader.line_rows` cuts reader bands between detected lines and is also unused: on whole books it never hid a line and fell back to fixed bands on 0–9.4% of printed pages, but it failed on the tilted hadpi photos (about 3 degrees: an upright band edge cannot pass between sloped lines; p1 falls back), so by owner decision the reader stays on fixed bands. Line-following crops or straightening would be a new reader input and need their own measured plan (D25). Tests: `./venv/bin/python tests/line_rows_regression.py` (synthetic), `./venv/bin/python tests/line_rows_smoke.py` (needs `books/`, about 5 minutes, $0; exits non-zero on the known hadpi fallback).
+- `farsi2epub/line_finder.py` (arm L1, numpy only): finds text lines by following them locally, with adaptive binarisation, conservative non-text masking, a text-block edge fit and per-line rectification. `tests/line_finder_eval.py {synth,real,overlay-real}` scores four arms (current detector, current + mask, L1, L1 + mask) with `real_truth_eval.grade_lines`; results under `out/line_finder/`.
 - Result (2026-11-12): clean one-to-one line recall on hadpi p1–p2 is 60/60 with 0 merges (current `_scan_page_lines`: 25/60, 10 merges); majid 54/54; p66 32/32; synthetic untouched seeds 98.8% (current 51.0%). **It over-detects on hadpi: 20 spurious lines, almost all on signatures, handwriting, the stamp and the scanner logo below the text**, so the plan's "≤ 1 spurious per page" criterion fails as written (owner decision open). Marks just past a line's end are absorbed into the line, so a line's ink extent is not a trustworthy line start. hadpi p1–p2 were looked at during development; only held-out p3–p5 are an untouched test.
 - Production still uses `locate._scan_page_lines`. Do not wire L1 in before plan Step 6.
 

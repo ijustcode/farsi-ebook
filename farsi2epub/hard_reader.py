@@ -118,6 +118,177 @@ def band_rows(height: int, width: int, overlap: int = BAND_OVERLAP_PX) -> list[t
     return rows
 
 
+def _band_fits(h: int, width: int) -> bool:
+    """The size test `band_rows` applies to each band (D9: not resized)."""
+    edge, cap = config.IMAGE_TIERS[0]
+    cols = -(-width // config.IMAGE_PATCH_PX)
+    return h <= edge and -(-h // config.IMAGE_PATCH_PX) * cols <= cap
+
+
+def line_rows(gray, lines_per_band, overlap_lines: int = 1, *, finder=None,
+              overlap: int = BAND_OVERLAP_PX) -> tuple[list[tuple[int, int]], dict]:
+    """Band rows cut between detected text lines (plan
+    docs/line-finder-integration-plan.md 3.2). Not used by `transcribe`.
+
+    Rules: (1) the bands cover every row, top to bottom; the finder only
+    chooses where cuts fall. (2) A cut is a full-width row in the blank gap
+    between consecutive text lines: below every text line above it and above
+    every text line below it; where slope leaves no such row, the cut moves
+    outward to the next gap that exists. (3) Each band holds `lines_per_band`
+    lines plus `overlap_lines` whole neighbouring lines above and below.
+    (4) No band exceeds the size `band_rows` allows; a band that would is split
+    between its lines. (5) Fixed bands (`band_rows`) when the finder raises,
+    finds fewer than 3 text lines or rules 2-4 cannot be met. (6) Only "text"
+    lines place cuts; within a gap the cut avoids other found lines when it can.
+
+    `lines_per_band` is an int >= 1 or "same" (the number of lines per band
+    whose band count is closest to `band_rows`'s, ties to fewer bands).
+    `finder(gray) -> dict` defaults to `line_finder.find_lines`. Rows are in
+    the pixel coordinates of `gray`; (y0, y1) with y1 exclusive. Never raises
+    on a page image."""
+    import time
+    import numpy as np
+
+    info: dict = {"cut": "fixed", "reason": None, "finder_version": None, "lines_per_band": lines_per_band,
+                  "overlap_lines": overlap_lines, "text_lines": 0, "other_lines": 0, "bands": 0,
+                  "fixed_bands": 0, "gaps": 0, "cuts_through_other": 0, "splits": 0, "finder_seconds": None}
+    try:
+        g = np.asarray(gray, dtype=np.float32)
+        if g.ndim == 3:
+            g = g.mean(axis=2)
+        H, W = int(g.shape[0]), int(g.shape[1])
+        fixed = band_rows(H, W, overlap)
+    except Exception as exc:                      # not an image at all: nothing sensible to cut
+        info["reason"] = f"bad image: {type(exc).__name__}: {exc}"
+        return [], info
+    info["fixed_bands"] = len(fixed)
+
+    def fallback(reason: str):
+        info.update(cut="fixed", reason=reason, bands=len(fixed))
+        return list(fixed), info
+
+    try:
+        if finder is None:
+            from . import line_finder
+            finder = line_finder.find_lines
+            info["finder_version"] = line_finder.VERSION
+        t0 = time.perf_counter()
+        try:
+            res = finder(g)
+        except Exception as exc:
+            info["finder_seconds"] = round(time.perf_counter() - t0, 3)
+            return fallback(f"finder error: {type(exc).__name__}: {exc}")
+        info["finder_seconds"] = round(time.perf_counter() - t0, 3)
+        info["finder_version"] = res.get("version", info["finder_version"])
+
+        def extent(L) -> tuple[float, float]:
+            ys = [p[1] for p in L.polygon()]
+            return float(min(ys)), float(max(ys))
+
+        text, other = [], []
+        for L in res.get("lines", []):
+            top, bot = extent(L)
+            if not (math.isfinite(top) and math.isfinite(bot)):
+                continue
+            (text if L.kind == "text" else other).append((top, bot, float(L.y_at((L.x0 + L.x1) / 2))))
+        text.sort(key=lambda t: (t[2], t[0]))
+        info["text_lines"], info["other_lines"] = len(text), len(other)
+        n = len(text)
+        if n < 3:
+            return fallback(f"fewer than 3 text lines ({n})")
+
+        # cut[k]: the row between text line k and k+1 (None when no gap exists)
+        cut: list = []
+        for k in range(n - 1):
+            lo = math.ceil(max(t[1] for t in text[:k + 1]))
+            hi = math.floor(min(t[0] for t in text[k + 1:]))
+            lo, hi = max(lo, 1), min(hi, H - 1)
+            if lo > hi:
+                cut.append(None)
+                continue
+            # free sub-intervals of [lo, hi] outside every other found line
+            free = [(lo, hi)]
+            for top, bot, _ in other:
+                a, b = math.floor(top), math.ceil(bot)
+                nxt = []
+                for x, y in free:
+                    if b < x or a > y:
+                        nxt.append((x, y))
+                        continue
+                    if a - 1 >= x:
+                        nxt.append((x, a - 1))
+                    if b + 1 <= y:
+                        nxt.append((b + 1, y))
+                free = nxt
+            if free:
+                x, y = max(free, key=lambda iv: (iv[1] - iv[0], -iv[0]))
+            else:
+                x, y = lo, hi
+                info["cuts_through_other"] += 1
+            cut.append((x + y) // 2)
+        info["gaps"] = sum(c is not None for c in cut)
+
+        if lines_per_band == "same":
+            nf = len(fixed)
+            k_per = min(range(1, n + 1), key=lambda k: (abs(-(-n // k) - nf), -k))
+        else:
+            k_per = int(lines_per_band)
+            if k_per < 1:
+                return fallback(f"lines_per_band {lines_per_band!r} < 1")
+        ov = max(0, int(overlap_lines))
+        info["lines_per_band_resolved"] = k_per
+
+        def top_of(a: int) -> int:
+            """Row above text line a - ov: the nearest existing gap at or above it."""
+            for k in range(a - ov - 1, -1, -1):
+                if cut[k] is not None:
+                    return cut[k]
+            return 0
+
+        def bot_of(b: int) -> int:
+            """Row below text line b - 1 + ov (exclusive end)."""
+            for k in range(b - 1 + ov, n - 1):
+                if cut[k] is not None:
+                    return cut[k]
+            return H
+
+        rows: list = []
+        todo = [(a, min(n, a + k_per)) for a in range(0, n, k_per)]
+        while todo:
+            a, b = todo.pop(0)
+            y0 = 0 if a == 0 else top_of(a)
+            y1 = H if b == n else bot_of(b)
+            if _band_fits(y1 - y0, W):
+                rows.append((y0, y1))
+                continue
+            if b - a <= 1:
+                return fallback(f"band over the size limit even with one line ({y1 - y0} px)")
+            m = a + (b - a) // 2
+            info["splits"] += 1
+            todo[:0] = [(a, m), (m, b)]
+
+        # where gaps are missing, a band can end up inside another one: drop it
+        # (the containing band holds all of its lines)
+        kept = []
+        for i, r in enumerate(rows):
+            if any(j != i and s[0] <= r[0] and r[1] <= s[1] and (s != r or j < i) for j, s in enumerate(rows)):
+                info["dropped_contained"] = info.get("dropped_contained", 0) + 1
+                continue
+            kept.append(r)
+        rows = kept
+
+        # invariants (rule 1): ordered, gap-free covering of every row
+        ok = bool(rows) and rows[0][0] == 0 and rows[-1][1] == H and all(
+            rows[i][0] < rows[i][1] for i in range(len(rows))) and all(
+            rows[i - 1][0] < rows[i][0] <= rows[i - 1][1] and rows[i - 1][1] < rows[i][1] for i in range(1, len(rows)))
+        if not ok:
+            return fallback("cut rows do not cover the image in order")
+        info.update(cut="lines", reason=None, bands=len(rows))
+        return rows, info
+    except Exception as exc:
+        return fallback(f"error: {type(exc).__name__}: {exc}")
+
+
 def band_source(pdf_path, page: int, hires_png: bytes):
     """(pixmap, kind): the page's embedded photo at native size when it is
     finer than the hi-res render, else the hi-res render."""

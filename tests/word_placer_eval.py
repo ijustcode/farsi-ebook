@@ -857,7 +857,8 @@ def _tp_digest():
 def code_fingerprint():
     import hashlib
     h = hashlib.sha256()
-    for f in ("word_placer.py", "word_placer_eval.py", "line_finder.py", "word_placer_t.py"):
+    # the line finder lives in farsi2epub/ since 2026-11-15; tests/line_finder.py is a re-export
+    for f in ("word_placer.py", "word_placer_eval.py", "../farsi2epub/line_finder.py", "word_placer_t.py"):
         h.update((HERE / f).read_bytes())
     return h.hexdigest()[:12]
 

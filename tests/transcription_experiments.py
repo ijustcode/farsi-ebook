@@ -2365,7 +2365,7 @@ def freeze_contents() -> dict:
                           "line_match_min_sim": DRAFT_LINE_SIM, "line_merge_min_sim": DRAFT_MERGE_SIM,
                           "word_pair_cost_ortho_equal": 0.5},
         "line_crops": {"line_finder": LF.VERSION,
-                       "line_finder_sha256": _sha256_text((Path(__file__).parent / "line_finder.py").read_text()),
+                       "line_finder_sha256": _sha256_text((ROOT / "farsi2epub" / "line_finder.py").read_text()),
                        "crop_to_line_alignment": "monotone DP on ink width vs characters (crop_alignment)"},
         "cap_usd": CAP_HELDOUT_USD,
     }
