@@ -118,9 +118,9 @@ def analyze(pdf_path: Path, slug_opt: str | None, pages_spec: str | None, force:
 @click.option("--hard-reader", "hard_reader", type=click.Choice(sorted(HARD_READERS)), default=None, help=f"Model for that second reading: gemini (default; {HARD_READERS['gemini']}, needs GEMINI_API_KEY, page images go to Google) or opus ({HARD_READERS['opus']}, about 3.5 times the price, keeps half-spaces better). Without a Gemini key Opus is used.")
 @click.option("--qc", "qc_mode", type=click.Choice(["auto", "manual", "skip", "ask"]), default="ask", help="Run a QC pass after transcription: auto (automated), manual (review UI), skip (none), or ask (prompt if TTY).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the auto-QC cost confirmation prompt.")
-@click.option("--bbox-mode", type=click.Choice(["auto", "offline"]), default="auto", show_default=True)
+@click.option("--bbox-mode", type=click.Choice(["skip", "auto", "offline"]), default="skip", show_default=True, help="Page maps for the earlier box engine (scan): skip = none (review places boxes with Gemini by default and needs none); auto = acquire them now with paid Anthropic line readings; offline = build them from stored readings only.")
 @click.option("--bbox-model", default=MODEL_STRONG, show_default=True)
-@click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5., show_default=True, help="Separate geometry budget in dollars.")
+@click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5., show_default=True, help="Separate geometry budget in dollars (only with --bbox-mode auto).")
 def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: float | None, concurrency: int, model: str, resolution: str, hard_pages: str, hard_reader: str | None, qc_mode: str, assume_yes: bool, bbox_mode: str, bbox_model: str, bbox_max_cost: float):
     """Transcribe pages of workspace SLUG using the vision-LLM pipeline."""
     ws = _load_workspace(slug)
@@ -170,7 +170,8 @@ def transcribe_cmd(slug: str, pages_spec: str | None, force: bool, max_cost: flo
             click.echo("Transcription module not yet implemented (coming in a later task).")
             return
 
-    _geometry_pages(ws, requested_pages, bbox_mode, bbox_model, bbox_max_cost)
+    if bbox_mode != "skip":
+        _geometry_pages(ws, requested_pages, bbox_mode, bbox_model, bbox_max_cost)
 
     # Handle post-transcription QC logic
     resolved_qc_mode = qc_mode

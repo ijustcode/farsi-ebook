@@ -80,6 +80,10 @@ def run():
         result = runner.invoke(main, ['transcribe','old','--pages','2','--qc','skip','--bbox-mode','offline'])
         assert result.exit_code == 0, result.exception
         assert geometry.call_args.args[1] == [2]
+        geometry.reset_mock()
+        result = runner.invoke(main, ['transcribe','old','--pages','2','--qc','skip'])
+        assert result.exit_code == 0, result.exception
+        assert not geometry.called, 'transcribe must not acquire scan page maps by default (D28)'
     md = 'beginning uniquely anchored words damaged context target trailing uniquely anchored sentence ends'
     start = md.index('target')
     reader = 'beginning uniquely anchored words � target trailing uniquely anchored sentence ends'.split()
