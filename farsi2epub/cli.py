@@ -268,6 +268,9 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--bbox-model", default=None, help="Image region reader model (default: Sonnet).")
 @click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5.0, show_default=True,
               help="Maximum USD reserved for image evidence acquisition in this review run.")
+@click.option("--bbox-engine", type=click.Choice(["scan", "gemini"]), default="scan", show_default=True,
+              help="Box placement engine: scan (current) or gemini (Gemini box_2d, one call per page; "
+                   "page images are sent to Google).")
 @click.option("--bbox-refine/--no-bbox-refine", default=None, hidden=True,
               help="Deprecated aliases for --bbox-mode auto/offline.")
 @click.option("--bbox-refine-model", default=None, hidden=True)
@@ -285,6 +288,7 @@ def review_cmd(
     bbox_mode: str | None,
     bbox_model: str | None,
     bbox_max_cost: float,
+    bbox_engine: str,
     bbox_refine: bool | None,
     bbox_refine_model: str | None,
     bbox_refine_algorithm: str | None,
@@ -305,6 +309,8 @@ def review_cmd(
         bbox_model = bbox_refine_model
         click.echo("--bbox-refine-model is deprecated; use --bbox-model.", err=True)
     bbox_mode = bbox_mode or "auto"
+    if bbox_engine == "gemini" and bbox_model is not None and not is_child:
+        click.echo("--bbox-model is ignored with --bbox-engine gemini.", err=True)
     bbox_model = bbox_model or MODEL_STRONG
     import math
     if not math.isfinite(bbox_max_cost):
@@ -379,6 +385,7 @@ def review_cmd(
                 bbox_max_cost=bbox_max_cost,
                 pages=selected_pages,
                 wait_for_boxes=wait_for_boxes,
+                bbox_engine=bbox_engine,
             )
         except NotImplementedError:
             click.echo("Review module not yet implemented (coming in a later task).")
@@ -409,6 +416,7 @@ def review_cmd(
                 bbox_max_cost=bbox_max_cost,
                 pages=selected_pages,
                 wait_for_boxes=wait_for_boxes,
+                bbox_engine=bbox_engine,
             )
         except RuntimeError as exc:
             click.echo(f"Error: {exc}", err=True)
@@ -427,6 +435,7 @@ def review_cmd(
             bbox_max_cost=bbox_max_cost,
             pages=selected_pages,
             wait_for_boxes=wait_for_boxes,
+            bbox_engine=bbox_engine,
         )
     except NotImplementedError:
         click.echo("Review module not yet implemented (coming in a later task).")

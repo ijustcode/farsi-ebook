@@ -328,9 +328,11 @@ def _attach_boxes(
     boxes: list[dict] = []
     results = scores or [None] * len(specs)
     for (key, _query, _unused, hunk, issue), loc, result in zip(specs, located, results):
-        box = loc if loc and loc.get("source") in {"match", "scan"} else None
+        box = loc if loc and loc.get("source") in {"match", "scan", "gemini"} else None
         status = result.status if isinstance(result, PlacementResult) else (box.get("status", "located") if box else "unresolved")
         label = {"pending": "locating…", "located": "located", "buffered": "buffered", "estimated": "approximate", "unresolved": "unresolved"}[status]
+        if status == "located" and box and box.get("source") == "gemini":
+            label = "located (Gemini)"
         if status in {"buffered", "estimated"} and box and (box.get('buffer_before',0)+box.get('buffer_after',0)):
             label += f" +{box.get('buffer_before', 0) + box.get('buffer_after', 0)} words"
         reason = result.reason if isinstance(result, PlacementResult) else ""
@@ -1034,7 +1036,7 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .img-viewport.panning { cursor: grabbing; }
 .qc-box { position: absolute; border-radius: 2px; }
 .qc-box-single.qc-box-match { border: 2px solid #3a9ff0; background: rgba(58,159,240,.12); }
-.qc-box-single.qc-box-scan { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
+.qc-box-single.qc-box-scan, .qc-box-single.qc-box-gemini { border: 2px solid #7ac65c; background: rgba(122,198,92,.12); }
 .qc-box-single.hot { outline: 2px solid #ffffff; }
 /* The box currently zoomed into blinks three times, then settles back to its
    plain tier appearance. Border and fill are never restyled — the colour is
@@ -1062,7 +1064,8 @@ main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 .qc-box-multipart.qc-box-match .qc-box-shape {
   fill: rgba(58,159,240,.12); stroke: #3a9ff0;
 }
-.qc-box-multipart.qc-box-scan .qc-box-shape {
+.qc-box-multipart.qc-box-scan .qc-box-shape,
+.qc-box-multipart.qc-box-gemini .qc-box-shape {
   fill: rgba(122,198,92,.12); stroke: #7ac65c;
 }
 .qc-box-multipart.hot .qc-box-shape {
@@ -1348,7 +1351,7 @@ header .fb-spot-btn { font-size: 0.85rem; padding: 0.4rem 0.8rem; margin-inline-
         <span class="pill qc-pill">QC: {{ p.qc_issue_types|join(', ') }}</span>
         {% endif %}
       </div>
-      <div id="geometry-summary-{{ p.page }}">Geometry: {{ p.page_map.detected_word_geometry|default(0) }}/{{ p.page_map.detected_words|default(0) }} detected regions; {{ p.page_map.verified_words|default(0) }} words verified, {{ p.page_map.inferred_words|default(0) }} approximate; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read</div>
+      <div id="geometry-summary-{{ p.page }}">{% if p.page_map.source == 'gemini' %}Gemini boxes: {{ p.page_map.gemini_located|default(0) }} of {{ p.page_map.gemini_total|default(0) }}{% else %}Geometry: {{ p.page_map.detected_word_geometry|default(0) }}/{{ p.page_map.detected_words|default(0) }} detected regions; {{ p.page_map.verified_words|default(0) }} words verified, {{ p.page_map.inferred_words|default(0) }} approximate; {{ p.page_map.read_lines|default(0) }}/{{ p.page_map.detected_lines|default(0) }} lines read{% endif %}</div>
       <div class="evidence-banner" id="evidence-banner-{{ p.page }}" role="status"{% if not p.evidence_banner %} hidden{% endif %}>
         <span class="eb-text">{{ p.evidence_banner.text if p.evidence_banner else '' }}</span>
         <span class="eb-hint">{{ p.evidence_banner.hint if p.evidence_banner else '' }}</span>
@@ -2013,7 +2016,7 @@ function applyPlacementScores(page, data) {
   var summary = document.getElementById('geometry-summary-' + page);
   if (summary && data.page_map) {
     var m = data.page_map;
-    summary.textContent = 'Geometry: ' + (m.detected_word_geometry || 0) + '/' + (m.detected_words || 0) + ' detected regions; ' + (m.verified_words || 0) + ' words verified, ' + (m.inferred_words || 0) + ' approximate; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
+    summary.textContent = m.source === 'gemini' ? 'Gemini boxes: ' + (m.gemini_located || 0) + ' of ' + (m.gemini_total || 0) : 'Geometry: ' + (m.detected_word_geometry || 0) + '/' + (m.detected_words || 0) + ' detected regions; ' + (m.verified_words || 0) + ' words verified, ' + (m.inferred_words || 0) + ' approximate; ' + (m.read_lines || 0) + '/' + (m.detected_lines || 0) + ' lines read';
   }
   var banner = document.getElementById('evidence-banner-' + page);
   if (banner && 'evidence_banner' in data) {
@@ -3011,6 +3014,7 @@ def launch_review_background(
     lan: bool = False,
     pages: Optional[list[int]] = None,
     wait_for_boxes: bool = False,
+    bbox_engine: str = "scan",
 ) -> str:
     """Ensure a review server is running for `ws`, starting one detached if
     needed. Returns its URL. Raises RuntimeError if a newly-spawned server
@@ -3029,8 +3033,10 @@ def launch_review_background(
         args.append("--all")
     if pages is not None:
         args += ["--pages", ",".join(map(str, pages))]
-    args += ["--bbox-mode", bbox_mode, "--bbox-model", bbox_model,
-             "--bbox-max-cost", str(bbox_max_cost)]
+    args += ["--bbox-mode", bbox_mode, "--bbox-max-cost", str(bbox_max_cost),
+             "--bbox-engine", bbox_engine]
+    if bbox_engine == "scan":
+        args += ["--bbox-model", bbox_model]
     if wait_for_boxes:
         args.append("--wait-for-boxes")
     if lan:
@@ -3059,8 +3065,21 @@ def launch_review_background(
 # ---------------------------------------------------------------------------
 
 
-def _make_review_refiner(ws: Workspace, model: str, mode: str, max_cost: float) -> PlacementService:
+def _make_review_refiner(ws: Workspace, model: str, mode: str, max_cost: float, engine: str = "scan"):
     llm.load_env()
+    if engine == "gemini":
+        from . import gemini_boxes, hard_reader
+        if mode == "auto" and not hard_reader.gemini_key():
+            print("bbox engine gemini: no Gemini key (GEMINI_API_KEY in the environment or .env); "
+                  "only cached Gemini boxes are shown, the rest stay unresolved")
+            mode = "offline"
+        print(f"bbox placement: gemini ({gemini_boxes.A2_MODEL}), {mode}; max acquisition cost ${max_cost:.2f}; "
+              "passages Gemini does not find remain unresolved")
+        if mode == "auto":
+            print("Notice: page images and correction passages are sent to Google (Gemini) for box placement.")
+        return gemini_boxes.GeminiBoxService(ws, mode=mode, max_cost=max_cost)
+    if engine != "scan":
+        raise ValueError(f"unknown bbox engine {engine!r}")
     if mode == "auto" and not os.environ.get("ANTHROPIC_API_KEY"):
         mode = "offline"
     print(f"bbox placement: {mode}; max acquisition cost ${max_cost:.2f}; unsupported locations remain unresolved")
@@ -3104,6 +3123,7 @@ def run_review(
     bbox_max_cost: float = DEFAULT_MAX_COST,
     pages: Optional[list[int]] = None,
     wait_for_boxes: bool = False,
+    bbox_engine: str = "scan",
 ) -> None:
     surfaced, skipped = _select_pages_for_review(ws, budget_all=budget_all, pages=pages)
 
@@ -3124,7 +3144,7 @@ def run_review(
 
     # Recognition is internal to scan; unsupported locations remain unresolved.
     global _REFINER
-    _REFINER = _make_review_refiner(ws, bbox_model, bbox_mode, bbox_max_cost)
+    _REFINER = _make_review_refiner(ws, bbox_model, bbox_mode, bbox_max_cost, bbox_engine)
     # Live results explain evidence status; independent accuracy is measured
     # only by the audited benchmark, never by the locator's own inferred map.
 
