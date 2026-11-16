@@ -3065,6 +3065,13 @@ def launch_review_background(
 # ---------------------------------------------------------------------------
 
 
+def default_bbox_engine() -> str:
+    """Review's default box engine (owner decision 2026-11-16): Gemini boxes when
+    a Gemini key is available, else the earlier scan engine."""
+    from . import hard_reader
+    return "gemini" if hard_reader.gemini_key() else "scan"
+
+
 def _make_review_refiner(ws: Workspace, model: str, mode: str, max_cost: float, engine: str = "scan"):
     llm.load_env()
     if engine == "gemini":

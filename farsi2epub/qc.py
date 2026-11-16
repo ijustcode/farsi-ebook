@@ -545,7 +545,7 @@ def _run_auto(
     if state.failed:
         from . import review  # lazy: review imports qc (circular at module level)
 
-        url = review.launch_review_background(ws, budget_all=True)
+        url = review.launch_review_background(ws, budget_all=True, bbox_engine=review.default_bbox_engine())
         click.echo(f"Review server started in background: {url}")
         click.echo(f"Run 'farsi2epub review {ws.slug} --stop' when done.")
 
@@ -573,7 +573,7 @@ def run_qc(
     if mode == "manual":
         from . import review  # lazy: avoid circular import (review imports qc)
 
-        review.run_review(ws, budget_all=all_pages)
+        review.run_review(ws, budget_all=all_pages, bbox_engine=review.default_bbox_engine())
     elif mode == "auto":
         _run_auto(ws, all_pages, assume_yes, force=force, pages=pages)
     else:

@@ -270,8 +270,16 @@ def run() -> None:
         with patch("farsi2epub.cli._load_workspace", return_value=fake_ws), \
              patch.object(review, "read_server_state", return_value=None), \
              patch.object(review, "run_review") as start:
-            res = runner.invoke(main, ["review", "synthetic"])
-            check(res.exit_code == 0 and start.call_args.kwargs["bbox_engine"] == "scan", "default engine is scan")
+            with patch.object(review, "default_bbox_engine", return_value="gemini"):
+                res = runner.invoke(main, ["review", "synthetic"])
+            check(res.exit_code == 0 and start.call_args.kwargs["bbox_engine"] == "gemini",
+                  "default engine is gemini when a Gemini key is set")
+            with patch.object(review, "default_bbox_engine", return_value="scan"):
+                res = runner.invoke(main, ["review", "synthetic"])
+            check(res.exit_code == 0 and start.call_args.kwargs["bbox_engine"] == "scan" and "No Gemini key" in res.output,
+                  "default engine falls back to scan without a Gemini key, with a notice")
+            res = runner.invoke(main, ["review", "synthetic", "--bbox-engine", "scan"])
+            check(res.exit_code == 0 and start.call_args.kwargs["bbox_engine"] == "scan", "--bbox-engine scan still selectable")
             res = runner.invoke(main, ["review", "synthetic", "--bbox-engine", "gemini", "--bbox-model", "x"])
             check(res.exit_code == 0 and start.call_args.kwargs["bbox_engine"] == "gemini"
                   and "ignored" in res.output, "--bbox-engine gemini passed through; --bbox-model ignored notice")

@@ -268,9 +268,10 @@ main.add_command(qc_cmd, name="qc")
 @click.option("--bbox-model", default=None, help="Image region reader model (default: Sonnet).")
 @click.option("--bbox-max-cost", type=click.FloatRange(min=0), default=5.0, show_default=True,
               help="Maximum USD reserved for image evidence acquisition in this review run.")
-@click.option("--bbox-engine", type=click.Choice(["scan", "gemini"]), default="scan", show_default=True,
-              help="Box placement engine: scan (current) or gemini (Gemini box_2d, one call per page; "
-                   "page images are sent to Google).")
+@click.option("--bbox-engine", type=click.Choice(["scan", "gemini"]), default=None,
+              help="Box placement engine: gemini (Gemini box_2d, one call per page; page images are sent "
+                   "to Google) or scan (the earlier engine, Anthropic line readings). "
+                   "Default: gemini when a Gemini key is set, else scan.")
 @click.option("--bbox-refine/--no-bbox-refine", default=None, hidden=True,
               help="Deprecated aliases for --bbox-mode auto/offline.")
 @click.option("--bbox-refine-model", default=None, hidden=True)
@@ -309,6 +310,10 @@ def review_cmd(
         bbox_model = bbox_refine_model
         click.echo("--bbox-refine-model is deprecated; use --bbox-model.", err=True)
     bbox_mode = bbox_mode or "auto"
+    if bbox_engine is None:
+        bbox_engine = review.default_bbox_engine()
+        if bbox_engine == "scan" and not is_child:
+            click.echo("No Gemini key (GEMINI_API_KEY): box placement uses the earlier engine (scan).", err=True)
     if bbox_engine == "gemini" and bbox_model is not None and not is_child:
         click.echo("--bbox-model is ignored with --bbox-engine gemini.", err=True)
     bbox_model = bbox_model or MODEL_STRONG
