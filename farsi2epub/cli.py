@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from . import epub, qc, review, transcribe
+from . import epub, kindle, qc, review, transcribe
 from .config import HARD_READER_DEFAULT, HARD_READERS, LONG_EDGE_BY_RES, LONG_EDGE_STD, MODEL_STRONG, RES_HI, RES_STD, estimate_cost, hard_page_cost
 from .render import classify_pdf, render_page_to
 from .workspace import Workspace, parse_pages_spec
@@ -452,13 +452,23 @@ main.add_command(review_cmd, name="review")
 
 @main.command()
 @click.argument("slug")
-def build(slug: str):
-    """Build the final EPUB for workspace SLUG."""
+@click.option("--kfx", "kfx_mode", type=click.Choice(kindle.MODES), default=kindle.DEFAULT_MODE, show_default=True,
+              help="Kindle edition: also convert the EPUB to KFX (calibre + KFX Output plugin + Kindle Previewer). "
+                   "require (default, D29) = fail without the tools, after writing the EPUB; auto = only when the tools are installed; skip = EPUB only.")
+def build(slug: str, kfx_mode: str):
+    """Build the final EPUB (and the Kindle KFX edition) for workspace SLUG."""
     ws = _load_workspace(slug)
     try:
-        epub.build_epub(ws)
+        out_path = epub.build_epub(ws)
     except NotImplementedError:
         click.echo("EPUB builder not yet implemented (coming in a later task).")
+        return
+    if kfx_mode != "skip":
+        click.echo("Building the Kindle (KFX) edition (Kindle Previewer, about a minute)...")
+    res = kindle.build_kfx(out_path, mode=kfx_mode, log_dir=ws.root / "kindle")
+    click.echo(kindle.report(res))
+    if res.status == "failed":
+        raise click.ClickException(f"Kindle (KFX) edition not built: {res.reason} (the EPUB was built: {out_path})")
 
 
 if __name__ == "__main__":
